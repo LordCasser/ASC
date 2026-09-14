@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/LordCasser/ASC/schemas/cli-v1.schema.json",
+  "title": "rasc CLI JSON contract (schema_version 1)",
+  "description": "The frozen shape of every successful command envelope and error object. Golden bytes for the A01-owned objects live in schemas/goldens/; getclass/manifest data shapes are declared here and frozen as goldens when A07/A08 land them. Keys serialize in the documented order; values are UTF-8 with control characters escaped and no NaN/Infinity numbers.",
+  "type": "object",
+  "required": ["schema_version", "operation", "artifact_id", "data", "diagnostics"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "operation": {
+      "enum": ["findrefs", "classes", "getclass", "manifest", "dexes"]
+    },
+    "artifact_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the whole input bytes, lowercase hex."
+    },
+    "data": { "$ref": "#/$defs/data" },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    }
+  },
+  "$defs": {
+    "data": {
+      "description": "findrefs: array of Reference; classes: array of Class; getclass: {class,source,metadata}; manifest: {xml,document}; dexes: array of DexEntry. An empty result is data:[] with exit 0, never empty bytes.",
+      "oneOf": [
+        { "type": "array", "items": { "$ref": "#/$defs/reference" } },
+        { "type": "array", "items": { "$ref": "#/$defs/class" } },
+        { "type": "array", "items": { "$ref": "#/$defs/dex_entry" } },
+        {
+          "type": "object",
+          "required": ["class", "source", "metadata"],
+          "properties": {
+            "class": { "$ref": "#/$defs/class" },
+            "source": { "type": "string", "description": "UTF-8, LF endings, exactly one trailing LF." },
+            "metadata": { "type": "object", "description": "Typed SourceMetadata projection; no free-form string maps. Frozen as golden with A07/A08." }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["xml", "document"],
+          "properties": {
+            "xml": { "type": "string", "description": "Complete rendered XML; never null when the command succeeded." },
+            "document": { "type": "object", "description": "Ordered nodes, attributes, namespace scopes, typed raw data, string styles. Frozen as golden with A06/A08." }
+          }
+        }
+      ]
+    },
+    "artifact_id_object_base": {
+      "type": "object",
+      "required": ["artifact_id", "entry_ordinal", "logical_ordinal"],
+      "properties": {
+        "artifact_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "entry_ordinal": { "type": "integer", "minimum": 0 },
+        "logical_ordinal": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "class_id": {
+      "allOf": [
+        { "$ref": "#/$defs/artifact_id_object_base" },
+        {
+          "type": "object",
+          "required": ["class_def_idx"],
+          "properties": { "class_def_idx": { "type": "integer", "minimum": 0 } }
+        }
+      ]
+    },
+    "method_id": {
+      "allOf": [
+        { "$ref": "#/$defs/artifact_id_object_base" },
+        {
+          "type": "object",
+          "required": ["method_idx"],
+          "properties": { "method_idx": { "type": "integer", "minimum": 0 } }
+        }
+      ]
+    },
+    "target_id": {
+      "allOf": [
+        { "$ref": "#/$defs/artifact_id_object_base" },
+        {
+          "type": "object",
+          "required": ["index"],
+          "properties": { "index": { "type": "integer", "minimum": 0 } }
+        }
+      ]
+    },
+    "dex_id": { "$ref": "#/$defs/artifact_id_object_base" },
+    "dex_text": {
+      "type": "object",
+      "required": ["text", "utf16"],
+      "properties": {
+        "text": {
+          "type": ["string", "null"],
+          "description": "null exactly when the UTF-16 units are not valid Unicode (unpaired surrogate)."
+        },
+        "utf16": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 65535 } }
+      }
+    },
+    "prototype": {
+      "type": "object",
+      "required": ["parameters", "return_type"],
+      "properties": {
+        "parameters": { "type": "array", "items": { "$ref": "#/$defs/dex_text" } },
+        "return_type": { "$ref": "#/$defs/dex_text" }
+      }
+    },
+    "dex_entry": {
+      "type": "object",
+      "required": ["id", "raw_entry_name", "display_name", "logical_name", "version", "header_offset"],
+      "properties": {
+        "id": { "$ref": "#/$defs/dex_id" },
+        "raw_entry_name": { "type": "string" },
+        "display_name": { "$ref": "#/$defs/dex_text" },
+        "logical_name": { "$ref": "#/$defs/dex_text" },
+        "version": { "enum": ["035", "037", "038", "039", "040", "041"] },
+        "header_offset": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "required": ["caller", "targets"],
+      "properties": {
+        "caller": {
+          "type": "object",
+          "required": ["id", "dex", "owner", "name", "prototype"],
+          "properties": {
+            "id": { "$ref": "#/$defs/method_id" },
+            "dex": { "$ref": "#/$defs/dex_entry" },
+            "owner": { "$ref": "#/$defs/dex_text" },
+            "name": { "$ref": "#/$defs/dex_text" },
+            "prototype": { "$ref": "#/$defs/prototype" }
+          }
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "kind", "value", "code_unit_offsets"],
+            "properties": {
+              "id": { "$ref": "#/$defs/target_id" },
+              "kind": { "enum": ["string", "type", "field", "method"] },
+              "value": {
+                "oneOf": [
+                  { "$ref": "#/$defs/dex_text" },
+                  {
+                    "type": "object",
+                    "required": ["owner", "name", "field_type"],
+                    "properties": {
+                      "owner": { "$ref": "#/$defs/dex_text" },
+                      "name": { "$ref": "#/$defs/dex_text" },
+                      "field_type": { "$ref": "#/$defs/dex_text" }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": ["owner", "name", "prototype"],
+                    "properties": {
+                      "owner": { "$ref": "#/$defs/dex_text" },
+                      "name": { "$ref": "#/$defs/dex_text" },
+                      "prototype": { "$ref": "#/$defs/prototype" }
+                    }
+                  }
+                ]
+              },
+              "code_unit_offsets": {
+                "type": "array",
+                "items": { "type": "integer", "minimum": 0 },
+                "description": "Ascending, deduplicated 16-bit code units from the insns array start."
+              }
+            }
+          }
+        }
+      }
+    },
+    "class": {
+      "type": "object",
+      "required": ["id", "dex", "descriptor", "java_name", "package", "simple_name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/class_id" },
+        "dex": { "$ref": "#/$defs/dex_entry" },
+        "descriptor": { "type": "string", "pattern": "^L.+;$" },
+        "java_name": { "$ref": "#/$defs/dex_text" },
+        "package": { "$ref": "#/$defs/dex_text" },
+        "simple_name": { "$ref": "#/$defs/dex_text" }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": ["code", "severity", "stage", "message"],
+      "properties": {
+        "code": {
+          "enum": [
+            "dex-checksum-mismatch",
+            "dex-signature-mismatch",
+            "duplicate-entry-name",
+            "duplicate-class-definition",
+            "inferred-namespace-binding",
+            "decompilation-notice"
+          ]
+        },
+        "severity": { "enum": ["info", "warning", "error"] },
+        "stage": { "enum": ["input", "dex", "query", "decompile", "manifest"] },
+        "dex": { "$ref": "#/$defs/dex_id" },
+        "class": { "$ref": "#/$defs/class_id" },
+        "method": { "$ref": "#/$defs/method_id" },
+        "offset": { "type": "integer", "minimum": 0 },
+        "message": { "type": "string", "description": "Human-facing; not machine identity." }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "context", "diagnostics"],
+      "properties": {
+        "code": {
+          "enum": [
+            "InvalidQuery",
+            "NotFound",
+            "MalformedInput",
+            "UnsupportedFormat",
+            "UnsupportedEncoding",
+            "ResourceLimit",
+            "Cancelled",
+            "IncompleteDecompilation"
+          ]
+        },
+        "context": { "type": "array", "items": { "type": "string" } },
+        "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
+      },
+      "description": "Error objects replace the whole envelope on failure; no success payload is emitted."
+    }
+  }
+}

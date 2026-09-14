@@ -8,7 +8,13 @@ mod apk;
 mod bytes;
 mod cli;
 mod dex;
+// The A01 domain model: exercised by tests/contract_query.rs now, wired into
+// the scanners/integration by A03/A07. Silence dead-code until that lands.
+#[allow(dead_code)]
+mod error;
 mod manifest;
+#[allow(dead_code)]
+mod model;
 mod query;
 mod zip;
 
