@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. Fix the environment record: input sha256 values, toolchain (rustc -vV), profile, patterns, thread counts and input set; keep them constant across runs. 2. After warm-up, time at least 10 runs each of full and scoped operations, collecting median, p95 and peak RSS (usr/bin/time -l or instrumented counters); include owned-bytes and CRC verification costs in the accounting. 3. Report the numbers with the environment; do not carry over earlier 8x-style claims.",
+  "pass_criteria": "At least 10 timed samples per operation with median/p95/peak RSS recorded; environment and inputs fully identified by hash; owned/CRC costs accounted; no unsubstantiated performance claims."
+}

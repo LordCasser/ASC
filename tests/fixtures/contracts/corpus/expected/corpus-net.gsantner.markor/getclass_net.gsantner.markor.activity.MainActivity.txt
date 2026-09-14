@@ -1,0 +1,620 @@
+package net.gsantner.markor.activity;
+public class MainActivity extends net.gsantner.markor.activity.MarkorBaseActivity implements net.gsantner.opoc.frontend.filebrowser.GsFileBrowserFragment$FilesystemFragmentOptionsListener {
+    public static boolean IS_DEBUG_ENABLED = False;
+    private com.google.android.material.bottomnavigation.BottomNavigationView _bottomNav;
+    private net.gsantner.markor.util.MarkorContextUtils _cu;
+    private com.google.android.material.floatingactionbutton.FloatingActionButton _fab;
+    private net.gsantner.opoc.frontend.filebrowser.GsFileBrowserOptions$Options _filesystemDialogOptions;
+    private net.gsantner.markor.activity.MoreFragment _more;
+    private net.gsantner.opoc.frontend.filebrowser.GsFileBrowserFragment _notebook;
+    private java.io.File _quickSwitchPrevFolder;
+    private net.gsantner.markor.activity.DocumentEditAndViewFragment _quicknote;
+    private net.gsantner.markor.activity.MainActivity$SectionsPagerAdapter _sectionsAdapter;
+    private java.io.File _showFile;
+    private java.io.File _startFolder;
+    private net.gsantner.markor.activity.DocumentEditAndViewFragment _todo;
+    private androidx.viewpager2.widget.ViewPager2 _viewPager;
+
+    private void newItemCallback(java.io.File p3)
+    {
+        if (p3.isFile()) {
+            net.gsantner.markor.activity.DocumentActivity.launch(this, p3, Boolean.FALSE, 0);
+        }
+        net.gsantner.opoc.frontend.filebrowser.GsFileBrowserListAdapter v0_4 = this._notebook;
+        if ((v0_4 != null) && (v0_4.getAdapter() != null)) {
+            this._notebook.getAdapter().showFile(p3);
+        }
+        return;
+    }
+
+    private void optShowRate()
+    {
+        try {
+            new com.pixplicity.generate.Rate$Builder(this).setTriggerCount(4).setMinimumInstallTime(((int) java.util.concurrent.TimeUnit.MINUTES.toMillis(30))).setFeedbackAction(new net.gsantner.markor.activity.MainActivity$$ExternalSyntheticLambda6(this)).build().count().showRequest();
+        } catch (Exception) {
+        }
+        return;
+    }
+
+    private void reduceViewpagerSwipeSensitivity()
+    {
+        try {
+            String v0_2 = androidx.viewpager2.widget.ViewPager2.getDeclaredField("mRecyclerView");
+            v0_2.setAccessible(1);
+            String v0_5 = ((androidx.recyclerview.widget.RecyclerView) v0_2.get(this._viewPager));
+            v0_5.setScrollingTouchSlop(1);
+            reflect.Field v2_1 = androidx.recyclerview.widget.RecyclerView.getDeclaredField("mTouchSlop");
+            v2_1.setAccessible(1);
+            v2_1.set(v0_5, Integer.valueOf((((Integer) v2_1.get(v0_5)).intValue() * 4)));
+            return;
+        } catch (String v0_1) {
+            android.util.Log.d(net.gsantner.markor.activity.MainActivity.getName(), v0_1.getMessage());
+            return;
+        }
+    }
+
+    private void restoreDefaultToolbar()
+    {
+        net.gsantner.opoc.frontend.filebrowser.GsFileBrowserFragment v0 = this.getNotebook();
+        if (v0 != null) {
+            v0.clearSelection();
+        }
+        return;
+    }
+
+    public static synthetic void $r8$lambda$4ykVya8RqKeICW7JwVJm1_Bysg8(net.gsantner.markor.activity.MainActivity p0, java.io.File p1)
+    {
+        p0.newItemCallback(p1);
+        return;
+    }
+
+    public static synthetic void $r8$lambda$REELRyvID_zpXivdjJiIHf7vOUY(net.gsantner.markor.activity.MainActivity p1, int p2)
+    {
+        p1._viewPager.setCurrentItem(p1.tabIdToPos(p2));
+        return;
+    }
+
+    public static synthetic void $r8$lambda$WhINwD7QtwwHqM282EW2WMjXxBY(net.gsantner.markor.activity.MainActivity p1)
+    {
+        p1._cu.showGooglePlayEntryForThisApp(p1);
+        return;
+    }
+
+    public static synthetic boolean $r8$lambda$ZYit18IVCCPjPsL_JYsgMVKVrmM(net.gsantner.markor.activity.MainActivity p1, android.view.MenuItem p2)
+    {
+        p1.getClass();
+        int v2_2 = p1.tabIdToPos(p2.getItemId());
+        p1._sectionsAdapter.ensureRealized(v2_2);
+        p1._viewPager.setCurrentItem(v2_2);
+        return 1;
+    }
+
+    static MainActivity()
+    {
+        return;
+    }
+
+    public MainActivity()
+    {
+        this._quickSwitchPrevFolder = 0;
+        this._startFolder = 0;
+        this._showFile = 0;
+        this._filesystemDialogOptions = 0;
+        return;
+    }
+
+    static synthetic net.gsantner.opoc.model.GsSharedPreferencesPropertyBackend access$000(net.gsantner.markor.activity.MainActivity p0)
+    {
+        return p0._appSettings;
+    }
+
+    static synthetic java.io.File access$100(net.gsantner.markor.activity.MainActivity p0)
+    {
+        return p0._startFolder;
+    }
+
+    static synthetic net.gsantner.opoc.model.GsSharedPreferencesPropertyBackend access$1000(net.gsantner.markor.activity.MainActivity p0)
+    {
+        return p0._appSettings;
+    }
+
+    static synthetic net.gsantner.markor.activity.MoreFragment access$1102(net.gsantner.markor.activity.MainActivity p0, net.gsantner.markor.activity.MoreFragment p1)
+    {
+        p0._more = p1;
+        return p1;
+    }
+
+    static synthetic net.gsantner.opoc.frontend.filebrowser.GsFileBrowserFragment access$1202(net.gsantner.markor.activity.MainActivity p0, net.gsantner.opoc.frontend.filebrowser.GsFileBrowserFragment p1)
+    {
+        p0._notebook = p1;
+        return p1;
+    }
+
+    static synthetic net.gsantner.markor.util.MarkorContextUtils access$200(net.gsantner.markor.activity.MainActivity p0)
+    {
+        return p0._cu;
+    }
+
+    static synthetic net.gsantner.opoc.model.GsSharedPreferencesPropertyBackend access$300(net.gsantner.markor.activity.MainActivity p0)
+    {
+        return p0._appSettings;
+    }
+
+    static synthetic java.io.File access$400(net.gsantner.markor.activity.MainActivity p0)
+    {
+        return p0._showFile;
+    }
+
+    static synthetic java.io.File access$402(net.gsantner.markor.activity.MainActivity p0, java.io.File p1)
+    {
+        p0._showFile = p1;
+        return p1;
+    }
+
+    static synthetic com.google.android.material.bottomnavigation.BottomNavigationView access$500(net.gsantner.markor.activity.MainActivity p0)
+    {
+        return p0._bottomNav;
+    }
+
+    static synthetic androidx.viewpager2.widget.ViewPager2 access$600(net.gsantner.markor.activity.MainActivity p0)
+    {
+        return p0._viewPager;
+    }
+
+    static synthetic net.gsantner.markor.activity.DocumentEditAndViewFragment access$702(net.gsantner.markor.activity.MainActivity p0, net.gsantner.markor.activity.DocumentEditAndViewFragment p1)
+    {
+        p0._quicknote = p1;
+        return p1;
+    }
+
+    static synthetic net.gsantner.opoc.model.GsSharedPreferencesPropertyBackend access$800(net.gsantner.markor.activity.MainActivity p0)
+    {
+        return p0._appSettings;
+    }
+
+    static synthetic net.gsantner.markor.activity.DocumentEditAndViewFragment access$902(net.gsantner.markor.activity.MainActivity p0, net.gsantner.markor.activity.DocumentEditAndViewFragment p1)
+    {
+        p0._todo = p1;
+        return p1;
+    }
+
+    public static void launch(android.app.Activity p2, java.io.File p3, boolean p4)
+    {
+        if ((p2 != null) && (p3 != null)) {
+            android.content.Intent v0_1 = new android.content.Intent(p2, net.gsantner.markor.activity.MainActivity);
+            v0_1.putExtra("EXTRA_FILE", p3);
+            net.gsantner.opoc.util.GsContextUtils.instance.animateToActivity(p2, v0_1, Boolean.valueOf(p4), 0);
+        }
+        return;
+    }
+
+    public int tabIdToPos(int p3)
+    {
+        if (p3 != 2131296674) {
+            if (p3 != 2131296676) {
+                if (p3 != 2131296675) {
+                    if (p3 != 2131296673) {
+                        return 0;
+                    } else {
+                        return 3;
+                    }
+                } else {
+                    return 2;
+                }
+            } else {
+                return 1;
+            }
+        } else {
+            return 0;
+        }
+    }
+
+    public net.gsantner.opoc.frontend.filebrowser.GsFileBrowserFragment getNotebook()
+    {
+        return this._notebook;
+    }
+
+    public String getFileBrowserTitle()
+    {
+        String v0_3;
+        String v0_0 = this._notebook;
+        if (v0_0 == null) {
+            v0_3 = 0;
+        } else {
+            v0_3 = v0_0.getCurrentFolder();
+        }
+        if ((v0_3 == null) || (((net.gsantner.markor.model.AppSettings) this._appSettings).getNotebookDirectory().equals(v0_3))) {
+            return this.getString(2131820705);
+        } else {
+            StringBuilder v1_2 = new StringBuilder();
+            v1_2.append("> ");
+            v1_2.append(v0_3.getName());
+            return v1_2.toString();
+        }
+    }
+
+    public int getCurrentPos()
+    {
+        return this._viewPager.getCurrentItem();
+    }
+
+    @Signature(value={"(I)", "Lnet/gsantner/opoc/frontend/base/GsFragmentBase<", "**>;"})
+    public net.gsantner.opoc.frontend.base.GsFragmentBase getPosFragment(int p2)
+    {
+        if (p2 != 0) {
+            if (p2 != 1) {
+                if (p2 != 2) {
+                    if (p2 != 3) {
+                        return 0;
+                    } else {
+                        return this._more;
+                    }
+                } else {
+                    return this._quicknote;
+                }
+            } else {
+                return this._todo;
+            }
+        } else {
+            return this._notebook;
+        }
+    }
+
+    public void hideKeyboard()
+    {
+        net.gsantner.markor.frontend.textview.HighlightingEditor v0_0 = this._quicknote;
+        if (v0_0 != null) {
+            net.gsantner.markor.util.MarkorContextUtils v3_1 = this._cu;
+            android.view.View[] v4 = new android.view.View[1];
+            v4[0] = v0_0.getEditor();
+            v3_1.showSoftKeyboard(this, 0, v4);
+        }
+        net.gsantner.markor.frontend.textview.HighlightingEditor v0_1 = this._todo;
+        if (v0_1 != null) {
+            net.gsantner.markor.util.MarkorContextUtils v3_0 = this._cu;
+            android.view.View[] v1_1 = new android.view.View[1];
+            v1_1[0] = v0_1.getEditor();
+            v3_0.showSoftKeyboard(this, 0, v1_1);
+        }
+        return;
+    }
+
+    public net.gsantner.opoc.frontend.filebrowser.GsFileBrowserOptions$Options getFilesystemFragmentOptions(net.gsantner.opoc.frontend.filebrowser.GsFileBrowserOptions$Options p2)
+    {
+        if (this._filesystemDialogOptions == null) {
+            this._filesystemDialogOptions = net.gsantner.markor.frontend.filebrowser.MarkorFileBrowserFactory.prepareFsViewerOpts(this, 0, new net.gsantner.markor.activity.MainActivity$2(this));
+        }
+        return this._filesystemDialogOptions;
+    }
+
+    public Integer getNewNavigationBarColor()
+    {
+        return Integer.valueOf(androidx.core.content.ContextCompat.getColor(this, 2131100275));
+    }
+
+    public String getPosTitle(int p2)
+    {
+        if (p2 != null) {
+            if (p2 != 1) {
+                if (p2 != 2) {
+                    if (p2 != 3) {
+                        return "";
+                    } else {
+                        return this.getString(2131821102);
+                    }
+                } else {
+                    return this.getString(2131821351);
+                }
+            } else {
+                return this.getString(2131821473);
+            }
+        } else {
+            return this.getFileBrowserTitle();
+        }
+    }
+
+    public void onActivityFirstTimeVisible()
+    {
+        super.onActivityFirstTimeVisible();
+        int v0_2 = ((net.gsantner.markor.model.AppSettings) this._appSettings).getAppStartupTab();
+        if ((v0_2 != 2131296674) && (net.gsantner.markor.util.MarkorContextUtils.getValidIntentFile(this.getIntent(), 0) == null)) {
+            this._viewPager.postDelayed(new net.gsantner.markor.activity.MainActivity$$ExternalSyntheticLambda5(this, v0_2), 100);
+        }
+        return;
+    }
+
+    protected void onActivityResult(int p2, int p3, android.content.Intent p4)
+    {
+        super.onActivityResult(p2, p3, p4);
+        this._cu.extractResultFromActivityResult(this, p2, p3, p4);
+        return;
+    }
+
+    public void onBackPressed()
+    {
+        boolean v0_1 = this.getPosFragment(this.getCurrentPos());
+        if ((v0_1) && (v0_1.onBackPressed())) {
+            return;
+        } else {
+            super.onBackPressed();
+            return;
+        }
+    }
+
+    public void onClickFab(android.view.View p3)
+    {
+        androidx.fragment.app.FragmentManager v0_0 = this._notebook;
+        if ((v0_0 != null) && (v0_0.getAdapter() != null)) {
+            if (this._notebook.getAdapter().isCurrentFolderWriteable()) {
+                if (p3.getId() == 2131296535) {
+                    if ((!this._cu.isUnderStorageAccessFolder(this, this._notebook.getCurrentFolder(), 1)) || (this._cu.getStorageAccessFrameworkTreeUri(this) != null)) {
+                        net.gsantner.markor.frontend.NewFileDialog.newInstance(this._notebook.getCurrentFolder(), 1, new net.gsantner.markor.activity.MainActivity$$ExternalSyntheticLambda1(this)).show(this.getSupportFragmentManager(), net.gsantner.markor.frontend.NewFileDialog.FRAGMENT_TAG);
+                    } else {
+                        this._cu.showMountSdDialog(this);
+                        return;
+                    }
+                }
+            } else {
+                this._notebook.getAdapter().setCurrentFolder(((net.gsantner.markor.model.AppSettings) this._appSettings).getNotebookDirectory());
+                return;
+            }
+        }
+        return;
+    }
+
+    @SuppressLint(value={"SdCardPath"})
+    protected void onCreate(android.os.Bundle p2)
+    {
+        super.onCreate(p2);
+        net.gsantner.markor.activity.MainActivity.IS_DEBUG_ENABLED = net.gsantner.markor.activity.MainActivity.IS_DEBUG_ENABLED;
+        try {
+            ((net.gsantner.markor.model.AppSettings) this._appSettings).getNotebookDirectory().mkdirs();
+        } catch (Exception) {
+        }
+        this._cu = new net.gsantner.markor.util.MarkorContextUtils(this);
+        this.setContentView(2131492932);
+        this._bottomNav = ((com.google.android.material.bottomnavigation.BottomNavigationView) this.findViewById(2131296404));
+        this._viewPager = ((androidx.viewpager2.widget.ViewPager2) this.findViewById(2131296607));
+        java.io.File v2_12 = ((com.google.android.material.floatingactionbutton.FloatingActionButton) this.findViewById(2131296535));
+        this._fab = v2_12;
+        v2_12.setOnClickListener(new net.gsantner.markor.activity.MainActivity$$ExternalSyntheticLambda2(this));
+        this._fab.setOnLongClickListener(new net.gsantner.markor.activity.MainActivity$$ExternalSyntheticLambda3(this));
+        this._viewPager.registerOnPageChangeCallback(new net.gsantner.markor.activity.MainActivity$1(this));
+        this.setSupportActionBar(((androidx.appcompat.widget.Toolbar) this.findViewById(2131296892)));
+        this.optShowRate();
+        java.io.File v2_21 = new net.gsantner.markor.activity.MainActivity$SectionsPagerAdapter(this, this.getSupportFragmentManager());
+        this._sectionsAdapter = v2_21;
+        this._viewPager.setAdapter(v2_21);
+        this._viewPager.setOffscreenPageLimit(this._bottomNav.getMenu().size());
+        this._bottomNav.setOnItemSelectedListener(new net.gsantner.markor.activity.MainActivity$$ExternalSyntheticLambda4(this));
+        this.reduceViewpagerSwipeSensitivity();
+        this._cu.applySpecialLaunchersVisibility(this, ((net.gsantner.markor.model.AppSettings) this._appSettings).isSpecialFileLaunchersEnabled());
+        java.io.File v2_26 = this._appSettings;
+        java.io.File v2_30 = net.gsantner.markor.util.MarkorContextUtils.getValidIntentFile(this.getIntent(), ((net.gsantner.markor.model.AppSettings) v2_26).getFolderToLoadByMenuId(((net.gsantner.markor.model.AppSettings) v2_26).getAppStartupFolderMenuId()));
+        this._startFolder = v2_30;
+        if (!net.gsantner.opoc.util.GsFileUtils.isDirectory(v2_30)) {
+            java.io.File v2_32 = this._startFolder;
+            this._showFile = v2_32;
+            this._startFolder = v2_32.getParentFile();
+        }
+        if (!net.gsantner.opoc.util.GsFileUtils.isDirectory(this._startFolder)) {
+            this._startFolder = ((net.gsantner.markor.model.AppSettings) this._appSettings).getNotebookDirectory();
+        }
+        return;
+    }
+
+    public boolean onCreateOptionsMenu(android.view.Menu p4)
+    {
+        this.getMenuInflater().inflate(2131558405, p4);
+        p4.findItem(2131296356).setVisible(((net.gsantner.markor.model.AppSettings) this._appSettings).isShowSettingsOptionInMainToolbar());
+        net.gsantner.markor.util.MarkorContextUtils v0_1 = this._cu;
+        v0_1.tintMenuItems(p4, 1, v0_1.rcolor(this, 2131099720));
+        this._cu.setSubMenuIconsVisibility(p4, 1);
+        return 1;
+    }
+
+    public boolean onKeyDown(int p2, android.view.KeyEvent p3)
+    {
+        if (!super.onReceiveKeyPress(this.getPosFragment(this.getCurrentPos()), p2, p3)) {
+            return super.onKeyDown(p2, p3);
+        } else {
+            return 1;
+        }
+    }
+
+    public boolean onLongClickFab(android.view.View p4)
+    {
+        java.io.File v4_0 = this._notebook;
+        if (v4_0 != null) {
+            java.io.File v4_5 = v4_0.getCurrentFolder();
+            java.io.File v0 = net.gsantner.opoc.frontend.filebrowser.GsFileBrowserListAdapter.VIRTUAL_STORAGE_RECENTS;
+            if (!v0.equals(v4_5)) {
+                java.io.File v1_1 = net.gsantner.opoc.frontend.filebrowser.GsFileBrowserListAdapter.VIRTUAL_STORAGE_FAVOURITE;
+                if (!v1_1.equals(v4_5)) {
+                    this._quickSwitchPrevFolder = v4_5;
+                    v0 = v1_1;
+                } else {
+                    java.io.File v4_1 = this._quickSwitchPrevFolder;
+                    if (v4_1 != null) {
+                        v0 = v4_1;
+                    }
+                }
+            } else {
+                v0 = net.gsantner.opoc.frontend.filebrowser.GsFileBrowserListAdapter.VIRTUAL_STORAGE_FAVOURITE;
+            }
+            this._notebook.getAdapter().setCurrentFolder(v0);
+        }
+        return 1;
+    }
+
+    protected void onNewIntent(android.content.Intent p4)
+    {
+        super.onNewIntent(p4);
+        net.gsantner.opoc.frontend.filebrowser.GsFileBrowserFragment v4_2 = net.gsantner.markor.util.MarkorContextUtils.getValidIntentFile(p4, 0);
+        if ((this._notebook != null) && (v4_2 != null)) {
+            this.hideKeyboard();
+            this._viewPager.setCurrentItem(this.tabIdToPos(2131296674), 0);
+            if (!net.gsantner.opoc.util.GsFileUtils.isDirectory(v4_2)) {
+                this._notebook.getAdapter().showFile(v4_2);
+            } else {
+                this._notebook.getAdapter().setCurrentFolder(v4_2);
+            }
+            this._notebook.setReloadRequiredOnResume(0);
+        }
+        return;
+    }
+
+    public boolean onOptionsItemSelected(android.view.MenuItem p4)
+    {
+        super.onOptionsItemSelected(p4);
+        if (p4.getItemId() != 2131296356) {
+            return 0;
+        } else {
+            this._cu.animateToActivity(this, net.gsantner.markor.activity.SettingsActivity, Boolean.FALSE, 0);
+            return 1;
+        }
+    }
+
+    protected void onPause()
+    {
+        super.onPause();
+        other.writeily.widget.WrMarkorWidgetProvider.updateLauncherWidgets();
+        net.gsantner.markor.widget.TodoWidgetProvider.updateTodoWidgets();
+        this.getWindow().setSoftInputMode(17);
+        return;
+    }
+
+    public void onPostResume()
+    {
+        super.onPostResume();
+        return;
+    }
+
+    public void onRestoreInstanceState(android.os.Bundle p7)
+    {
+        super.onRestoreInstanceState(p7);
+        if (p7 != null) {
+            try {
+                net.gsantner.markor.activity.MainActivity$$ExternalSyntheticLambda1 v0_0 = this.getSupportFragmentManager();
+                this._notebook = ((net.gsantner.opoc.frontend.filebrowser.GsFileBrowserFragment) v0_0.getFragment(p7, Integer.toString(2131296674)));
+                this._quicknote = ((net.gsantner.markor.activity.DocumentEditAndViewFragment) v0_0.getFragment(p7, Integer.toString(2131296675)));
+                this._todo = ((net.gsantner.markor.activity.DocumentEditAndViewFragment) v0_0.getFragment(p7, Integer.toString(2131296676)));
+                this._more = ((net.gsantner.markor.activity.MoreFragment) v0_0.getFragment(p7, Integer.toString(2131296673)));
+                net.gsantner.markor.frontend.NewFileDialog v7_3 = this._sectionsAdapter;
+            } catch (IllegalStateException) {
+                android.util.Log.d(net.gsantner.markor.activity.MainActivity.getName(), "Child fragment not found in onRestoreInstanceState()");
+                return;
+            }
+            if (v7_3 != null) {
+                v7_3.restoreFragment(this.tabIdToPos(2131296674));
+                this._sectionsAdapter.restoreFragment(this.tabIdToPos(2131296675));
+                this._sectionsAdapter.restoreFragment(this.tabIdToPos(2131296676));
+                this._sectionsAdapter.restoreFragment(this.tabIdToPos(2131296673));
+            }
+            net.gsantner.markor.frontend.NewFileDialog v7_9 = ((net.gsantner.markor.frontend.NewFileDialog) v0_0.findFragmentByTag(net.gsantner.markor.frontend.NewFileDialog.FRAGMENT_TAG));
+            if (v7_9 != null) {
+                v7_9.setCallback(new net.gsantner.markor.activity.MainActivity$$ExternalSyntheticLambda1(this));
+            }
+        }
+        return;
+    }
+
+    protected void onResume()
+    {
+        super.onResume();
+        if (!net.gsantner.markor.activity.IntroActivity.isFirstStart(this)) {
+            net.gsantner.markor.activity.StoragePermissionActivity.requestPermissions(this);
+        }
+        if (((net.gsantner.markor.model.AppSettings) this._appSettings).isRecreateMainRequired()) {
+            net.gsantner.opoc.format.GsSimpleMarkdownParser v3_1 = this.getIntent();
+            this.overridePendingTransition(0, 0);
+            v3_1.addFlags(65536);
+            this.finish();
+            this.overridePendingTransition(0, 0);
+            this.startActivity(v3_1);
+        }
+        this._cu.setKeepScreenOn(this, Boolean.valueOf(((net.gsantner.markor.model.AppSettings) this._appSettings).isKeepScreenOn()));
+        if ((android.os.Build$VERSION.SDK_INT >= 21) && (((net.gsantner.markor.model.AppSettings) this._appSettings).isMultiWindowEnabled())) {
+            net.gsantner.markor.activity.MainActivity$$ExternalSyntheticApiModelOutline0.m(this, new android.app.ActivityManager$TaskDescription(this.getString(2131820705)));
+        }
+        try {
+            if ((!net.gsantner.markor.activity.IntroActivity.optStart(this)) && (((net.gsantner.markor.model.AppSettings) this._appSettings).isAppCurrentVersionFirstStart(1))) {
+                StringBuilder v6_2 = net.gsantner.opoc.format.GsSimpleMarkdownParser.FILTER_ANDROID_TEXTVIEW;
+                net.gsantner.opoc.format.GsSimpleMarkdownParser v3_15 = net.gsantner.opoc.format.GsSimpleMarkdownParser.get().setDefaultSmpFilter(v6_2);
+                java.io.InputStream v7_1 = new StringBuilder();
+                v7_1.append("");
+                int v9_1 = new net.gsantner.opoc.format.GsSimpleMarkdownParser$SmpFilter[0];
+                v7_1.append(v3_15.parse(this.getString(2131820832).replace("\n", "  \n"), "", v9_1).getHtml());
+                java.io.InputStream v7_2 = v7_1.toString();
+                StringBuilder v8_6 = new StringBuilder();
+                v8_6.append(v7_2);
+                v8_6.append("<br/><br/><br/><big><big>");
+                v8_6.append(this.getString(2131820797));
+                v8_6.append("</big></big><br/>");
+                java.io.InputStream v7_6 = this.getResources().openRawResource(2131755008);
+                String v5_9 = new net.gsantner.opoc.format.GsSimpleMarkdownParser$SmpFilter[1];
+                v5_9[0] = v6_2;
+                v8_6.append(v3_15.parse(v7_6, "", v5_9));
+                String v5_11 = v8_6.toString();
+                StringBuilder v6_1 = new StringBuilder();
+                v6_1.append(v5_11);
+                v6_1.append("<br/><br/><br/><big><big>");
+                v6_1.append(this.getString(2131821040));
+                v6_1.append("</big></big><br/>");
+                net.gsantner.markor.util.MarkorContextUtils v1_4 = new net.gsantner.opoc.format.GsSimpleMarkdownParser$SmpFilter[0];
+                v6_1.append(v3_15.parse(this.getResources().openRawResource(2131755011), "", v1_4).getHtml());
+                this._cu.showDialogWithHtmlTextView(this, 0, v6_1.toString());
+                return;
+            }
+        } catch (String v0_6) {
+            v0_6.printStackTrace();
+        }
+        return;
+    }
+
+    public void onSaveInstanceState(android.os.Bundle p4)
+    {
+        super.onSaveInstanceState(p4);
+        try {
+            String v0_0 = this.getSupportFragmentManager();
+            v0_0.putFragment(p4, Integer.toString(2131296674), this._notebook);
+            v0_0.putFragment(p4, Integer.toString(2131296675), this._quicknote);
+            v0_0.putFragment(p4, Integer.toString(2131296676), this._todo);
+            v0_0.putFragment(p4, Integer.toString(2131296673), this._more);
+            return;
+        } catch (IllegalStateException) {
+            android.util.Log.d(net.gsantner.markor.activity.MainActivity.getName(), "Child fragments null in onSaveInstanceState()");
+            return;
+        }
+    }
+
+    protected void onStop()
+    {
+        super.onStop();
+        this.restoreDefaultToolbar();
+        return;
+    }
+
+    public void onViewPagerPageSelected(int p3)
+    {
+        this._bottomNav.getMenu().getItem(p3).setChecked(1);
+        int v0_5 = this._sectionsAdapter;
+        if (v0_5 != 0) {
+            v0_5.ensureRealized(p3);
+        }
+        if (p3 != this.tabIdToPos(2131296674)) {
+            this._fab.hide();
+            return;
+        } else {
+            this._fab.show();
+            this.hideKeyboard();
+            return;
+        }
+    }
+
+    public int tabIdFromPos(int p2)
+    {
+        return this._bottomNav.getMenu().getItem(p2).getItemId();
+    }
+}
+

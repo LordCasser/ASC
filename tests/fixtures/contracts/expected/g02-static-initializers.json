@@ -1,0 +1,38 @@
+{
+  "facts_kind": "source",
+  "selector": { "descriptor": "Lexample/Statics;", "dex": "0:0" },
+  "class_facts": {
+    "descriptor": "Lexample/Statics;",
+    "java_name": "example.Statics",
+    "super_descriptor": "Ljava/lang/Object;",
+    "access_flags": { "public": true }
+  },
+  "static_fields": [
+    {
+      "name": "FIRST",
+      "type_descriptor": "I",
+      "flags": { "public": true, "static": true },
+      "declared_value": 11
+    },
+    {
+      "name": "SECOND",
+      "type_descriptor": "I",
+      "flags": { "public": true, "static": true },
+      "declared_value": 22
+    }
+  ],
+  "methods": [
+    {
+      "name": "getSecond",
+      "prototype": "()I",
+      "reads_static_field": { "name": "SECOND", "type_descriptor": "I" }
+    }
+  ],
+  "source_must_match": [
+    { "regex": "FIRST\\s*=\\s*11\\b" },
+    { "regex": "SECOND\\s*=\\s*22\\b" },
+    { "regex": "getSecond\\s*\\(\\s*\\)" },
+    { "regex": "return\\s+SECOND\\b" }
+  ],
+  "source_must_not_match": []
+}

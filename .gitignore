@@ -5,3 +5,6 @@
 *.zip
 .DS_Store
 /.auto/
+
+# Contract fixtures and corpus samples are tracked test data.
+!tests/fixtures/contracts/**

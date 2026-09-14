@@ -1,0 +1,21 @@
+{
+  "facts_kind": "dex-catalog",
+  "artifact": {
+    "input": "inputs/g03-zero-checksum.apk",
+    "kind": "apk"
+  },
+  "dex_catalog": [
+    {
+      "entry_ordinal": 0,
+      "logical_ordinal": 0,
+      "raw_entry_name": "classes.dex",
+      "version": "035",
+      "header_offset": 0,
+      "uncompressed_size": 432
+    }
+  ],
+  "expected_diagnostics": [
+    { "code": "DexChecksumMismatch", "severity": "warning" },
+    { "code": "DexSignatureMismatch", "severity": "warning" }
+  ]
+}

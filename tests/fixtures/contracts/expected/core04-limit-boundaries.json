@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. For every Limits field in openspec/implementation/interfaces.md, run the touching operation with small overrides at limit-1, limit and limit+1 (no multi-GiB allocations: use small fixtures and per-field overrides) and assert pass/pass/ResourceLimit at the exact boundary. 2. For size-based limits, grow the actual input bytes rather than only metadata (for example an entry whose declared size differs from its real stream). 3. Exercise depth, result-item and 041-scratch accounting with crafted inputs. 4. Build a 1k-member archive and show no N-times physical copy of the entry bytes is retained (peak allocation measurement).",
+  "pass_criteria": "Every field enforces its exact boundary with ResourceLimit on the exceeding side; metadata-declared sizes never satisfy size limits on their own; the 1k-member archive runs without an N-fold byte blow-up."
+}

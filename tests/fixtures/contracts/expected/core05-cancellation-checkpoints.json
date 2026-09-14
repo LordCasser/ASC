@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. From a second thread, trigger CancelToken at each documented checkpoint: admission wait, entry read, inflate, scan, backend stage, and pre-commit serialization; each must observe the cancellation and return Cancelled. 2. Set a deadline instead and confirm Cancelled with cause Deadline (user token with cause User). 3. After a cancelled or deadline-expired call returns, census worker threads (and vendor thread pools) to confirm no background work continues. 4. Record which third-party stages cannot be preempted mid-call and where the checkpoint sits instead.",
+  "pass_criteria": "Every checkpoint honors cancellation; deadline and user cancellation are distinguishable by cause; no worker activity remains after return; non-preemptible stages are measured and documented rather than assumed away."
+}

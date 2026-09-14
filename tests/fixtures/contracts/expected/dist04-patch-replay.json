@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. From a clean upstream checkout of each backend, replay the registered patch series (git apply in the PATCHES.md order) and confirm the result is byte-identical to the vendored tree. 2. Remove a single patch and run the full test suite: only that patch's capability may regress while the others still pass. 3. Perform one upgrade drill against a newer upstream release: apply, resolve, run the patch regression tests, and record the update path (independent derived-version bumps vs core pin updates).",
+  "pass_criteria": "Patches replay onto clean upstream checkouts exactly; single-patch removal isolates its capability; the upgrade drill completes with a documented, repeatable update mechanism."
+}

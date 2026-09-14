@@ -1,0 +1,68 @@
+{
+  "facts_kind": "references",
+  "artifact": {
+    "input": "inputs/g01-regex-string.apk",
+    "dex_catalog": [
+      {
+        "entry_ordinal": 0,
+        "logical_ordinal": 0,
+        "raw_entry_name": "classes.dex",
+        "version": "035",
+        "header_offset": 0
+      }
+    ]
+  },
+  "queries": [
+    {
+      "query": { "kind": "string", "mode": "literal", "pattern": "token" },
+      "references": [
+        {
+          "caller": { "owner": "Lexample/Regex;", "name": "mark", "prototype": "()V" },
+          "targets": [
+            { "kind": "string", "value": "token", "code_unit_offsets": [0] },
+            { "kind": "string", "value": "tokens", "code_unit_offsets": [2] }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "string", "mode": "literal", "pattern": "tok.n" },
+      "references": []
+    },
+    {
+      "query": { "kind": "string", "mode": "regex", "pattern": "tok.n" },
+      "references": [
+        {
+          "caller": { "owner": "Lexample/Regex;", "name": "mark", "prototype": "()V" },
+          "targets": [
+            { "kind": "string", "value": "token", "code_unit_offsets": [0] },
+            { "kind": "string", "value": "tokens", "code_unit_offsets": [2] }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "string", "mode": "regex", "pattern": "tok(en|x)" },
+      "references": [
+        {
+          "caller": { "owner": "Lexample/Regex;", "name": "mark", "prototype": "()V" },
+          "targets": [
+            { "kind": "string", "value": "token", "code_unit_offsets": [0] },
+            { "kind": "string", "value": "tokens", "code_unit_offsets": [2] }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "string", "mode": "regex", "pattern": "^token$" },
+      "references": [
+        {
+          "caller": { "owner": "Lexample/Regex;", "name": "mark", "prototype": "()V" },
+          "targets": [
+            { "kind": "string", "value": "token", "code_unit_offsets": [0] }
+          ]
+        }
+      ]
+    }
+  ]
+}

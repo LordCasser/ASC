@@ -1,0 +1,72 @@
+{
+  "python_commit": "ccc6bae7704f5c5ef1a7271e27314837079621fb",
+  "python_commit_url": "https://github.com/MG1937/ASC/tree/ccc6bae7704f5c5ef1a7271e27314837079621fb",
+  "python_source_verified": "本地 asc-ref/python-main 的 src/ 与 main.py 与该 commit 逐字节一致（仅 __pycache__ 差异）",
+  "androguard": "4.1.3",
+  "python_version": "3.13.15",
+  "python_interpreter": "/Users/lordcasser/workspace/asc-ref/venv313/bin/python",
+  "captured_at": "2026-09-15",
+  "commands": [
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/net.gsantner.markor-2.16.1.apk string markor > expected/corpus-net.gsantner.markor/findrefs_string_markor.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/net.gsantner.markor-2.16.1.apk type 'Ljava/lang/String;' > expected/corpus-net.gsantner.markor/findrefs_type_Ljava-lang-String-.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/net.gsantner.markor-2.16.1.apk method onCreate > expected/corpus-net.gsantner.markor/findrefs_method_onCreate.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/net.gsantner.markor-2.16.1.apk field INSTANCE > expected/corpus-net.gsantner.markor/findrefs_field_INSTANCE.txt",
+    "REF_ROOT=/Users/lordcasser/workspace/asc-ref/python-main /Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/projects/ASC/bench/reference_scenario.py classes /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/net.gsantner.markor-2.16.1.apk 8 > expected/corpus-net.gsantner.markor/classes.txt",
+    "REF_ROOT=/Users/lordcasser/workspace/asc-ref/python-main /Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/projects/ASC/bench/reference_scenario.py manifest /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/net.gsantner.markor-2.16.1.apk > expected/corpus-net.gsantner.markor/manifest.xml",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py getclass --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/net.gsantner.markor-2.16.1.apk 'Lnet/gsantner/markor/activity/MainActivity;' > expected/corpus-net.gsantner.markor/getclass_net.gsantner.markor.activity.MainActivity.txt"
+  ],
+  "notes": [
+    "findrefs 输出按进程池 FIRST_COMPLETED 完成顺序拼接各 DEX 条目的块，块间顺序理论上依赖调度（本次在受控机器上复跑 2 次字节一致，含与存档文件排序后一致）；单块内部行序确定。比较器不应依赖块间顺序，应按行集合或按 dex 前缀分块后比较。",
+    "classes.txt 来自 GuiDexStore.class_names（sorted，确定性）。",
+    "manifest.xml 来自 get_manifest_xml(pretty=True)，确定性。",
+    "getclass 输出为单类反编译全文，确定性。",
+    "参考实现输出含已知缺陷（openspec 审计 G02/D03/D02 家族：方法身份错配、静态初始值、float 当整数等）。此处只固定'它当时输出什么'，不作为语义真值。",
+    "驱动环境偏差：指定 REF_PY=asc-ref/venv/bin/python 为 CPython 3.9.6，无法执行 findrefs（InsnLocator 的原子组正则要求 Python>=3.11，RELEASING.md 要求 3.11/3.12）；实际使用 asc-ref/venv313（CPython 3.13.15 + androguard 4.1.3，requirements.txt 同版本 pin）。"
+  ],
+  "files": {
+    "classes.txt": {
+      "sha256": "638f383bb89330583be522a1ff6c0524776a71e116bff39f3208592acfbc6eb7",
+      "bytes": 631848
+    },
+    "findrefs_field_INSTANCE.txt": {
+      "sha256": "ea7e121a727c13dc4df386321e3af6b942cb7b19f3a03d4d749be90fadf08d48",
+      "bytes": 153769
+    },
+    "findrefs_method_onCreate.txt": {
+      "sha256": "16d7b0232b53d28627583c0e2c3da251827824c33b99a14e671c487c213309ab",
+      "bytes": 23328
+    },
+    "findrefs_string_markor.txt": {
+      "sha256": "c683c0e9467b48e8c8dd9e7e8d497820ef6340a98478b2a5661f1ef3a71f918c",
+      "bytes": 1257
+    },
+    "findrefs_type_Ljava-lang-String-.txt": {
+      "sha256": "6059deda7cc3cbddd10103c38dda83582be583ebbbae040e1c96969b27d928da",
+      "bytes": 101331
+    },
+    "getclass_net.gsantner.markor.activity.MainActivity.txt": {
+      "sha256": "7bc5dfd06e33fd1b4c1f270ea8a0647926f2e7a86651951e1f20817911ff6025",
+      "bytes": 26039
+    },
+    "manifest.xml": {
+      "sha256": "8b5384f328c5a93ba65833bcb513ce1d924f48a6118dde32eab1d58b1ece8d86",
+      "bytes": 31183
+    }
+  },
+  "input": {
+    "path": "apks/net.gsantner.markor-2.16.1.apk",
+    "sha256": "3f9f260dc3e32a1281cb8803eea6f926eef897579f68a5d35f922523974b84b9"
+  },
+  "getclass_target": {
+    "dalvik_class": "Lnet/gsantner/markor/activity/MainActivity;",
+    "facts": {
+      "file": "getclass_net.gsantner.markor.activity.MainActivity.txt",
+      "lines": 620,
+      "contains": {
+        "onCreate": 3,
+        "_fab": 5
+      },
+      "class_decl": "public class MainActivity extends net.gsantner.markor.activity.MarkorBaseActivity implements net.gsantner.opoc.frontend.filebrowser.GsFileBrowserFragment$FilesystemFragmentOptionsListener {"
+    }
+  }
+}

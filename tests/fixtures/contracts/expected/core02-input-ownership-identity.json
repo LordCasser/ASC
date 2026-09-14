@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. Open the same fixture bytes (inputs/g02-static-initializers) through path, Arc bytes and raw-DEX input kinds and run identical queries; facts must agree. 2. Re-open identical bytes with the same Engine and confirm the original IDs resolve; open different content under the same expectation and confirm rejection. 3. Pass an Artifact from one Engine to another Engine's operation and confirm InvalidQuery. 4. Hash input files (shasum -a 256) before and after all operations and require equality. 5. Clone an Engine, drop the original, and verify analyses still work with no dangling references (run the suite under a leak checker).",
+  "pass_criteria": "Same facts from all three open paths; identical bytes keep IDs while different content is rejected; cross-account use fails with InvalidQuery; input bytes unchanged; Engine clones share the pool without dangling state."
+}

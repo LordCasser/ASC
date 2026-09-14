@@ -1,0 +1,28 @@
+{
+  "facts_kind": "source",
+  "selector": { "descriptor": "Lexample/Test;", "dex": "0:0" },
+  "input_integrity": {
+    "dex_checksum_hex": "00000000",
+    "dex_signature_sha1_hex": "0000000000000000000000000000000000000000"
+  },
+  "expected_diagnostics": [
+    { "code": "DexChecksumMismatch", "severity": "warning" },
+    { "code": "DexSignatureMismatch", "severity": "warning" }
+  ],
+  "class_facts": {
+    "descriptor": "Lexample/Test;",
+    "java_name": "example.Test",
+    "super_descriptor": "Ljava/lang/Object;",
+    "access_flags": { "public": true }
+  },
+  "methods": [
+    { "name": "first", "prototype": "()V", "shared_code_with": { "name": "second" } },
+    { "name": "second", "prototype": "()V" }
+  ],
+  "source_must_match": [
+    { "regex": "class\\s+Test\\b" },
+    { "regex": "void\\s+first\\s*\\(\\s*\\)" },
+    { "regex": "void\\s+second\\s*\\(\\s*\\)" }
+  ],
+  "source_must_not_match": []
+}

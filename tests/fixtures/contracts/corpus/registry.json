@@ -1,0 +1,104 @@
+{
+  "task": "A00-c corpus (acceptance QUAL-02)",
+  "base": "tests/fixtures/contracts/corpus",
+  "captured_at": "2026-09-15",
+  "index_source": "https://f-droid.org/repo/index.xml (2026-09-15 拉取，sha256 均与 index 内 hash 条目比对通过)",
+  "samples": [
+    {
+      "case_id": "corpus-org.schabi.newpipe",
+      "path": "apks/org.schabi.newpipe-0.29.1.apk",
+      "url": "https://f-droid.org/repo/org.schabi.newpipe_1015.apk",
+      "appid": "org.schabi.newpipe",
+      "version_name": "0.29.1",
+      "version_code": 1015,
+      "size": 11507122,
+      "sha256": "1d66d19eedbab969b1be2e44e0ea35f5f8921cbe83b5c5ac810767ca1a84b7e8",
+      "license": "GPL-3.0-or-later",
+      "multi_dex": true,
+      "dex_entries": [
+        "classes.dex",
+        "classes2.dex",
+        "classes3.dex"
+      ],
+      "manifest_complexity": "286 XML 节点 / 18 种标签 / 11 permissions / 13 activity / 11 service / 5 receiver / 4 provider / 12 meta-data / 25 intent-filter",
+      "f-droid-build-check": "index.xml 的 org.schabi.newpipe 最新 package 条目：version=0.29.1 versioncode=1015 apkname=org.schabi.newpipe_1015.apk，其 sha256 与本地文件一致；应用页 https://f-droid.org/packages/org.schabi.newpipe/",
+      "case_id_manifest": "corpus-org-schabi-newpipe"
+    },
+    {
+      "case_id": "corpus-de.danoeh.antennapod",
+      "path": "apks/de.danoeh.antennapod-3.12.1.apk",
+      "url": "https://f-droid.org/repo/de.danoeh.antennapod_3120195.apk",
+      "appid": "de.danoeh.antennapod",
+      "version_name": "3.12.1",
+      "version_code": 3120195,
+      "size": 17733444,
+      "sha256": "11b38c20b555b445a301c12028ccb912af24dce1d8b85532658b797b85d52638",
+      "license": "GPL-3.0-only",
+      "multi_dex": true,
+      "dex_entries": [
+        "classes.dex",
+        "classes2.dex",
+        "classes3.dex"
+      ],
+      "manifest_complexity": "225 XML 节点 / 19 种标签 / 11 permissions / 12 activity / 7 service / 16 receiver / 3 provider / 21 meta-data / 38 intent-filter",
+      "f-droid-build-check": "index.xml 的 de.danoeh.antennapod 最新 package 条目：version=3.12.1 versioncode=3120195 apkname=de.danoeh.antennapod_3120195.apk，其 sha256 与本地文件一致；应用页 https://f-droid.org/packages/de.danoeh.antennapod/",
+      "case_id_manifest": "corpus-de-danoeh-antennapod"
+    },
+    {
+      "case_id": "corpus-com.kunzisoft.keepass.libre",
+      "path": "apks/com.kunzisoft.keepass.libre-4.5.3.apk",
+      "url": "https://f-droid.org/repo/com.kunzisoft.keepass.libre_45300.apk",
+      "appid": "com.kunzisoft.keepass.libre",
+      "version_name": "4.5.3",
+      "version_code": 45300,
+      "size": 16733553,
+      "sha256": "7fb11c3b93554eeb4aa72d217801ac461d5789470376bf54630fe0353437db7c",
+      "license": "GPL-3.0-or-later",
+      "multi_dex": true,
+      "dex_entries": [
+        "classes.dex",
+        "classes2.dex",
+        "classes3.dex"
+      ],
+      "manifest_complexity": "164 XML 节点 / 19 种标签 / 9 permissions / 20 activity / 9 service / 2 receiver / 1 provider / 10 meta-data / 15 intent-filter",
+      "f-droid-build-check": "index.xml 的 com.kunzisoft.keepass.libre 最新 package 条目：version=4.5.3 versioncode=45300 apkname=com.kunzisoft.keepass.libre_45300.apk，其 sha256 与本地文件一致；应用页 https://f-droid.org/packages/com.kunzisoft.keepass.libre/",
+      "case_id_manifest": "corpus-com-kunzisoft-keepass-libre"
+    },
+    {
+      "case_id": "corpus-net.gsantner.markor",
+      "path": "apks/net.gsantner.markor-2.16.1.apk",
+      "url": "https://f-droid.org/repo/net.gsantner.markor_163.apk",
+      "appid": "net.gsantner.markor",
+      "version_name": "2.16.1",
+      "version_code": 163,
+      "size": 12054040,
+      "sha256": "3f9f260dc3e32a1281cb8803eea6f926eef897579f68a5d35f922523974b84b9",
+      "license": "Apache-2.0",
+      "multi_dex": true,
+      "dex_entries": [
+        "classes.dex",
+        "classes2.dex"
+      ],
+      "manifest_complexity": "374 XML 节点（4 个样本中最多）/ 20 种标签 / 7 permissions / 11 activity / 1 activity-alias / 2 service / 2 receiver / 2 provider / 7 meta-data / 11 intent-filter",
+      "f-droid-build-check": "index.xml 的 net.gsantner.markor 最新 package 条目：version=2.16.1 versioncode=163 apkname=net.gsantner.markor_163.apk，其 sha256 与本地文件一致；应用页 https://f-droid.org/packages/net.gsantner.markor/",
+      "case_id_manifest": "corpus-net-gsantner-markor"
+    },
+    {
+      "case_id": "corpus-reference-workload",
+      "path": "reference-workload-classes.dex",
+      "kind": "raw-dex",
+      "url": "https://github.com/MG1937/ASC/blob/ccc6bae7704f5c5ef1a7271e27314837079621fb/tests/fixtures/reference-workload.zip（zip 内 classes.dex）",
+      "size": 9577628,
+      "sha256": "5cd2401e9ec9a41fc5f78d06acb10d9f334a973bb82df9af381d3e5024aee337",
+      "source_archive_sha256": "962cbae7a4a37d7ea154c4973dace151ee596a38413004e91417f2f001c0b07d",
+      "license": "Apache-2.0（MG1937/ASC 仓库 LICENSE 为证；本地 zip 与该 commit 原始文件 cmp 逐字节一致）",
+      "dex_version": "039",
+      "multi_dex": false,
+      "manifest_complexity": "不适用（裸 DEX，无 APK 容器）",
+      "f-droid-build-check": "不适用；来源为参考实现上游 commit ccc6bae 的测试负载",
+      "case_id_manifest": "corpus-reference-workload"
+    }
+  ],
+  "expected_dir": "expected/",
+  "expected_provenance": "每个 expected/<case_id>/ 目录含原始 stdout 输出与 provenance.json（命令、版本、逐文件 sha256）；expected 输出来自 Python 参考实现（MG1937/ASC@ccc6bae，androguard 4.1.3，CPython 3.13.15），非 Rust 候选输出"
+}

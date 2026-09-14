@@ -1,0 +1,11 @@
+classes2.dex | Lnet/gsantner/markor/format/TextConverterBase;->putContentIntoTemplate | matched=(</head>
+<body class='{{ post.text_converter_name }}' onload='onPageLoaded_markor_private();'>
+
+<!-- USER DOCUMENT CONTENT -->
+
+
+; <script> function onPageLoaded_markor_private() {
+)
+classes2.dex | Lnet/gsantner/markor/format/markdown/MarkdownTextConverter;->convertMarkup | matched=(<style type='text/css'>.markor-table-of-contents { border: 1px solid {{ app.token_bw_inverse_of_theme }}; border-radius: 2px; } .markor-table-of-contents > h1 { padding-left: 14px; margin-bottom: -8px; border-bottom: 1px solid {{ app.token_bw_inverse_of_theme }}; } .markor-table-of-contents-list li { margin-left: -12px; } .markor-table-of-contents-list a { text-decoration: none; }</style>; markor-table-of-contents toc; markor-table-of-contents-list)
+classes2.dex | Lnet/gsantner/markor/format/markdown/MarkdownTextConverter;->getViewHlPrismIncludes | matched=(prism/plugins/line-numbers/prism-line-numbers-markor.css; prism/plugins/line-numbers/prism-line-numbers-markor.js; prism/prism-markor.css; prism/prism-markor.js)
+classes2.dex | Lnet/gsantner/markor/util/MarkorContextUtils;->applySpecialLaunchersVisibility | matched=(net.gsantner.markor.AliasDocumentProcessText)

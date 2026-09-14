@@ -1,0 +1,72 @@
+{
+  "python_commit": "ccc6bae7704f5c5ef1a7271e27314837079621fb",
+  "python_commit_url": "https://github.com/MG1937/ASC/tree/ccc6bae7704f5c5ef1a7271e27314837079621fb",
+  "python_source_verified": "本地 asc-ref/python-main 的 src/ 与 main.py 与该 commit 逐字节一致（仅 __pycache__ 差异）",
+  "androguard": "4.1.3",
+  "python_version": "3.13.15",
+  "python_interpreter": "/Users/lordcasser/workspace/asc-ref/venv313/bin/python",
+  "captured_at": "2026-09-15",
+  "commands": [
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/de.danoeh.antennapod-3.12.1.apk string antennapod > expected/corpus-de.danoeh.antennapod/findrefs_string_antennapod.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/de.danoeh.antennapod-3.12.1.apk type 'Ljava/lang/String;' > expected/corpus-de.danoeh.antennapod/findrefs_type_Ljava-lang-String-.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/de.danoeh.antennapod-3.12.1.apk method onCreate > expected/corpus-de.danoeh.antennapod/findrefs_method_onCreate.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/de.danoeh.antennapod-3.12.1.apk field INSTANCE > expected/corpus-de.danoeh.antennapod/findrefs_field_INSTANCE.txt",
+    "REF_ROOT=/Users/lordcasser/workspace/asc-ref/python-main /Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/projects/ASC/bench/reference_scenario.py classes /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/de.danoeh.antennapod-3.12.1.apk 8 > expected/corpus-de.danoeh.antennapod/classes.txt",
+    "REF_ROOT=/Users/lordcasser/workspace/asc-ref/python-main /Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/projects/ASC/bench/reference_scenario.py manifest /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/de.danoeh.antennapod-3.12.1.apk > expected/corpus-de.danoeh.antennapod/manifest.xml",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py getclass --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/de.danoeh.antennapod-3.12.1.apk 'Lde/danoeh/antennapod/activity/MainActivity;' > expected/corpus-de.danoeh.antennapod/getclass_de.danoeh.antennapod.activity.MainActivity.txt"
+  ],
+  "notes": [
+    "findrefs 输出按进程池 FIRST_COMPLETED 完成顺序拼接各 DEX 条目的块，块间顺序理论上依赖调度（本次在受控机器上复跑 2 次字节一致，含与存档文件排序后一致）；单块内部行序确定。比较器不应依赖块间顺序，应按行集合或按 dex 前缀分块后比较。",
+    "classes.txt 来自 GuiDexStore.class_names（sorted，确定性）。",
+    "manifest.xml 来自 get_manifest_xml(pretty=True)，确定性。",
+    "getclass 输出为单类反编译全文，确定性。",
+    "参考实现输出含已知缺陷（openspec 审计 G02/D03/D02 家族：方法身份错配、静态初始值、float 当整数等）。此处只固定'它当时输出什么'，不作为语义真值。",
+    "驱动环境偏差：指定 REF_PY=asc-ref/venv/bin/python 为 CPython 3.9.6，无法执行 findrefs（InsnLocator 的原子组正则要求 Python>=3.11，RELEASING.md 要求 3.11/3.12）；实际使用 asc-ref/venv313（CPython 3.13.15 + androguard 4.1.3，requirements.txt 同版本 pin）。"
+  ],
+  "files": {
+    "classes.txt": {
+      "sha256": "f602aa4818d8683e3485a4ddcb7882a8082479987f88f80615ac88020a164709",
+      "bytes": 738611
+    },
+    "findrefs_field_INSTANCE.txt": {
+      "sha256": "1c4ccd1d565f2d799b468aa8cc62428d3e3c7d7ba2a8b314a9b582c5204a33bb",
+      "bytes": 94668
+    },
+    "findrefs_method_onCreate.txt": {
+      "sha256": "e32088fd9ede24f100fdf6b4aaae06512454a67ca42d06df7876605ee4949d4c",
+      "bytes": 64793
+    },
+    "findrefs_string_antennapod.txt": {
+      "sha256": "2216cec756f7f8c163c1a2a6add3838f3db3d141a42916a2f4c49cf8eb4223bf",
+      "bytes": 14632
+    },
+    "findrefs_type_Ljava-lang-String-.txt": {
+      "sha256": "7f1a966d6000b2a250a7842baf2e2972b5561fc670f4836e1cd486bee93bfa2c",
+      "bytes": 88929
+    },
+    "getclass_de.danoeh.antennapod.activity.MainActivity.txt": {
+      "sha256": "9fea82b0e04a6266672d3a2d66a725c7ca931fa3f68c0674266dbb49ccc1e431",
+      "bytes": 45967
+    },
+    "manifest.xml": {
+      "sha256": "7ef45298b6ed3e7007575d7e66af347ed59c8678d0f1618cf86a2bcf8c2736f6",
+      "bytes": 20626
+    }
+  },
+  "input": {
+    "path": "apks/de.danoeh.antennapod-3.12.1.apk",
+    "sha256": "11b38c20b555b445a301c12028ccb912af24dce1d8b85532658b797b85d52638"
+  },
+  "getclass_target": {
+    "dalvik_class": "Lde/danoeh/antennapod/activity/MainActivity;",
+    "facts": {
+      "file": "getclass_de.danoeh.antennapod.activity.MainActivity.txt",
+      "lines": 1039,
+      "contains": {
+        "onCreate": 5,
+        "onOptionsItemSelected": 3
+      },
+      "class_decl": "public class MainActivity extends de.danoeh.antennapod.playback.cast.CastEnabledActivity implements de.danoeh.antennapod.ui.common.NavigationToolbarActivity {"
+    }
+  }
+}

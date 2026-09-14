@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "comment": "Per-row parity exemptions for bench/corpus_parity.py. Each entry exempts exactly one row identity (the `<dex> | <class>-><method>` head of the row) for one APK sha256 under one query as invoked by the script (e.g. 'method onCreate --class com.example --fuzzy-class'). Global ignores are not supported: no whole-query, whole-APK, whole-side or manifest exemptions. 'reason' must cite an audit finding id from openspec/audits/cli-parity/report.md or a bench/row_oracle.py arbitration category; 'evidence' must hold the supporting facts (command, counts, arbitration output). Every entry must be hit by each run - an exemption no run ever matches is itself a failure, so stale entries break the gate and must be removed.",
+  "entries": []
+}

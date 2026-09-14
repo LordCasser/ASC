@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. Register real DEX files and at least 3 sourced APKs (covering multi-DEX and complex manifests, different producer versions - not three recompressions of one sample) in tests/fixtures/contracts/corpus/ with source, version, license and sha256 for each; samples that cannot be legally redistributed stay manifest-only with a documented acquisition path. 2. Run all four reference query kinds plus fixed-point source checks on every corpus sample and record the results as facts. 3. Report any sample class that cannot be sourced yet as blocked rather than shrinking the matrix.",
+  "pass_criteria": "Corpus registry is complete with provenance and hashes; all four reference kinds return non-empty results on the real samples; fixed-point source facts verified; no sample is committed without redistribution rights."
+}

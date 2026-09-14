@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. cargo +1.93.1 check -p asc-core --no-default-features and with --features decompile and --features manifest (target command; the asc-core package exists after A10). 2. cargo +1.93.1 doc -p asc-core --no-deps and confirm the public surface only exposes standard-library and asc-owned DTO types under default features (input/classes/references). 3. Compile every doc example against a scratch consumer that depends on asc-core alone, outside the workspace tree. 4. Confirm returned values can outlive the Artifact that produced them (NLL proof snippet in the doc tests).",
+  "pass_criteria": "Default features compile and document without exposing vendor types; doc examples build outside the workspace against the public package; results remain usable after the Artifact drops."
+}

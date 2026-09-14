@@ -1,0 +1,1039 @@
+package de.danoeh.antennapod.activity;
+public class MainActivity extends de.danoeh.antennapod.playback.cast.CastEnabledActivity implements de.danoeh.antennapod.ui.common.NavigationToolbarActivity {
+    public static final String EXTRA_REFRESH_ON_START = "refresh_on_start";
+    public static final String KEY_GENERATED_VIEW_ID = "generated_view_id";
+    public static final String MAIN_FRAGMENT_TAG = "main";
+    public static final String PREF_IS_FIRST_LAUNCH = "prefMainActivityIsFirstLaunch";
+    public static final String PREF_NAME = "MainActivityPrefs";
+    private static final String TAG = "MainActivity";
+    private de.danoeh.antennapod.ui.screen.drawer.BottomNavigation bottomNavigation;
+    private de.danoeh.antennapod.ui.view.BottomSheetBackPressedCallback bottomSheetBackPressedCallback;
+    private final com.google.android.material.bottomsheet.BottomSheetBehavior$BottomSheetCallback bottomSheetCallback;
+    private androidx.drawerlayout.widget.DrawerLayout drawerLayout;
+    private androidx.appcompat.app.ActionBarDrawerToggle drawerToggle;
+    private int lastTheme;
+    private android.view.View navDrawer;
+    private androidx.activity.OnBackPressedCallback openDefaultPageBackPressedCallback;
+    private final androidx.recyclerview.widget.RecyclerView$RecycledViewPool recycledViewPool;
+    private de.danoeh.antennapod.ui.view.LockableBottomSheetBehavior sheetBehavior;
+    private androidx.core.graphics.Insets systemBarInsets;
+
+    private synthetic androidx.core.view.WindowInsetsCompat lambda$onCreate$0(android.view.View p2, androidx.core.view.WindowInsetsCompat p3)
+    {
+        this.systemBarInsets = p3.getInsets(androidx.core.view.WindowInsetsCompat$Type.systemBars());
+        this.updateInsets();
+        return new androidx.core.view.WindowInsetsCompat$Builder(p3).setInsets(androidx.core.view.WindowInsetsCompat$Type.navigationBars(), androidx.core.graphics.Insets.NONE).build();
+    }
+
+    private synthetic void lambda$onStreamingConfirmation$6(android.content.DialogInterface p1, int p2)
+    {
+        de.danoeh.antennapod.playback.service.PlaybackController.bindToMedia3Service(this, new de.danoeh.antennapod.activity.MainActivity$$ExternalSyntheticLambda8());
+        return;
+    }
+
+    private synthetic void lambda$onEventMainThread$5(de.danoeh.antennapod.event.MessageEvent p1, android.view.View p2)
+    {
+        p1.action.accept(this);
+        return;
+    }
+
+    private synthetic void lambda$setupToolbarToggle$4(android.view.View p1)
+    {
+        this.getSupportFragmentManager().popBackStack();
+        return;
+    }
+
+    private synthetic void lambda$onStreamingConfirmation$7(android.content.DialogInterface p1, int p2)
+    {
+        de.danoeh.antennapod.storage.preferences.UserPreferences.setAllowMobileStreaming(1);
+        de.danoeh.antennapod.playback.service.PlaybackController.bindToMedia3Service(this, new de.danoeh.antennapod.activity.MainActivity$$ExternalSyntheticLambda8());
+        return;
+    }
+
+    private void updateMainBackCallbackEnabledState()
+    {
+        boolean v0_5;
+        boolean v0_0 = de.danoeh.antennapod.storage.preferences.UserPreferences.getDefaultPage();
+        if ((this.getSupportFragmentManager().getBackStackEntryCount() > 0) || ((!de.danoeh.antennapod.ui.screen.drawer.NavDrawerFragment.getLastNavFragment(this).equals(v0_0)) && (!"remember".equals(v0_0)))) {
+            v0_5 = 1;
+        } else {
+            if (de.danoeh.antennapod.storage.preferences.UserPreferences.backButtonOpensDrawer()) {
+                boolean v0_3 = this.drawerLayout;
+                if ((v0_3) && ((this.bottomNavigation == null) && (!v0_3.isDrawerOpen(this.navDrawer)))) {
+                }
+            }
+            v0_5 = 0;
+        }
+        this.openDefaultPageBackPressedCallback.setEnabled(v0_5);
+        return;
+    }
+
+    private synthetic void lambda$setupToolbarToggle$3(android.view.View p1)
+    {
+        this.getSupportFragmentManager().popBackStack();
+        return;
+    }
+
+    private void handleDeeplink(android.net.Uri p6)
+    {
+        if ((p6 != null) && (p6.getPath() != null)) {
+            org.greenrobot.eventbus.EventBus v0_11 = new StringBuilder();
+            v0_11.append("Handling deeplink: ");
+            v0_11.append(p6.toString());
+            android.util.Log.d("MainActivity", v0_11.toString());
+            org.greenrobot.eventbus.EventBus v0_1 = p6.getPath();
+            v0_1.getClass();
+            if (v0_1.equals("/deeplink/search")) {
+                String v6_2 = p6.getQueryParameter("query");
+                if (v6_2 != null) {
+                    this.loadChildFragment(de.danoeh.antennapod.ui.screen.SearchFragment.newInstance(v6_2));
+                }
+            } else {
+                if (v0_1.equals("/deeplink/main")) {
+                    String v6_4 = p6.getQueryParameter("page");
+                    if (v6_4 != null) {
+                        de.danoeh.antennapod.event.MessageEvent v3_1 = -1;
+                        switch (v6_4.hashCode()) {
+                            case -195667765:
+                                if (v6_4.equals("DOWNLOADS")) {
+                                    v3_1 = 0;
+                                } else {
+                                }
+                                break;
+                            case 77406449:
+                                if (v6_4.equals("QUEUE")) {
+                                    v3_1 = 1;
+                                } else {
+                                }
+                                break;
+                            case 149680600:
+                                if (v6_4.equals("EPISODES")) {
+                                    v3_1 = 2;
+                                } else {
+                                }
+                                break;
+                            case 390503715:
+                                if (v6_4.equals("STATISTICS")) {
+                                    v3_1 = 3;
+                                } else {
+                                }
+                                break;
+                            case 808641238:
+                                if (v6_4.equals("SUBSCRIPTIONS")) {
+                                    v3_1 = 4;
+                                } else {
+                                }
+                                break;
+                            case 1644916852:
+                                if (v6_4.equals("HISTORY")) {
+                                    v3_1 = 5;
+                                } else {
+                                }
+                                break;
+                            default:
+                        }
+                        switch (v3_1) {
+                            case 0:
+                                this.loadFragment("DownloadsFragment", 0);
+                                return;
+                            case 1:
+                                this.loadFragment("QueueFragment", 0);
+                                return;
+                            case 2:
+                                this.loadFragment("EpisodesFragment", 0);
+                                return;
+                            case 3:
+                                this.loadFragment("StatisticsFragment", 0);
+                                return;
+                            case 4:
+                                this.loadFragment("SubscriptionFragment", 0);
+                                return;
+                            case 5:
+                                this.loadFragment("PlaybackHistoryFragment", 0);
+                                return;
+                            default:
+                                org.greenrobot.eventbus.EventBus v0_22 = org.greenrobot.eventbus.EventBus.getDefault();
+                                Object[] v1_7 = new Object[1];
+                                v1_7[0] = v6_4;
+                                v0_22.post(new de.danoeh.antennapod.event.MessageEvent(this.getString(de.danoeh.antennapod.R$string.app_action_not_found, v1_7)));
+                                return;
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    private void updateInsets()
+    {
+        int v0_3;
+        if (this.findViewById(de.danoeh.antennapod.R$id.audioplayerFragment).getVisibility() != 0) {
+            v0_3 = 0;
+        } else {
+            v0_3 = 1;
+        }
+        this.setPlayerVisible(v0_3);
+        return;
+    }
+
+    private int getScreenWidth()
+    {
+        int v0_1 = new android.util.DisplayMetrics();
+        this.getWindowManager().getDefaultDisplay().getMetrics(v0_1);
+        return v0_1.widthPixels;
+    }
+
+    private void setNavDrawerSize()
+    {
+        if (this.drawerToggle != null) {
+            this.navDrawer.getLayoutParams().width = Math.min(((int) (((float) this.getScreenWidth()) * (((float) this.getResources().getInteger(de.danoeh.antennapod.R$integer.nav_drawer_screen_size_percent)) * 1008981770))), ((int) this.getResources().getDimension(de.danoeh.antennapod.R$dimen.nav_drawer_max_screen_size)));
+            return;
+        } else {
+            return;
+        }
+    }
+
+    private void restartActivity()
+    {
+        this.finish();
+        this.startActivity(new android.content.Intent(this, de.danoeh.antennapod.activity.MainActivity));
+        return;
+    }
+
+    private void ensureGeneratedViewIdGreaterThan(int p2)
+    {
+        while (android.view.View.generateViewId() <= p2) {
+        }
+        return;
+    }
+
+    private void checkFirstLaunch()
+    {
+        android.content.SharedPreferences$Editor v0_2 = this.getSharedPreferences("MainActivityPrefs", 0);
+        if (v0_2.getBoolean("prefMainActivityIsFirstLaunch", 1)) {
+            de.danoeh.antennapod.net.download.serviceinterface.FeedUpdateManager.getInstance().restartUpdateAlarm(this, 1);
+            android.content.SharedPreferences$Editor v0_1 = v0_2.edit();
+            v0_1.putBoolean("prefMainActivityIsFirstLaunch", 0);
+            v0_1.apply();
+        }
+        return;
+    }
+
+    private void handleNavIntent()
+    {
+        android.util.Log.d("MainActivity", "handleNavIntent()");
+        android.content.Intent v0_3 = this.getIntent();
+        if (!v0_3.hasExtra("episode_id")) {
+            if (!v0_3.hasExtra("fragment_feed_id")) {
+                if (!v0_3.hasExtra("fragment_tag")) {
+                    if (!v0_3.getBooleanExtra("open_player", 0)) {
+                        this.handleDeeplink(v0_3.getData());
+                    } else {
+                        this.sheetBehavior.setState(3);
+                        this.bottomSheetCallback.onSlide(0, 1065353216);
+                    }
+                } else {
+                    Class v1_9 = v0_3.getStringExtra("fragment_tag");
+                    androidx.fragment.app.Fragment v2_4 = v0_3.getBundleExtra("fragment_args");
+                    if (v1_9 != null) {
+                        if (!v0_3.getBooleanExtra("clear_back_stack", 1)) {
+                            this.loadChildFragment(this.createFragmentInstance(v1_9, v2_4), de.danoeh.antennapod.ui.TransitionEffect.NONE, v1_9);
+                        } else {
+                            this.loadFragment(v1_9, 0);
+                        }
+                    }
+                    this.sheetBehavior.setState(4);
+                }
+            } else {
+                Class v1_12 = v0_3.getLongExtra("fragment_feed_id", 0);
+                android.os.Bundle v9_1 = v0_3.getBundleExtra("fragment_args");
+                if (v1_12 > 0) {
+                    if (!v0_3.getBooleanExtra("clear_back_stack", 1)) {
+                        this.loadChildFragment(de.danoeh.antennapod.ui.screen.feed.FeedItemlistFragment.newInstance(v1_12));
+                    } else {
+                        this.loadFeedFragmentById(v1_12, v9_1);
+                    }
+                }
+                this.sheetBehavior.setState(4);
+            }
+        } else {
+            Class v1_15 = v0_3.getLongExtra("episode_id", 0);
+            if (v1_15 > 0) {
+                this.loadChildFragment(de.danoeh.antennapod.ui.screen.episode.ItemPagerFragment.newInstance(v1_15));
+                this.sheetBehavior.setState(4);
+            } else {
+                return;
+            }
+        }
+        if (v0_3.getBooleanExtra("open_drawer", 0)) {
+            Class v1_20 = this.drawerLayout;
+            if (v1_20 != null) {
+                v1_20.open();
+            }
+        }
+        if (v0_3.getBooleanExtra("open_download_logs", 0)) {
+            new de.danoeh.antennapod.ui.screen.download.DownloadLogFragment().show(this.getSupportFragmentManager(), "DownloadLogFragment");
+        }
+        if (v0_3.getBooleanExtra("refresh_on_start", 0)) {
+            de.danoeh.antennapod.net.download.serviceinterface.FeedUpdateManager.getInstance().runOnceOrAsk(this);
+        }
+        this.setIntent(new android.content.Intent(this, de.danoeh.antennapod.activity.MainActivity));
+        this.updateMainBackCallbackEnabledState();
+        return;
+    }
+
+    public static synthetic androidx.core.view.WindowInsetsCompat $r8$lambda$4DPsqNHocpV1bDxhaA1wrnJLIHw(de.danoeh.antennapod.activity.MainActivity p0, android.view.View p1, androidx.core.view.WindowInsetsCompat p2)
+    {
+        return p0.lambda$onCreate$0(p1, p2);
+    }
+
+    public static synthetic void $r8$lambda$AdqM2IamaP_DIdmALOM9x3wVPeY(java.util.List p5)
+    {
+        org.greenrobot.eventbus.EventBus v5_1 = p5.iterator();
+        int v0 = 0;
+        while (v5_1.hasNext()) {
+            androidx.work.WorkInfo$State v1_1 = ((androidx.work.WorkInfo) v5_1.next());
+            if ((v1_1.getState() == androidx.work.WorkInfo$State.RUNNING) || (v1_1.getState() == androidx.work.WorkInfo$State.ENQUEUED)) {
+                v0 = 1;
+            }
+        }
+        org.greenrobot.eventbus.EventBus.getDefault().postSticky(new de.danoeh.antennapod.event.FeedUpdateRunningEvent(v0));
+        return;
+    }
+
+    public static synthetic void $r8$lambda$c2Vmiwltp2xMAJqfSMlMPubBKLw(de.danoeh.antennapod.activity.MainActivity p0, android.content.DialogInterface p1, int p2)
+    {
+        p0.lambda$onStreamingConfirmation$6(p1, p2);
+        return;
+    }
+
+    public static synthetic void $r8$lambda$lVCHGpJXRrgI66doTsbDdHA_JoQ(de.danoeh.antennapod.activity.MainActivity p0, de.danoeh.antennapod.event.MessageEvent p1, android.view.View p2)
+    {
+        p0.lambda$onEventMainThread$5(p1, p2);
+        return;
+    }
+
+    public static synthetic void $r8$lambda$nPt4qnwFYYvyQ9ZoeyapnsHysVs(de.danoeh.antennapod.activity.MainActivity p0, android.view.View p1)
+    {
+        p0.lambda$setupToolbarToggle$4(p1);
+        return;
+    }
+
+    public static synthetic void $r8$lambda$npwK1WMOaPKFFLrrPBQGFh7FqTE(de.danoeh.antennapod.activity.MainActivity p0, android.content.DialogInterface p1, int p2)
+    {
+        p0.lambda$onStreamingConfirmation$7(p1, p2);
+        return;
+    }
+
+    public static synthetic void $r8$lambda$nuNomAWbdHdeLySPLZdIUeH0t60(java.util.List p8)
+    {
+        java.util.HashMap v0_1 = new java.util.HashMap();
+        org.greenrobot.eventbus.EventBus v8_2 = p8.iterator();
+        while (v8_2.hasNext()) {
+            int v1_3 = ((androidx.work.WorkInfo) v8_2.next());
+            de.danoeh.antennapod.model.download.DownloadStatus v2_1 = v1_3.getTags().iterator();
+            String v3_0 = 0;
+            while (v2_1.hasNext()) {
+                androidx.work.WorkInfo$State v4_6 = ((String) v2_1.next());
+                if (v4_6.startsWith("episodeUrl:")) {
+                    v3_0 = v4_6.substring(11);
+                }
+            }
+            if (v3_0 != null) {
+                de.danoeh.antennapod.model.download.DownloadStatus v2_5;
+                int v5_0 = 0;
+                if (v1_3.getState() != androidx.work.WorkInfo$State.RUNNING) {
+                    if ((v1_3.getState() != androidx.work.WorkInfo$State.ENQUEUED) && (v1_3.getState() != androidx.work.WorkInfo$State.BLOCKED)) {
+                        v2_5 = 1;
+                    } else {
+                        v2_5 = 0;
+                    }
+                } else {
+                    v2_5 = 2;
+                }
+                int v1_6 = v1_3.getProgress().getInt("progress", -1);
+                if ((v1_6 != -1) || (v2_5 == 1)) {
+                    v5_0 = v2_5;
+                } else {
+                    v1_6 = 0;
+                }
+                if ((!v0_1.containsKey(v3_0)) || (v5_0 != 1)) {
+                    v0_1.put(v3_0, new de.danoeh.antennapod.model.download.DownloadStatus(v5_0, v1_6));
+                } else {
+                }
+            }
+        }
+        de.danoeh.antennapod.net.download.serviceinterface.DownloadServiceInterface.get().setCurrentDownloads(v0_1);
+        org.greenrobot.eventbus.EventBus.getDefault().postSticky(new de.danoeh.antennapod.event.EpisodeDownloadEvent(v0_1));
+        return;
+    }
+
+    public static synthetic void $r8$lambda$rggmnYbxiTKdrihbfKELzbMzlxU(de.danoeh.antennapod.activity.MainActivity p0)
+    {
+        p0.updateMainBackCallbackEnabledState();
+        return;
+    }
+
+    public static synthetic void $r8$lambda$y2cZrOLweLQArL-SAvk_nR0iMrI(de.danoeh.antennapod.activity.MainActivity p0, android.view.View p1)
+    {
+        p0.lambda$setupToolbarToggle$3(p1);
+        return;
+    }
+
+    public static bridge synthetic de.danoeh.antennapod.ui.screen.drawer.BottomNavigation -$$Nest$fgetbottomNavigation(de.danoeh.antennapod.activity.MainActivity p0)
+    {
+        return p0.bottomNavigation;
+    }
+
+    public static bridge synthetic de.danoeh.antennapod.ui.view.BottomSheetBackPressedCallback -$$Nest$fgetbottomSheetBackPressedCallback(de.danoeh.antennapod.activity.MainActivity p0)
+    {
+        return p0.bottomSheetBackPressedCallback;
+    }
+
+    public static bridge synthetic androidx.drawerlayout.widget.DrawerLayout -$$Nest$fgetdrawerLayout(de.danoeh.antennapod.activity.MainActivity p0)
+    {
+        return p0.drawerLayout;
+    }
+
+    public static bridge synthetic android.view.View -$$Nest$fgetnavDrawer(de.danoeh.antennapod.activity.MainActivity p0)
+    {
+        return p0.navDrawer;
+    }
+
+    public static bridge synthetic de.danoeh.antennapod.ui.view.LockableBottomSheetBehavior -$$Nest$fgetsheetBehavior(de.danoeh.antennapod.activity.MainActivity p0)
+    {
+        return p0.sheetBehavior;
+    }
+
+    public static bridge synthetic void -$$Nest$mupdateMainBackCallbackEnabledState(de.danoeh.antennapod.activity.MainActivity p0)
+    {
+        p0.updateMainBackCallbackEnabledState();
+        return;
+    }
+
+    public MainActivity()
+    {
+        this.recycledViewPool = new androidx.recyclerview.widget.RecyclerView$RecycledViewPool();
+        this.lastTheme = 0;
+        this.systemBarInsets = androidx.core.graphics.Insets.NONE;
+        this.bottomSheetCallback = new de.danoeh.antennapod.activity.MainActivity$AntennaPodBottomSheetCallback(this, 0);
+        return;
+    }
+
+    public void loadFragment(String p2, android.os.Bundle p3)
+    {
+        de.danoeh.antennapod.ui.screen.drawer.NavDrawerFragment.saveLastNavFragment(this, p2);
+        de.danoeh.antennapod.ui.screen.drawer.BottomNavigation v0 = this.bottomNavigation;
+        if (v0 != null) {
+            v0.updateSelectedItem(p2);
+        }
+        this.loadFragment(this.createFragmentInstance(p2, p3));
+        return;
+    }
+
+    public void loadChildFragment(androidx.fragment.app.Fragment p2)
+    {
+        this.loadChildFragment(p2, de.danoeh.antennapod.ui.TransitionEffect.NONE);
+        return;
+    }
+
+    public void loadFeedFragmentById(long p2, android.os.Bundle p4)
+    {
+        de.danoeh.antennapod.ui.screen.feed.FeedItemlistFragment v0 = de.danoeh.antennapod.ui.screen.feed.FeedItemlistFragment.newInstance(p2);
+        if (p4 != null) {
+            v0.setArguments(p4);
+        }
+        de.danoeh.antennapod.ui.screen.drawer.NavDrawerFragment.saveLastNavFragment(this, String.valueOf(p2));
+        this.loadFragment(v0);
+        return;
+    }
+
+    public androidx.fragment.app.Fragment createFragmentInstance(String p3, android.os.Bundle p4)
+    {
+        String v0_1 = new StringBuilder();
+        v0_1.append("loadFragment(tag: ");
+        v0_1.append(p3);
+        v0_1.append(", args: ");
+        v0_1.append(p4);
+        v0_1.append(")");
+        android.util.Log.d("MainActivity", v0_1.toString());
+        p3.getClass();
+        int v1_1 = -1;
+        switch (p3.hashCode()) {
+            case -2085101389:
+                if (p3.equals("StatisticsFragment")) {
+                    v1_1 = 0;
+                } else {
+                }
+                break;
+            case -1578080595:
+                if (p3.equals("SubscriptionFragment")) {
+                    v1_1 = 1;
+                } else {
+                }
+                break;
+            case -1205705240:
+                if (p3.equals("NewEpisodesFragment")) {
+                    v1_1 = 2;
+                } else {
+                }
+                break;
+            case -608216064:
+                if (p3.equals("DiscoveryFragment")) {
+                    v1_1 = 3;
+                } else {
+                }
+                break;
+            case -589152145:
+                if (p3.equals("HomeFragment")) {
+                    v1_1 = 4;
+                } else {
+                }
+                break;
+            case -58242769:
+                if (p3.equals("AddFeedFragment")) {
+                    v1_1 = 5;
+                } else {
+                }
+                break;
+            case 28587112:
+                if (p3.equals("EpisodesFragment")) {
+                    v1_1 = 6;
+                } else {
+                }
+                break;
+            case 378123323:
+                if (p3.equals("DownloadsFragment")) {
+                    v1_1 = 7;
+                } else {
+                }
+                break;
+            case 1410378151:
+                if (p3.equals("FavoritesFragment")) {
+                    v1_1 = 8;
+                } else {
+                }
+                break;
+            case 2051192649:
+                if (p3.equals("PlaybackHistoryFragment")) {
+                    v1_1 = 9;
+                } else {
+                }
+                break;
+            case 2146299489:
+                if (p3.equals("QueueFragment")) {
+                    v1_1 = 10;
+                } else {
+                }
+                break;
+            default:
+        }
+        de.danoeh.antennapod.ui.screen.queue.QueueFragment v3_13;
+        switch (v1_1) {
+            case 0:
+                v3_13 = new de.danoeh.antennapod.ui.statistics.StatisticsFragment();
+                break;
+            case 1:
+                v3_13 = new de.danoeh.antennapod.ui.screen.subscriptions.SubscriptionFragment();
+                break;
+            case 2:
+                v3_13 = new de.danoeh.antennapod.ui.screen.InboxFragment();
+                break;
+            case 3:
+                v3_13 = new de.danoeh.antennapod.ui.discovery.DiscoveryFragment();
+                break;
+            case 4:
+                v3_13 = new de.danoeh.antennapod.ui.screen.home.HomeFragment();
+                break;
+            case 5:
+                v3_13 = new de.danoeh.antennapod.ui.screen.AddFeedFragment();
+                break;
+            case 6:
+                v3_13 = new de.danoeh.antennapod.ui.screen.AllEpisodesFragment();
+                break;
+            case 7:
+                v3_13 = new de.danoeh.antennapod.ui.screen.download.CompletedDownloadsFragment();
+                break;
+            case 8:
+                v3_13 = new de.danoeh.antennapod.ui.screen.FavoritesFragment();
+                break;
+            case 9:
+                v3_13 = new de.danoeh.antennapod.ui.screen.PlaybackHistoryFragment();
+                break;
+            case 10:
+                v3_13 = new de.danoeh.antennapod.ui.screen.queue.QueueFragment();
+                break;
+            default:
+                v3_13 = new de.danoeh.antennapod.ui.screen.home.HomeFragment();
+                p4 = 0;
+        }
+        if (p4 != 0) {
+            v3_13.setArguments(p4);
+        }
+        return v3_13;
+    }
+
+    public void loadChildFragment(androidx.fragment.app.Fragment p4, de.danoeh.antennapod.ui.TransitionEffect p5, String p6)
+    {
+        java.util.Objects.requireNonNull(p4);
+        if (p6 != 0) {
+            int v0_3 = this.bottomNavigation;
+            if (v0_3 != 0) {
+                v0_3.updateSelectedItem(p6);
+            }
+        }
+        int v6_3 = this.getSupportFragmentManager().beginTransaction();
+        if (p5 != de.danoeh.antennapod.ui.TransitionEffect.FADE) {
+            if (p5 == de.danoeh.antennapod.ui.TransitionEffect.SLIDE) {
+                v6_3.setCustomAnimations(de.danoeh.antennapod.R$anim.slide_right_in, de.danoeh.antennapod.R$anim.slide_left_out, de.danoeh.antennapod.R$anim.slide_left_in, de.danoeh.antennapod.R$anim.slide_right_out);
+            }
+        } else {
+            v6_3.setCustomAnimations(de.danoeh.antennapod.R$anim.fade_in, de.danoeh.antennapod.R$anim.fade_out);
+        }
+        v6_3.hide(this.getSupportFragmentManager().findFragmentByTag("main")).add(de.danoeh.antennapod.R$id.main_content_view, p4, "main").addToBackStack(0).commit();
+        this.updateMainBackCallbackEnabledState();
+        return;
+    }
+
+    public void setPlayerVisible(boolean p7)
+    {
+        int v2_0;
+        this.getBottomSheet().setLocked((p7 ^ 1));
+        int v0_10 = this.findViewById(de.danoeh.antennapod.R$id.audioplayerFragment);
+        if (p7 == null) {
+            v2_0 = 8;
+        } else {
+            v2_0 = 0;
+        }
+        v0_10.setVisibility(v2_0);
+        if (p7 == null) {
+            this.getBottomSheet().setState(4);
+        } else {
+            this.bottomSheetCallback.onStateChanged(0, this.getBottomSheet().getState());
+        }
+        android.widget.RelativeLayout v7_1;
+        int v0_4 = this.findViewById(de.danoeh.antennapod.R$id.bottom_padding);
+        int v2_5 = ((android.view.ViewGroup$MarginLayoutParams) v0_4.getLayoutParams());
+        v2_5.height = this.systemBarInsets.bottom;
+        v0_4.setLayoutParams(v2_5);
+        int v0_7 = ((int) this.getResources().getDimension(de.danoeh.antennapod.R$dimen.external_player_height));
+        int v2_9 = ((androidx.fragment.app.FragmentContainerView) this.findViewById(de.danoeh.antennapod.R$id.main_content_view));
+        int v3_4 = ((android.view.ViewGroup$MarginLayoutParams) v2_9.getLayoutParams());
+        int v4_0 = this.systemBarInsets;
+        if (p7 == null) {
+            v7_1 = 0;
+        } else {
+            v7_1 = v0_7;
+        }
+        v3_4.setMargins(v4_0.left, 0, v4_0.right, v7_1);
+        v2_9.setLayoutParams(v3_4);
+        this.sheetBehavior.setPeekHeight(v0_7);
+        this.sheetBehavior.setHideable(1);
+        this.sheetBehavior.setGestureInsetBottomIgnored(1);
+        android.widget.RelativeLayout v7_7 = ((androidx.fragment.app.FragmentContainerView) this.findViewById(de.danoeh.antennapod.R$id.playerFragment));
+        int v0_12 = ((android.view.ViewGroup$MarginLayoutParams) v7_7.getLayoutParams());
+        int v2_10 = this.systemBarInsets;
+        v0_12.setMargins(v2_10.left, 0, v2_10.right, 0);
+        v7_7.setLayoutParams(v0_12);
+        int v0_13 = this.systemBarInsets;
+        ((android.widget.RelativeLayout) this.findViewById(de.danoeh.antennapod.R$id.playerContent)).setPadding(v0_13.left, v0_13.top, v0_13.right, 0);
+        return;
+    }
+
+    public void loadChildFragment(androidx.fragment.app.Fragment p2, de.danoeh.antennapod.ui.TransitionEffect p3)
+    {
+        this.loadChildFragment(p2, p3, 0);
+        return;
+    }
+
+    public void loadFragment(androidx.fragment.app.Fragment p4)
+    {
+        android.view.View v0_0 = this.getSupportFragmentManager();
+        v0_0.popBackStackImmediate(0, 1);
+        android.view.View v0_2 = v0_0.beginTransaction();
+        v0_2.replace(de.danoeh.antennapod.R$id.main_content_view, p4, "main");
+        v0_2.commitNowAllowingStateLoss();
+        androidx.drawerlayout.widget.DrawerLayout v4_1 = this.drawerLayout;
+        if (v4_1 != null) {
+            v4_1.closeDrawer(this.navDrawer);
+        }
+        this.updateMainBackCallbackEnabledState();
+        return;
+    }
+
+    @Signature(value={"()", "Lde/danoeh/antennapod/ui/view/LockableBottomSheetBehavior<", "Landroidx/fragment/app/FragmentContainerView;", ">;"})
+    public de.danoeh.antennapod.ui.view.LockableBottomSheetBehavior getBottomSheet()
+    {
+        return this.sheetBehavior;
+    }
+
+    public androidx.recyclerview.widget.RecyclerView$RecycledViewPool getRecycledViewPool()
+    {
+        return this.recycledViewPool;
+    }
+
+    public boolean isDrawerOpen()
+    {
+        int v0_0 = this.drawerLayout;
+        if (v0_0 != 0) {
+            android.view.View v1 = this.navDrawer;
+            if ((v1 != null) && (v0_0.isDrawerOpen(v1))) {
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    public void onActivityResult(int p1, int p2, android.content.Intent p3)
+    {
+        super.onActivityResult(p1, p2, p3);
+        this.lastTheme = de.danoeh.antennapod.ui.common.ThemeSwitcher.getNoTitleTheme(this);
+        return;
+    }
+
+    public void onAttachedToWindow()
+    {
+        super.onAttachedToWindow();
+        this.updateInsets();
+        return;
+    }
+
+    public void onConfigurationChanged(android.content.res.Configuration p2)
+    {
+        super.onConfigurationChanged(p2);
+        int v0_0 = this.drawerToggle;
+        if (v0_0 != 0) {
+            v0_0.onConfigurationChanged(p2);
+        }
+        this.setNavDrawerSize();
+        if (de.danoeh.antennapod.ui.common.ThemeSwitcher.getNoTitleTheme(this) != this.lastTheme) {
+            this.restartActivity();
+        }
+        return;
+    }
+
+    public void onCreate(android.os.Bundle p6)
+    {
+        de.danoeh.antennapod.activity.MainActivity$$ExternalSyntheticLambda7 v0_0 = de.danoeh.antennapod.ui.common.ThemeSwitcher.getNoTitleTheme(this);
+        this.lastTheme = v0_0;
+        this.setTheme(v0_0);
+        if (p6 != null) {
+            this.ensureGeneratedViewIdGreaterThan(p6.getInt("generated_view_id", 0));
+        }
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(this.getWindow(), 0);
+        super.onCreate(p6);
+        this.setContentView(de.danoeh.antennapod.R$layout.main);
+        this.recycledViewPool.setMaxRecycledViews(de.danoeh.antennapod.R$id.view_type_episode_item, 25);
+        this.checkFirstLaunch();
+        this.drawerLayout = ((androidx.drawerlayout.widget.DrawerLayout) this.findViewById(de.danoeh.antennapod.R$id.drawer_layout));
+        this.navDrawer = this.findViewById(de.danoeh.antennapod.R$id.navDrawerFragment);
+        this.bottomNavigation = new de.danoeh.antennapod.activity.MainActivity$1(this, ((com.google.android.material.bottomnavigation.BottomNavigationView) this.findViewById(de.danoeh.antennapod.R$id.bottomNavigationView)));
+        if (!de.danoeh.antennapod.storage.preferences.UserPreferences.isBottomNavigationEnabled()) {
+            this.bottomNavigation.hide();
+            this.bottomNavigation = 0;
+            this.setNavDrawerSize();
+        } else {
+            this.bottomNavigation.buildMenu();
+            androidx.lifecycle.LiveData v6_23 = this.drawerLayout;
+            if (v6_23 != null) {
+                v6_23.setDrawerLockMode(1);
+            } else {
+                this.navDrawer.setVisibility(8);
+            }
+            this.drawerLayout = 0;
+            this.bottomNavigation.onCreateView();
+        }
+        this.openDefaultPageBackPressedCallback = new de.danoeh.antennapod.activity.MainActivity$OpenDefaultPageBackPressedCallback(this);
+        androidx.lifecycle.LiveData v6_28 = this.drawerLayout;
+        if (v6_28 != null) {
+            v6_28.addDrawerListener(new de.danoeh.antennapod.activity.MainActivity$2(this));
+        }
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(this.findViewById(de.danoeh.antennapod.R$id.main_view), new de.danoeh.antennapod.activity.MainActivity$$ExternalSyntheticLambda4(this));
+        androidx.lifecycle.LiveData v6_31 = this.getSupportFragmentManager();
+        v6_31.addOnBackStackChangedListener(new de.danoeh.antennapod.activity.MainActivity$$ExternalSyntheticLambda5(this));
+        if (v6_31.findFragmentByTag("main") == null) {
+            if ("remember".equals(de.danoeh.antennapod.storage.preferences.UserPreferences.getDefaultPage())) {
+                String v2_19 = de.danoeh.antennapod.ui.screen.drawer.NavDrawerFragment.getLastNavFragment(this);
+                if (!org.apache.commons.lang3.ArrayUtils.contains(this.getResources().getStringArray(de.danoeh.antennapod.R$array.nav_drawer_section_tags), v2_19)) {
+                    try {
+                        this.loadFeedFragmentById(((long) Integer.parseInt(v2_19)), 0);
+                    } catch (NumberFormatException) {
+                        this.loadFragment("HomeFragment", 0);
+                    }
+                } else {
+                    this.loadFragment(v2_19, 0);
+                }
+            } else {
+                this.loadFragment(de.danoeh.antennapod.storage.preferences.UserPreferences.getDefaultPage(), 0);
+            }
+        }
+        androidx.lifecycle.LiveData v6_1 = v6_31.beginTransaction();
+        v6_1.replace(de.danoeh.antennapod.R$id.navDrawerFragment, new de.danoeh.antennapod.ui.screen.drawer.NavDrawerFragment(), "NavDrawerFragment");
+        v6_1.replace(de.danoeh.antennapod.R$id.audioplayerFragment, new de.danoeh.antennapod.ui.screen.playback.audio.AudioPlayerFragment(), "AudioPlayerFragment");
+        v6_1.commit();
+        androidx.lifecycle.LiveData v6_4 = ((androidx.fragment.app.FragmentContainerView) this.findViewById(de.danoeh.antennapod.R$id.audioplayerFragment));
+        de.danoeh.antennapod.ui.view.BottomSheetBackPressedCallback v1_6 = ((de.danoeh.antennapod.ui.view.LockableBottomSheetBehavior) com.google.android.material.bottomsheet.BottomSheetBehavior.from(v6_4));
+        this.sheetBehavior = v1_6;
+        v1_6.setHideable(0);
+        this.sheetBehavior.addBottomSheetCallback(this.bottomSheetCallback);
+        this.bottomSheetBackPressedCallback = new de.danoeh.antennapod.ui.view.BottomSheetBackPressedCallback(0, this.sheetBehavior, v6_4);
+        de.danoeh.antennapod.net.download.serviceinterface.FeedUpdateManager.getInstance().restartUpdateAlarm(this, 0);
+        de.danoeh.antennapod.net.sync.serviceinterface.SynchronizationQueue.getInstance().syncIfNotSyncedRecently();
+        de.danoeh.antennapod.storage.importexport.AutomaticDatabaseExportWorker.enqueueIfNeeded(this, 0);
+        de.danoeh.antennapod.storage.databasemaintenanceservice.DatabaseMaintenanceWorker.enqueueIfNeeded(this);
+        androidx.work.WorkManager.getInstance(this).getWorkInfosByTagLiveData("feedUpdate").observe(this, new de.danoeh.antennapod.activity.MainActivity$$ExternalSyntheticLambda6());
+        androidx.work.WorkManager.getInstance(this).getWorkInfosByTagLiveData("episodeDownload").observe(this, new de.danoeh.antennapod.activity.MainActivity$$ExternalSyntheticLambda7());
+        return;
+    }
+
+    public void onDestroy()
+    {
+        super.onDestroy();
+        de.danoeh.antennapod.ui.screen.drawer.BottomNavigation v0_0 = this.drawerLayout;
+        if (v0_0 != null) {
+            androidx.appcompat.app.ActionBarDrawerToggle v1 = this.drawerToggle;
+            if (v1 != null) {
+                v0_0.removeDrawerListener(v1);
+            }
+        }
+        de.danoeh.antennapod.ui.screen.drawer.BottomNavigation v0_1 = this.bottomNavigation;
+        if (v0_1 != null) {
+            v0_1.onDestroyView();
+        }
+        return;
+    }
+
+    @Subscribe(threadMode=['Lorg/greenrobot/eventbus/ThreadMode;', 'Lorg/greenrobot/eventbus/ThreadMode;', 'MAIN'])
+    public void onEventMainThread(de.danoeh.antennapod.event.MessageEvent p4)
+    {
+        com.google.android.material.snackbar.Snackbar v0_6;
+        com.google.android.material.snackbar.Snackbar v0_1 = new StringBuilder();
+        v0_1.append("onEvent(");
+        v0_1.append(p4);
+        v0_1.append(")");
+        android.util.Log.d("MainActivity", v0_1.toString());
+        if (this.getBottomSheet().getState() != 3) {
+            v0_6 = com.google.android.material.snackbar.Snackbar.make(this.findViewById(de.danoeh.antennapod.R$id.main_content_view), p4.message, 0);
+            if (this.findViewById(de.danoeh.antennapod.R$id.audioplayerFragment).getVisibility() == 0) {
+                v0_6.setAnchorView(this.findViewById(de.danoeh.antennapod.R$id.audioplayerFragment));
+            }
+        } else {
+            v0_6 = com.google.android.material.snackbar.Snackbar.make(this.findViewById(16908290), p4.message, 0);
+            if (this.findViewById(de.danoeh.antennapod.R$id.bottomNavigationView).getVisibility() == 0) {
+                v0_6.setAnchorView(this.findViewById(de.danoeh.antennapod.R$id.bottomNavigationView));
+            }
+        }
+        v0_6.show();
+        if (p4.action != null) {
+            v0_6.setAction(p4.actionText, new de.danoeh.antennapod.activity.MainActivity$$ExternalSyntheticLambda9(this, p4));
+        }
+        return;
+    }
+
+    public boolean onKeyUp(int p5, android.view.KeyEvent p6)
+    {
+        if (!(this.getCurrentFocus() instanceof android.widget.EditText)) {
+            int v0_3;
+            int v0_12 = ((android.media.AudioManager) this.getSystemService("audio"));
+            org.greenrobot.eventbus.EventBus.getDefault().post(p6);
+            if (p5 == 29) {
+                v0_3 = Integer.valueOf(89);
+            } else {
+                if (p5 != 32) {
+                    if (p5 == 41) {
+                        v0_12.adjustStreamVolume(3, 101, 1);
+                        return 1;
+                    } else {
+                        if (p5 == 44) {
+                            v0_3 = Integer.valueOf(85);
+                            if (v0_3 == 0) {
+                                return super.onKeyUp(p5, p6);
+                            } else {
+                                this.sendBroadcast(de.danoeh.antennapod.ui.appstartintent.MediaButtonStarter.createIntent(this, v0_3.intValue()));
+                                return 1;
+                            }
+                        } else {
+                            if (p5 != 47) {
+                                if (p5 != 51) {
+                                    if (p5 == 69) {
+                                        v0_12.adjustStreamVolume(3, -1, 1);
+                                        return 1;
+                                    } else {
+                                        if (p5 != 81) {
+                                            if (p5 == 38) {
+                                            } else {
+                                                if (p5 != 39) {
+                                                    if (p5 == 55) {
+                                                    } else {
+                                                        if (p5 != 56) {
+                                                            v0_3 = 0;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            v0_3 = Integer.valueOf(90);
+                                        }
+                                    }
+                                }
+                                v0_12.adjustStreamVolume(3, 1, 1);
+                                return 1;
+                            }
+                            v0_12.adjustStreamVolume(3, -1, 1);
+                            return 1;
+                        }
+                    }
+                }
+            }
+        } else {
+            return super.onKeyUp(p5, p6);
+        }
+    }
+
+    public void onLowMemory()
+    {
+        super.onLowMemory();
+        com.bumptech.glide.Glide.get(this).clearMemory();
+        return;
+    }
+
+    public void onNewIntent(android.content.Intent p1)
+    {
+        super.onNewIntent(p1);
+        this.setIntent(p1);
+        this.handleNavIntent();
+        return;
+    }
+
+    public boolean onOptionsItemSelected(android.view.MenuItem p4)
+    {
+        int v0_0 = this.drawerToggle;
+        if ((v0_0 == 0) || (!v0_0.onOptionsItemSelected(p4))) {
+            if (p4.getItemId() != 16908332) {
+                return super.onOptionsItemSelected(p4);
+            } else {
+                if (this.getSupportFragmentManager().getBackStackEntryCount() > 0) {
+                    this.getSupportFragmentManager().popBackStack();
+                }
+                return 1;
+            }
+        } else {
+            return 1;
+        }
+    }
+
+    public void onPostCreate(android.os.Bundle p1)
+    {
+        super.onPostCreate(p1);
+        androidx.appcompat.app.ActionBarDrawerToggle v1_1 = this.drawerToggle;
+        if (v1_1 != null) {
+            v1_1.syncState();
+        }
+        return;
+    }
+
+    public void onRestoreInstanceState(android.os.Bundle p3)
+    {
+        super.onRestoreInstanceState(p3);
+        if (this.getBottomSheet().getState() == 3) {
+            this.bottomSheetCallback.onSlide(0, 1065353216);
+        }
+        return;
+    }
+
+    public void onResume()
+    {
+        String v0_4;
+        super.onResume();
+        this.handleNavIntent();
+        if (this.bottomNavigation == null) {
+            v0_4 = 0;
+        } else {
+            v0_4 = 1;
+        }
+        if ((this.lastTheme != de.danoeh.antennapod.ui.common.ThemeSwitcher.getNoTitleTheme(this)) || (v0_4 != de.danoeh.antennapod.storage.preferences.UserPreferences.isBottomNavigationEnabled())) {
+            this.restartActivity();
+        }
+        if (de.danoeh.antennapod.storage.preferences.UserPreferences.getHiddenDrawerItems().contains(de.danoeh.antennapod.ui.screen.drawer.NavDrawerFragment.getLastNavFragment(this))) {
+            this.loadFragment(de.danoeh.antennapod.storage.preferences.UserPreferences.getDefaultPage(), 0);
+        }
+        return;
+    }
+
+    public void onSaveInstanceState(android.os.Bundle p3)
+    {
+        super.onSaveInstanceState(p3);
+        p3.putInt("generated_view_id", android.view.View.generateViewId());
+        return;
+    }
+
+    public void onStart()
+    {
+        super.onStart();
+        org.greenrobot.eventbus.EventBus.getDefault().register(this);
+        new de.danoeh.antennapod.ui.screen.rating.RatingDialogManager(this).showIfNeeded();
+        this.getOnBackPressedDispatcher().addCallback(this, this.openDefaultPageBackPressedCallback);
+        this.getOnBackPressedDispatcher().addCallback(this, this.bottomSheetBackPressedCallback);
+        return;
+    }
+
+    public void onStop()
+    {
+        super.onStop();
+        org.greenrobot.eventbus.EventBus.getDefault().unregister(this);
+        return;
+    }
+
+    @Subscribe(threadMode=['Lorg/greenrobot/eventbus/ThreadMode;', 'Lorg/greenrobot/eventbus/ThreadMode;', 'MAIN'])
+    public void onStreamingConfirmation(de.danoeh.antennapod.event.StreamingConfirmationEvent p3)
+    {
+        int v0_1;
+        com.google.android.material.dialog.MaterialAlertDialogBuilder v3_5 = new com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle(de.danoeh.antennapod.R$string.stream_label);
+        if ((!de.danoeh.antennapod.net.common.NetworkUtils.isNetworkRestricted()) || (!de.danoeh.antennapod.net.common.NetworkUtils.isVpnOverWifi())) {
+            v0_1 = this.getString(de.danoeh.antennapod.R$string.confirm_mobile_streaming_notification_message);
+        } else {
+            int v0_3 = new StringBuilder();
+            v0_3.append(this.getString(de.danoeh.antennapod.R$string.confirm_mobile_streaming_notification_message));
+            v0_3.append("\n\n");
+            v0_3.append(this.getString(de.danoeh.antennapod.R$string.confirm_mobile_download_dialog_message_vpn));
+            v0_1 = v0_3.toString();
+        }
+        v3_5.setMessage(v0_1).setPositiveButton(de.danoeh.antennapod.R$string.confirm_mobile_streaming_button_once, new de.danoeh.antennapod.activity.MainActivity$$ExternalSyntheticLambda0(this)).setNegativeButton(de.danoeh.antennapod.R$string.confirm_mobile_streaming_button_always, new de.danoeh.antennapod.activity.MainActivity$$ExternalSyntheticLambda1(this)).setNeutralButton(de.danoeh.antennapod.R$string.cancel_label, 0).show();
+        return;
+    }
+
+    public void onTrimMemory(int p2)
+    {
+        super.onTrimMemory(p2);
+        com.bumptech.glide.Glide.get(this).trimMemory(p2);
+        return;
+    }
+
+    public void setupToolbarToggle(com.google.android.material.appbar.MaterialToolbar p9, boolean p10)
+    {
+        androidx.drawerlayout.widget.DrawerLayout v0 = this.drawerLayout;
+        if (v0 == null) {
+            if (p10 != null) {
+                p9.setNavigationIcon(de.danoeh.antennapod.ui.common.ThemeUtils.getDrawableFromAttr(this, de.danoeh.antennapod.R$attr.homeAsUpIndicator));
+                p9.setNavigationOnClickListener(new de.danoeh.antennapod.activity.MainActivity$$ExternalSyntheticLambda3(this));
+                return;
+            } else {
+                p9.setNavigationIcon(0);
+                return;
+            }
+        } else {
+            androidx.appcompat.app.ActionBarDrawerToggle v1 = this.drawerToggle;
+            if (v1 != null) {
+                v0.removeDrawerListener(v1);
+            }
+            androidx.appcompat.app.ActionBarDrawerToggle v2_1 = new androidx.appcompat.app.ActionBarDrawerToggle(this, this.drawerLayout, p9, de.danoeh.antennapod.R$string.drawer_open, de.danoeh.antennapod.R$string.drawer_close);
+            this.drawerToggle = v2_1;
+            this.drawerLayout.addDrawerListener(v2_1);
+            this.drawerToggle.syncState();
+            this.drawerToggle.setDrawerIndicatorEnabled((p10 ^ 1));
+            this.drawerToggle.setToolbarNavigationClickListener(new de.danoeh.antennapod.activity.MainActivity$$ExternalSyntheticLambda2(this));
+            return;
+        }
+    }
+}
+

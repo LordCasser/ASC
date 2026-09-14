@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. Share one Engine across several threads issuing concurrent top-level operations; confirm serialized admission (no deadlock under load) and that each completed result equals the single-threaded result. 2. Repeat the same fixture with 1, 2 and 8 workers and require identical identities, facts and errors. 3. Interleave failures and cancellations, then verify the Engine remains usable for a follow-up successful operation. 4. Drop Artifacts and Engines in varied orders and confirm the pool is destroyed after the last handle and retained input permits are recycled (thread census after quiesce).",
+  "pass_criteria": "Concurrent admission never deadlocks and every result matches the sequential run; worker counts do not change identities or errors; post-failure/post-cancel Engine reuse works; pool lifetime follows the last handle with permits recycled."
+}

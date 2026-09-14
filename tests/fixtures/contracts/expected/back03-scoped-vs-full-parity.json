@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. Run every shared decompile fixture (starting with inputs/g02-static-initializers.apk) through full and scoped/parallel decompilation with 1, 2 and 8 workers. 2. Compare selected class facts, metadata, diagnostics and error completeness across the modes with tests/support compare(). 3. Extend the run with method/handle/call-site fixtures and an R8-produced input that exercises the dependency checks. 4. If any mode diverges, disable the optimization responsible and record it.",
+  "pass_criteria": "Identical facts, metadata and diagnostics across full/scoped/parallel runs for every shared fixture; any divergence is resolved by disabling the offending optimization rather than accepted."
+}

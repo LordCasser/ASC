@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. On the recorded toolchains run: cargo +1.93.1 fmt --check; cargo +1.93.1 clippy --locked --all-targets -- -D warnings; cargo +1.93.1 test --locked; cargo +1.93.1 doc --no-deps (broken intra-doc links denied), and repeat the build/test matrix on current stable. 2. Run the native smoke (open, classes, findrefs, getclass, manifest on a fixed APK) on Linux x86_64, macOS arm64 and Windows x86_64, recording the exact per-platform commands. 3. List every skipped item explicitly.",
+  "pass_criteria": "fmt/clippy/tests/doc are green on Rust 1.93 and stable; all three platforms complete the smoke; skips are enumerated and none is counted as passed."
+}

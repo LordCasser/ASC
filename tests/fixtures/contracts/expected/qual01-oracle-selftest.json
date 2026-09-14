@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. Run cargo +1.93.1 test --locked --test contract_harness: the comparator self-tests there assert that a removed real reference and an edited source text value are always flagged, and that a flipped input byte fails the sha256 check. 2. Run the bidirectional parity scripts under bench/ (row_oracle, corpus_parity) against candidate outputs with the comparator; every accepted difference must cite an exact case and output field. 3. Review the oracle annotations: no global ignores of whitespace, line order or all Python-only references may exist.",
+  "pass_criteria": "Comparator negative controls pass; parity runs are bidirectional with overload coverage; every allowed difference has a precise case/field justification; no global ignore lists."
+}

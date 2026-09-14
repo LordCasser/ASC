@@ -1,0 +1,302 @@
+package com.kunzisoft.keepass.activities.legacy;
+public abstract class DatabaseActivity extends com.kunzisoft.keepass.activities.stylish.StylishActivity implements com.kunzisoft.keepass.activities.legacy.DatabaseRetrieval {
+    public static final String CREDENTIAL_RESULT_LAUNCHER_KEY = "com.kunzisoft.keepass.CREDENTIAL_RESULT_LAUNCHER_KEY";
+    public static final com.kunzisoft.keepass.activities.legacy.DatabaseActivity$Companion Companion;
+    private boolean credentialResultLaunched;
+    private com.kunzisoft.keepass.activities.dialogs.DatabaseChangedDialogFragment databaseChangedDialogFragment;
+    private com.kunzisoft.keepass.activities.legacy.DatabaseActivity$CredentialActivityResultLauncher mCredentialActivityResultLauncher;
+    private final kotlin.Lazy mDatabaseViewModel$delegate;
+    private com.kunzisoft.keepass.tasks.ProgressTaskDialogFragment progressTaskDialogFragment;
+    private final kotlin.Lazy progressTaskViewModel$delegate;
+    private final androidx.activity.result.ActivityResultLauncher requestPermissionLauncher;
+    private final java.util.List tempServiceParameters;
+
+    private static final void requestPermissionLauncher$lambda$1(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p2, Boolean p3)
+    {
+        kotlin.jvm.internal.Intrinsics.checkNotNullParameter(p2, "this$0");
+        String v3_5 = ((kotlin.Pair) kotlin.collections.CollectionsKt.removeFirstOrNull(p2.tempServiceParameters));
+        if (v3_5 != null) {
+            com.kunzisoft.keepass.database.DatabaseTaskProvider.Companion.startDatabaseService(((android.content.Context) p2), ((android.os.Bundle) v3_5.getFirst()), ((String) v3_5.getSecond()));
+        }
+        return;
+    }
+
+    private static final void startDatabasePermissionService$lambda$4(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0, android.os.Bundle p1, String p2, android.content.DialogInterface p3, int p4)
+    {
+        kotlin.jvm.internal.Intrinsics.checkNotNullParameter(p0, "this$0");
+        kotlin.jvm.internal.Intrinsics.checkNotNullParameter(p2, "$actionTask");
+        p0.tempServiceParameters.add(new kotlin.Pair(p1, p2));
+        p0.requestPermissionLauncher.launch("android.permission.POST_NOTIFICATIONS");
+        return;
+    }
+
+    private static final void startDatabasePermissionService$lambda$3(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0, android.os.Bundle p1, String p2, android.content.DialogInterface p3, int p4)
+    {
+        kotlin.jvm.internal.Intrinsics.checkNotNullParameter(p0, "this$0");
+        kotlin.jvm.internal.Intrinsics.checkNotNullParameter(p2, "$actionTask");
+        com.kunzisoft.keepass.database.DatabaseTaskProvider.Companion.startDatabaseService(((android.content.Context) p0), p1, p2);
+        return;
+    }
+
+    private static final void mCredentialActivityResultLauncher$lambda$2(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p3, androidx.activity.result.ActivityResult p4)
+    {
+        kotlin.jvm.internal.Intrinsics.checkNotNullParameter(p3, "this$0");
+        com.kunzisoft.keepass.credentialprovider.EntrySelectionHelper.INSTANCE.setActivityResult(((android.app.Activity) p3), 0, p4.getResultCode(), p4.getData());
+        return;
+    }
+
+    private final com.kunzisoft.keepass.tasks.ProgressTaskViewModel getProgressTaskViewModel()
+    {
+        return ((com.kunzisoft.keepass.tasks.ProgressTaskViewModel) this.progressTaskViewModel$delegate.getValue());
+    }
+
+    private final void showDatabaseChangedDialog(com.kunzisoft.keepass.model.SnapFileDatabaseInfo p9, com.kunzisoft.keepass.model.SnapFileDatabaseInfo p10, boolean p11)
+    {
+        kotlinx.coroutines.BuildersKt.launch$default(((kotlinx.coroutines.CoroutineScope) androidx.lifecycle.LifecycleOwnerKt.getLifecycleScope(((androidx.lifecycle.LifecycleOwner) this))), 0, 0, ((kotlin.jvm.functions.Function2) new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$showDatabaseChangedDialog$1(this, p9, p10, p11, 0)), 3, 0);
+        return;
+    }
+
+    private final void showDatabaseInfoReloadedDialog(boolean p8)
+    {
+        kotlinx.coroutines.BuildersKt.launch$default(((kotlinx.coroutines.CoroutineScope) androidx.lifecycle.LifecycleOwnerKt.getLifecycleScope(((androidx.lifecycle.LifecycleOwner) this))), 0, 0, ((kotlin.jvm.functions.Function2) new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$showDatabaseInfoReloadedDialog$1(this, p8, 0)), 3, 0);
+        return;
+    }
+
+    private final void showPasswordEncodingDialog(android.net.Uri p2, com.kunzisoft.keepass.database.MainCredential p3)
+    {
+        com.kunzisoft.keepass.activities.dialogs.PasswordEncodingDialogFragment.Companion.getInstance(p2, p3).show(this.getSupportFragmentManager(), "passwordEncodingTag");
+        return;
+    }
+
+    private final void startDatabasePermissionService(android.os.Bundle p4, String p5)
+    {
+        if (android.os.Build$VERSION.SDK_INT < 33) {
+            com.kunzisoft.keepass.database.DatabaseTaskProvider.Companion.startDatabaseService(((android.content.Context) this), p4, p5);
+            return;
+        } else {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(((android.content.Context) this), "android.permission.POST_NOTIFICATIONS") != 0) {
+                if (!androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(((android.app.Activity) this), "android.permission.POST_NOTIFICATIONS")) {
+                    new androidx.appcompat.app.AlertDialog$Builder(((android.content.Context) this)).setMessage(2131821712).setNegativeButton(2131821162, new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$$ExternalSyntheticLambda2(this, p4, p5)).setPositiveButton(2131820600, new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$$ExternalSyntheticLambda3(this, p4, p5)).create().show();
+                    return;
+                } else {
+                    com.kunzisoft.keepass.database.DatabaseTaskProvider.Companion.startDatabaseService(((android.content.Context) this), p4, p5);
+                    return;
+                }
+            } else {
+                com.kunzisoft.keepass.database.DatabaseTaskProvider.Companion.startDatabaseService(((android.content.Context) this), p4, p5);
+                return;
+            }
+        }
+    }
+
+    private final void startDialog()
+    {
+        kotlinx.coroutines.BuildersKt.launch$default(((kotlinx.coroutines.CoroutineScope) androidx.lifecycle.LifecycleOwnerKt.getLifecycleScope(((androidx.lifecycle.LifecycleOwner) this))), 0, 0, ((kotlin.jvm.functions.Function2) new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$startDialog$1(this, 0)), 3, 0);
+        return;
+    }
+
+    private final void stopDialog()
+    {
+        int v0_0 = this.progressTaskDialogFragment;
+        if (v0_0 != 0) {
+            v0_0.dismissAllowingStateLoss();
+        }
+        this.progressTaskDialogFragment = 0;
+        return;
+    }
+
+    public static synthetic void $r8$lambda$-YvwD912A8R4HsV6ttTyP3GX2pE(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0, Boolean p1)
+    {
+        com.kunzisoft.keepass.activities.legacy.DatabaseActivity.requestPermissionLauncher$lambda$1(p0, p1);
+        return;
+    }
+
+    public static synthetic void $r8$lambda$JkSaqhcrfzgIvKxARTtUrp3LT1k(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0, android.os.Bundle p1, String p2, android.content.DialogInterface p3, int p4)
+    {
+        com.kunzisoft.keepass.activities.legacy.DatabaseActivity.startDatabasePermissionService$lambda$4(p0, p1, p2, p3, p4);
+        return;
+    }
+
+    public static synthetic void $r8$lambda$OlNFQu-2OhbaULp7ZK5OXE6f_qQ(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0, android.os.Bundle p1, String p2, android.content.DialogInterface p3, int p4)
+    {
+        com.kunzisoft.keepass.activities.legacy.DatabaseActivity.startDatabasePermissionService$lambda$3(p0, p1, p2, p3, p4);
+        return;
+    }
+
+    public static synthetic void $r8$lambda$hRUUSqwPsiwbLot2xWdk_f4UVrU(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0, androidx.activity.result.ActivityResult p1)
+    {
+        com.kunzisoft.keepass.activities.legacy.DatabaseActivity.mCredentialActivityResultLauncher$lambda$2(p0, p1);
+        return;
+    }
+
+    static DatabaseActivity()
+    {
+        com.kunzisoft.keepass.activities.legacy.DatabaseActivity.Companion = new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$Companion(0);
+        return;
+    }
+
+    public DatabaseActivity()
+    {
+        this.mDatabaseViewModel$delegate = ((kotlin.Lazy) new androidx.lifecycle.ViewModelLazy(kotlin.jvm.internal.Reflection.getOrCreateKotlinClass(com.kunzisoft.keepass.viewmodels.DatabaseViewModel), ((kotlin.jvm.functions.Function0) new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$special$$inlined$viewModels$default$2(((androidx.activity.ComponentActivity) this))), ((kotlin.jvm.functions.Function0) new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$special$$inlined$viewModels$default$1(((androidx.activity.ComponentActivity) this))), ((kotlin.jvm.functions.Function0) new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$special$$inlined$viewModels$default$3(0, ((androidx.activity.ComponentActivity) this)))));
+        this.progressTaskViewModel$delegate = ((kotlin.Lazy) new androidx.lifecycle.ViewModelLazy(kotlin.jvm.internal.Reflection.getOrCreateKotlinClass(com.kunzisoft.keepass.tasks.ProgressTaskViewModel), ((kotlin.jvm.functions.Function0) new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$special$$inlined$viewModels$default$5(((androidx.activity.ComponentActivity) this))), ((kotlin.jvm.functions.Function0) new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$special$$inlined$viewModels$default$4(((androidx.activity.ComponentActivity) this))), ((kotlin.jvm.functions.Function0) new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$special$$inlined$viewModels$default$6(0, ((androidx.activity.ComponentActivity) this)))));
+        this.tempServiceParameters = ((java.util.List) new java.util.ArrayList());
+        com.kunzisoft.keepass.activities.legacy.DatabaseActivity$CredentialActivityResultLauncher v0_8 = this.registerForActivityResult(((androidx.activity.result.contract.ActivityResultContract) new androidx.activity.result.contract.ActivityResultContracts$RequestPermission()), new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$$ExternalSyntheticLambda0(this));
+        kotlin.jvm.internal.Intrinsics.checkNotNullExpressionValue(v0_8, "registerForActivityResult(...)");
+        this.requestPermissionLauncher = v0_8;
+        androidx.activity.result.ActivityResultLauncher v2_8 = this.registerForActivityResult(((androidx.activity.result.contract.ActivityResultContract) new androidx.activity.result.contract.ActivityResultContracts$StartActivityForResult()), new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$$ExternalSyntheticLambda1(this));
+        kotlin.jvm.internal.Intrinsics.checkNotNullExpressionValue(v2_8, "registerForActivityResult(...)");
+        this.mCredentialActivityResultLauncher = new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$CredentialActivityResultLauncher(this, v2_8);
+        return;
+    }
+
+    public static final synthetic com.kunzisoft.keepass.activities.dialogs.DatabaseChangedDialogFragment access$getDatabaseChangedDialogFragment$p(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0)
+    {
+        return p0.databaseChangedDialogFragment;
+    }
+
+    public static final synthetic com.kunzisoft.keepass.tasks.ProgressTaskDialogFragment access$getProgressTaskDialogFragment$p(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0)
+    {
+        return p0.progressTaskDialogFragment;
+    }
+
+    public static final synthetic com.kunzisoft.keepass.tasks.ProgressTaskViewModel access$getProgressTaskViewModel(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0)
+    {
+        return p0.getProgressTaskViewModel();
+    }
+
+    public static final synthetic void access$setDatabaseChangedDialogFragment$p(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0, com.kunzisoft.keepass.activities.dialogs.DatabaseChangedDialogFragment p1)
+    {
+        p0.databaseChangedDialogFragment = p1;
+        return;
+    }
+
+    public static final synthetic void access$setProgressTaskDialogFragment$p(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0, com.kunzisoft.keepass.tasks.ProgressTaskDialogFragment p1)
+    {
+        p0.progressTaskDialogFragment = p1;
+        return;
+    }
+
+    public static final synthetic void access$showDatabaseChangedDialog(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0, com.kunzisoft.keepass.model.SnapFileDatabaseInfo p1, com.kunzisoft.keepass.model.SnapFileDatabaseInfo p2, boolean p3)
+    {
+        p0.showDatabaseChangedDialog(p1, p2, p3);
+        return;
+    }
+
+    public static final synthetic void access$showDatabaseInfoReloadedDialog(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0, boolean p1)
+    {
+        p0.showDatabaseInfoReloadedDialog(p1);
+        return;
+    }
+
+    public static final synthetic void access$showPasswordEncodingDialog(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0, android.net.Uri p1, com.kunzisoft.keepass.database.MainCredential p2)
+    {
+        p0.showPasswordEncodingDialog(p1, p2);
+        return;
+    }
+
+    public static final synthetic void access$startDatabasePermissionService(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0, android.os.Bundle p1, String p2)
+    {
+        p0.startDatabasePermissionService(p1, p2);
+        return;
+    }
+
+    public static final synthetic void access$startDialog(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0)
+    {
+        p0.startDialog();
+        return;
+    }
+
+    public static final synthetic void access$stopDialog(com.kunzisoft.keepass.activities.legacy.DatabaseActivity p0)
+    {
+        p0.stopDialog();
+        return;
+    }
+
+    protected final com.kunzisoft.keepass.viewmodels.DatabaseViewModel getMDatabaseViewModel()
+    {
+        return ((com.kunzisoft.keepass.viewmodels.DatabaseViewModel) this.mDatabaseViewModel$delegate.getValue());
+    }
+
+    public final boolean getCredentialResultLaunched()
+    {
+        return this.credentialResultLaunched;
+    }
+
+    protected final com.kunzisoft.keepass.activities.legacy.DatabaseActivity$CredentialActivityResultLauncher getMCredentialActivityResultLauncher()
+    {
+        return this.mCredentialActivityResultLauncher;
+    }
+
+    protected final com.kunzisoft.keepass.database.ContextualDatabase getMDatabase()
+    {
+        return this.getMDatabaseViewModel().getDatabase();
+    }
+
+    public boolean manageDatabaseInfo()
+    {
+        return 1;
+    }
+
+    protected void onCreate(android.os.Bundle p7)
+    {
+        super.onCreate(p7);
+        if ((p7) && (p7.containsKey("com.kunzisoft.keepass.CREDENTIAL_RESULT_LAUNCHER_KEY"))) {
+            this.credentialResultLaunched = p7.getBoolean("com.kunzisoft.keepass.CREDENTIAL_RESULT_LAUNCHER_KEY");
+        }
+        kotlinx.coroutines.BuildersKt.launch$default(((kotlinx.coroutines.CoroutineScope) androidx.lifecycle.LifecycleOwnerKt.getLifecycleScope(((androidx.lifecycle.LifecycleOwner) this))), 0, 0, ((kotlin.jvm.functions.Function2) new com.kunzisoft.keepass.activities.legacy.DatabaseActivity$onCreate$1(this, 0)), 3, 0);
+        return;
+    }
+
+    public void onDatabaseActionFinished(com.kunzisoft.keepass.database.ContextualDatabase p2, String p3, com.kunzisoft.keepass.tasks.ActionRunnable$Result p4)
+    {
+        kotlin.jvm.internal.Intrinsics.checkNotNullParameter(p2, "database");
+        kotlin.jvm.internal.Intrinsics.checkNotNullParameter(p3, "actionTask");
+        kotlin.jvm.internal.Intrinsics.checkNotNullParameter(p4, "result");
+        return;
+    }
+
+    public void onDatabaseRetrieved(com.kunzisoft.keepass.database.ContextualDatabase p2)
+    {
+        kotlin.jvm.internal.Intrinsics.checkNotNullParameter(p2, "database");
+        return;
+    }
+
+    protected void onResume()
+    {
+        super.onResume();
+        this.getMDatabaseViewModel().checkChanges();
+        return;
+    }
+
+    protected void onSaveInstanceState(android.os.Bundle p3)
+    {
+        kotlin.jvm.internal.Intrinsics.checkNotNullParameter(p3, "outState");
+        p3.putBoolean("com.kunzisoft.keepass.CREDENTIAL_RESULT_LAUNCHER_KEY", this.credentialResultLaunched);
+        super.onSaveInstanceState(p3);
+        return;
+    }
+
+    public void onUnknownDatabaseRetrieved(com.kunzisoft.keepass.database.ContextualDatabase p1)
+    {
+        return;
+    }
+
+    public final void setCredentialResultLaunched(boolean p1)
+    {
+        this.credentialResultLaunched = p1;
+        return;
+    }
+
+    protected final void setMCredentialActivityResultLauncher(com.kunzisoft.keepass.activities.legacy.DatabaseActivity$CredentialActivityResultLauncher p2)
+    {
+        kotlin.jvm.internal.Intrinsics.checkNotNullParameter(p2, "<set-?>");
+        this.mCredentialActivityResultLauncher = p2;
+        return;
+    }
+
+    protected boolean showDatabaseDialog()
+    {
+        return 1;
+    }
+}
+

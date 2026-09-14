@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. Recompute the pinned upstream archive hashes recorded in vendor/droidsaw-dex/UPSTREAM.md and vendor/*/PATCHES.md (shasum -a 256 <archive>) and confirm they match the recorded values. 2. Unpack each upstream archive to a temporary directory and diff it against the vendored tree (diff -ru), confirming every changed hunk is registered in the matching PATCHES.md with source and license attribution. 3. Run the patch regression tests named in each PATCHES.md via cargo +1.93.1 test --locked (root) and cargo +1.93.1 test --locked --manifest-path vendor/<crate>/Cargo.toml for each vendored crate.",
+  "pass_criteria": "Both upstream archives match their recorded SHA-256; the source diff contains no hunk that PATCHES.md does not register; all patch regression tests pass on the recorded toolchain."
+}

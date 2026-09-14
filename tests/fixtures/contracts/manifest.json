@@ -1,0 +1,1587 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "g01-regex-string",
+      "matrix_ids": [
+        "REF-01"
+      ],
+      "audit_refs": [
+        "G01",
+        "D01",
+        "D02"
+      ],
+      "owner_package": "A03",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": "support::dex::make_regex_string_dex v1 + support::apk::apk_with_single_dex v1",
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": {
+        "path": "inputs/g01-regex-string.apk",
+        "sha256": "eecc512fc6c5a2d2e2ada0361752eae11351f153c176fd6b7f479a26656121d9",
+        "size": 544
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/g01-regex-string.json",
+        "facts_kind": "references"
+      },
+      "status": "active",
+      "notes": "G01 fixture for string queries: one method references \"token\" (code unit 0) and \"tokens\" (code unit 2). Regex uses unanchored search semantics (fancy-regex is_match), so tok.n and tok(en|x) both hit the two strings - \"tokens\" contains the token substring. The single-hit anchor case is the ^token$ query. Literal queries compare UTF-16 substrings, so literal \"tok.n\" hits nothing. code_unit_offsets count 16-bit code units from the start of the method's insns array (instruction start)."
+    },
+    {
+      "case_id": "g01-regex-string-dex",
+      "matrix_ids": [
+        "REF-01"
+      ],
+      "audit_refs": [
+        "G01"
+      ],
+      "owner_package": "A03",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": "support::dex::make_regex_string_dex v1",
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": {
+        "path": "inputs/g01-regex-string.dex",
+        "sha256": "78dffd1a6012c0eb9ada6492b52e500dd7b08a8db3f96c1805b29b28b618ddb7",
+        "size": 424
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/g01-regex-string-classes.json",
+        "facts_kind": "classes"
+      },
+      "status": "active",
+      "notes": "Raw-DEX twin of g01-regex-string: same builder output committed unpacked so the raw DEX open path (entry name <memory.dex>) is exercised against the classes facts."
+    },
+    {
+      "case_id": "g02-static-initializers",
+      "matrix_ids": [
+        "DECL-01"
+      ],
+      "audit_refs": [
+        "G02"
+      ],
+      "owner_package": "A05",
+      "source": {
+        "origin": "python-main",
+        "license": "Apache-2.0 (asc-ref baseline)",
+        "generator": "support::dex::make_static_field_dex v1 + support::apk::apk_with_single_dex v1",
+        "seed": 0,
+        "url": "/Users/lordcasser/workspace/asc-ref/python-main/tests/dex_fixture.py",
+        "version": "python dex_fixture.py sha256 e8782884cb8ab7a3d15ba70374fb7e69e993fa2f924ad08d343efc9578c3908c; dex bytes sha256 5686e4a48559d4a641cb56c6b40c6e22a432bedde96651e7786a57782cef20fe"
+      },
+      "input": {
+        "path": "inputs/g02-static-initializers.apk",
+        "sha256": "db364618aa7609b5d539aa82e8b2b137607ef903dd9856471c093b568a210645",
+        "size": 592
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/g02-static-initializers.json",
+        "facts_kind": "source"
+      },
+      "status": "active",
+      "notes": "G02 fixture: static int FIRST=11/SECOND=22 from an encoded array, getSecond() sget-reads SECOND. Byte-exact port of the Python make_static_field_dex (sha256 equality asserted in tests/contract_harness.rs). The same bytes are shared by A04/A05 vendor regression tests and the A03/A09 flows - fixture updates keep this single owner (A00/owner)."
+    },
+    {
+      "case_id": "g02-static-initializers-dex",
+      "matrix_ids": [
+        "DECL-01"
+      ],
+      "audit_refs": [
+        "G02"
+      ],
+      "owner_package": "A05",
+      "source": {
+        "origin": "python-main",
+        "license": "Apache-2.0 (asc-ref baseline)",
+        "generator": "support::dex::make_static_field_dex v1",
+        "seed": 0,
+        "url": "/Users/lordcasser/workspace/asc-ref/python-main/tests/dex_fixture.py",
+        "version": "python dex_fixture.py sha256 e8782884cb8ab7a3d15ba70374fb7e69e993fa2f924ad08d343efc9578c3908c"
+      },
+      "input": {
+        "path": "inputs/g02-static-initializers.dex",
+        "sha256": "5686e4a48559d4a641cb56c6b40c6e22a432bedde96651e7786a57782cef20fe",
+        "size": 472
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/g02-static-initializers-classes.json",
+        "facts_kind": "classes"
+      },
+      "status": "active",
+      "notes": "The unpacked G02 DEX, byte-identical to the Python baseline output (the harness pins the sha256). Vendor-side regression tests in A04/A05 read this file directly instead of rebuilding fixtures, so they carry no sibling-checkout dependency."
+    },
+    {
+      "case_id": "g03-zero-checksum",
+      "matrix_ids": [
+        "IN-04"
+      ],
+      "audit_refs": [
+        "G03"
+      ],
+      "owner_package": "A07",
+      "source": {
+        "origin": "python-main",
+        "license": "Apache-2.0 (asc-ref baseline)",
+        "generator": "support::dex::make_dex v1 + support::dex::zero_checksum_header v1 + support::apk::apk_with_single_dex v1",
+        "seed": 0,
+        "url": "/Users/lordcasser/workspace/asc-ref/python-main/tests/dex_fixture.py",
+        "version": "python dex_fixture.py sha256 e8782884cb8ab7a3d15ba70374fb7e69e993fa2f924ad08d343efc9578c3908c"
+      },
+      "input": {
+        "path": "inputs/g03-zero-checksum.apk",
+        "sha256": "d60ec6e844f4ef41e735e22ae586f5cc42fe0a67f2ba75c4b7f7f66e85646f82",
+        "size": 552
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/g03-zero-checksum.json",
+        "facts_kind": "source"
+      },
+      "status": "active",
+      "notes": "G03 fixture: the Python make_dex bytes with header checksum (offset 8..12) and SHA-1 signature (12..32) zeroed, wrapped in a stored APK. Structural safety must still let getclass succeed, with warning diagnostics. The diagnostic codes DexChecksumMismatch/DexSignatureMismatch are the A00-a proposal and are provisional until A02/A07 freeze the Diagnostic code list; a rename updates this file and the facts in the same change."
+    },
+    {
+      "case_id": "g03-zero-checksum-catalog",
+      "matrix_ids": [
+        "IN-04"
+      ],
+      "audit_refs": [
+        "G03"
+      ],
+      "owner_package": "A07",
+      "source": {
+        "origin": "python-main",
+        "license": "Apache-2.0 (asc-ref baseline)",
+        "generator": "support::dex::make_dex v1 + support::dex::zero_checksum_header v1 + support::apk::apk_with_single_dex v1",
+        "seed": 0,
+        "url": "/Users/lordcasser/workspace/asc-ref/python-main/tests/dex_fixture.py",
+        "version": "python dex_fixture.py sha256 e8782884cb8ab7a3d15ba70374fb7e69e993fa2f924ad08d343efc9578c3908c"
+      },
+      "input": {
+        "path": "inputs/g03-zero-checksum.apk",
+        "sha256": "d60ec6e844f4ef41e735e22ae586f5cc42fe0a67f2ba75c4b7f7f66e85646f82",
+        "size": 552
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/g03-zero-checksum-catalog.json",
+        "facts_kind": "dex-catalog"
+      },
+      "status": "active",
+      "notes": "dexes catalog facts for the G03 APK: the entry must still be selected and enumerated with warning diagnostics, sharing the g03-zero-checksum input bytes."
+    },
+    {
+      "case_id": "cli01-command-surface",
+      "matrix_ids": [
+        "CLI-01"
+      ],
+      "audit_refs": [
+        "C01",
+        "C02",
+        "D05"
+      ],
+      "owner_package": "A08",
+      "source": {
+        "origin": "process",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "process"
+      },
+      "status": "planned",
+      "notes": "Seven invocation paths (getclass, four findrefs kinds, classes, manifest) plus help/version/noargs, --threads alias with 1/2/8/zero/negative, all shared options, and illegal query combinations rejected before any analysis (exit 2). Owner A08 builds the byte fixtures (reusing the G01/G02 APKs) and converts this to active cases."
+    },
+    {
+      "case_id": "cli02-output-formats-byte-stable",
+      "matrix_ids": [
+        "CLI-02"
+      ],
+      "audit_refs": [
+        "D04"
+      ],
+      "owner_package": "A08",
+      "source": {
+        "origin": "process",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "process"
+      },
+      "status": "planned",
+      "notes": "Per command: text and JSON forms, -o output identical to stdout, --debug leaving success bytes unchanged, empty text versus JSON envelope for empty results, and full metadata/Unicode/identity round-tripping."
+    },
+    {
+      "case_id": "cli03-atomic-output-replacement",
+      "matrix_ids": [
+        "CLI-03"
+      ],
+      "audit_refs": [],
+      "owner_package": "A08",
+      "source": {
+        "origin": "process",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "process"
+      },
+      "status": "planned",
+      "notes": "Output commit semantics: replacement of an existing regular file, refusal for directories/symlinks/the input file itself and identifiable hardlinks, temp-file + atomic rename ordering, cancellation before the commit point, Unix SIGPIPE and Windows BrokenPipe, and no partial payload on any error path."
+    },
+    {
+      "case_id": "ref02-mutf8-surrogate-strings",
+      "matrix_ids": [
+        "REF-02"
+      ],
+      "audit_refs": [
+        "V03"
+      ],
+      "owner_package": "A03",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "references"
+      },
+      "status": "planned",
+      "notes": "String pool with BMP, non-BMP, NUL-containing and unpaired-surrogate values across string/type/member/class queries; non-MUTF-8 tails, non-contiguous pools and repeated string offsets; MUTF-8 length/terminator edge cases. A03 extends the DEX builder for multi-byte MUTF-8 pools."
+    },
+    {
+      "case_id": "ref03-opcode-family-matrix",
+      "matrix_ids": [
+        "REF-03"
+      ],
+      "audit_refs": [
+        "C07",
+        "C08"
+      ],
+      "owner_package": "A03",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "references"
+      },
+      "status": "planned",
+      "notes": "Every reference opcode family (string/type/field/method incl. jumbo 0x1b and fa/fb), call-site/handle/proto items not misclassified, immediate/payload pseudo-opcode traps avoided, and map-fallback hits preserved."
+    },
+    {
+      "case_id": "ref03-unknown-instruction-fails",
+      "matrix_ids": [
+        "REF-03"
+      ],
+      "audit_refs": [
+        "C08"
+      ],
+      "owner_package": "A03",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:MalformedInput",
+        "facts_path": null,
+        "facts_kind": "references"
+      },
+      "status": "planned",
+      "notes": "Unknown or truncated instruction inside a scanned code_item fails the operation instead of silently skipping hits."
+    },
+    {
+      "case_id": "ref04-shared-code-item-and-overloads",
+      "matrix_ids": [
+        "REF-04"
+      ],
+      "audit_refs": [
+        "C04",
+        "V04"
+      ],
+      "owner_package": "A03",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": "support::dex::make_dex v1 (method 0 + shared code_item base)",
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "references"
+      },
+      "status": "planned",
+      "notes": "method_idx 0, two methods sharing one code_item (already present in make_dex bytes: first/second share code), same-name overloads, one method hitting a target at several offsets and several targets in one method, plus control characters/separators in names. Full identity and numeric-index comparisons, no display-string matching. The G02/G01 APKs are reused as inputs."
+    },
+    {
+      "case_id": "in01-root-dex-priority-and-dupes",
+      "matrix_ids": [
+        "IN-01"
+      ],
+      "audit_refs": [
+        "C03",
+        "D03"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "classes"
+      },
+      "status": "planned",
+      "notes": "Root selection: classes*.dex priority over fallback *.dex, nested archives ignored, both duplicate-name resolution flavors taking the first entry with a warning; a manifest-only APK succeeds for manifest while DEX queries fail. A02 builds the multi-entry APKs from the existing DEX builders."
+    },
+    {
+      "case_id": "in01-no-dex-query-notfound",
+      "matrix_ids": [
+        "IN-01"
+      ],
+      "audit_refs": [
+        "C03"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:NotFound",
+        "facts_path": null,
+        "facts_kind": "classes"
+      },
+      "status": "planned",
+      "notes": "APK without any DEX entry: dexes returns an empty catalog and classes/references/getclass fail with NotFound while manifest still works on a manifest-bearing variant."
+    },
+    {
+      "case_id": "in02-entry-decoding-matrix",
+      "matrix_ids": [
+        "IN-02"
+      ],
+      "audit_refs": [
+        "C04",
+        "V06"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "dex-catalog"
+      },
+      "status": "planned",
+      "notes": "Stored, deflate, empty streams, data descriptors with and without the signature, local/central header agreement, and trailing-stream rejection after the declared size. Requires extending support::apk to emit deflate and descriptor variants."
+    },
+    {
+      "case_id": "in02-bad-crc",
+      "matrix_ids": [
+        "IN-02"
+      ],
+      "audit_refs": [
+        "C04",
+        "V06"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:MalformedInput",
+        "facts_path": null,
+        "facts_kind": "dex-catalog"
+      },
+      "status": "planned",
+      "notes": "Selected DEX entry whose stored CRC disagrees with its bytes: the operation must fail rather than skip verification; unrelated entries with bad CRC stay irrelevant."
+    },
+    {
+      "case_id": "in02-zip64-rejected",
+      "matrix_ids": [
+        "IN-02"
+      ],
+      "audit_refs": [
+        "C04"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:UnsupportedFormat",
+        "facts_path": null,
+        "facts_kind": "dex-catalog"
+      },
+      "status": "planned",
+      "notes": "ZIP64 placeholder markers (0xffffffff sizes / EOCD64) are explicitly rejected as unsupported, not misparsed."
+    },
+    {
+      "case_id": "in02-encrypted-rejected",
+      "matrix_ids": [
+        "IN-02"
+      ],
+      "audit_refs": [
+        "C04"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:UnsupportedFormat",
+        "facts_path": null,
+        "facts_kind": "dex-catalog"
+      },
+      "status": "planned",
+      "notes": "Entries with the encryption flag or multi-volume markers are rejected as unsupported with a precise diagnostic."
+    },
+    {
+      "case_id": "in03-dex-version-headers",
+      "matrix_ids": [
+        "IN-03"
+      ],
+      "audit_refs": [
+        "C06"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "dex-catalog"
+      },
+      "status": "planned",
+      "notes": "Real fixtures for each accepted version (035/037/038/039/040) with the version-appropriate header/opcode content - not just a magic-number patch. The existing builder produces 035; versioned builders extend it."
+    },
+    {
+      "case_id": "in03-container-041-members",
+      "matrix_ids": [
+        "IN-03"
+      ],
+      "audit_refs": [
+        "C06"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "dex-catalog"
+      },
+      "status": "planned",
+      "notes": "041 container with one and several logical members, including cross-member section addresses (the src/dex/container.rs test builder already produces this shape)."
+    },
+    {
+      "case_id": "in03-compactdex-odex-rejected",
+      "matrix_ids": [
+        "IN-03"
+      ],
+      "audit_refs": [
+        "C06"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:UnsupportedFormat",
+        "facts_path": null,
+        "facts_kind": "dex-catalog"
+      },
+      "status": "planned",
+      "notes": "CompactDex and ODEX magic inputs are rejected as unsupported formats."
+    },
+    {
+      "case_id": "in03-bad-container-rejected",
+      "matrix_ids": [
+        "IN-03"
+      ],
+      "audit_refs": [
+        "C06"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:MalformedInput",
+        "facts_path": null,
+        "facts_kind": "dex-catalog"
+      },
+      "status": "planned",
+      "notes": "Structurally broken containers: zero-length members, member loops, out-of-range or overflowing section offsets, unknown version strings."
+    },
+    {
+      "case_id": "in04-sha1-mismatch-warning",
+      "matrix_ids": [
+        "IN-04"
+      ],
+      "audit_refs": [
+        "G03"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "source"
+      },
+      "status": "planned",
+      "notes": "SHA-1 signature corrupted but checksum recomputed: analysis still succeeds with a warning; repeated decompile/references produce identical results and leave the input bytes unchanged. Complements the zero-checksum G03 case with the mismatch flavor."
+    },
+    {
+      "case_id": "in05-external-type-no-classdef",
+      "matrix_ids": [
+        "IN-05"
+      ],
+      "audit_refs": [
+        "V05",
+        "C05"
+      ],
+      "owner_package": "A07",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "classes"
+      },
+      "status": "planned",
+      "notes": "Referenced types without a class_def produce no class hit; duplicate descriptors across entries/logical members/within one DEX keep every definition while --dex ordinals select exactly one."
+    },
+    {
+      "case_id": "in05-duplicate-class-ordinal-selection",
+      "matrix_ids": [
+        "IN-05"
+      ],
+      "audit_refs": [
+        "V05",
+        "C05"
+      ],
+      "owner_package": "A07",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "classes"
+      },
+      "status": "planned",
+      "notes": "Reverse-completion scheduling and 1/2/8 workers yield identical identities and errors when several same-descriptor classes exist across selected entries."
+    },
+    {
+      "case_id": "decl02-annotations-and-metadata",
+      "matrix_ids": [
+        "DECL-02"
+      ],
+      "audit_refs": [
+        "V02"
+      ],
+      "owner_package": "A05",
+      "source": {
+        "origin": "external",
+        "license": "to be fixed at registration (javac + D8 built in-repo)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "source"
+      },
+      "status": "planned",
+      "notes": "Class/field/method/parameter annotation targets and visibility, nested/array/enum/class values, generic signatures, throws, inner/enclosing classes, access flags, super/interfaces, prototypes and debug params/locals/lines; no-debug variants stay supported and inexpressible data lands in metadata."
+    },
+    {
+      "case_id": "decl03-switch-payload",
+      "matrix_ids": [
+        "DECL-03"
+      ],
+      "audit_refs": [
+        "V01",
+        "V02"
+      ],
+      "owner_package": "A05",
+      "source": {
+        "origin": "external",
+        "license": "to be fixed at registration (javac + D8 built in-repo)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "source"
+      },
+      "status": "planned",
+      "notes": "Control-flow fixture: constructor this/super ordering, overloads, native/abstract methods, if/loop/switch with payload tables, wide registers and float/double bit values, try/catch/finally, long methods, polymorphic calls."
+    },
+    {
+      "case_id": "decl03-use-before-declare",
+      "matrix_ids": [
+        "DECL-03"
+      ],
+      "audit_refs": [
+        "V01"
+      ],
+      "owner_package": "A05",
+      "source": {
+        "origin": "external",
+        "license": "to be fixed at registration (javac + D8 built in-repo)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "source"
+      },
+      "status": "planned",
+      "notes": "V01 regression class: registers used before their declaration point must be declared correctly by the fixed-point fix; the support fixture must decompile completely, not partially."
+    },
+    {
+      "case_id": "decl04-incomplete-method-error",
+      "matrix_ids": [
+        "DECL-04"
+      ],
+      "audit_refs": [],
+      "owner_package": "A05",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:IncompleteDecompilation",
+        "facts_path": null,
+        "facts_kind": "source"
+      },
+      "status": "planned",
+      "notes": "A method the decompiler genuinely cannot express returns the incomplete error carrying the MethodId (and any partial Source only inside the error), never a stubbed body."
+    },
+    {
+      "case_id": "decl04-legal-no-body",
+      "matrix_ids": [
+        "DECL-04"
+      ],
+      "audit_refs": [],
+      "owner_package": "A05",
+      "source": {
+        "origin": "external",
+        "license": "to be fixed at registration (javac + D8 built in-repo)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "source"
+      },
+      "status": "planned",
+      "notes": "Abstract/native methods legitimately have no body and decompile completely; distinguishes legal emptiness from fallback stubs and indeterminate output."
+    },
+    {
+      "case_id": "man01-last-manifest-entry",
+      "matrix_ids": [
+        "MAN-01"
+      ],
+      "audit_refs": [
+        "C11"
+      ],
+      "owner_package": "A06",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "manifest"
+      },
+      "status": "planned",
+      "notes": "Duplicate manifest names resolve to the last entry; UTF-8 plain-XML and binary AML inputs, long UTF-8/UTF-16 string lengths, style span metadata preserved."
+    },
+    {
+      "case_id": "man01-missing-manifest-notfound",
+      "matrix_ids": [
+        "MAN-01"
+      ],
+      "audit_refs": [
+        "C11"
+      ],
+      "owner_package": "A06",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:NotFound",
+        "facts_path": null,
+        "facts_kind": "manifest"
+      },
+      "status": "planned",
+      "notes": "APK without a manifest entry fails the manifest operation with NotFound; the manifest operation does not require any DEX to be present or valid."
+    },
+    {
+      "case_id": "man01-plain-xml-text-rejected",
+      "matrix_ids": [
+        "MAN-01"
+      ],
+      "audit_refs": [
+        "C11"
+      ],
+      "owner_package": "A06",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:MalformedInput",
+        "facts_path": null,
+        "facts_kind": "manifest"
+      },
+      "status": "planned",
+      "notes": "A manifest entry that is actually plain XML text (or wrongly encoded bytes) is rejected instead of being rendered as an empty document."
+    },
+    {
+      "case_id": "man02-typed-value-matrix",
+      "matrix_ids": [
+        "MAN-02"
+      ],
+      "audit_refs": [],
+      "owner_package": "A06",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "manifest"
+      },
+      "status": "planned",
+      "notes": "Every typed value: reference/attribute, string, boolean, signed/hex integers, raw float bits, dimension/fraction, the four color forms, unknown/reserved/dynamic raw type+data; all preserved with correct XML escaping."
+    },
+    {
+      "case_id": "man03-cdata-pi-node-order",
+      "matrix_ids": [
+        "MAN-03"
+      ],
+      "audit_refs": [],
+      "owner_package": "A06",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": null,
+        "facts_kind": "manifest"
+      },
+      "status": "planned",
+      "notes": "Prefix shadowing, end namespaces, default and attribute namespaces, node order with text/tail/CDATA/comments/processing instructions, prolog/epilog placement, mixed whitespace; missing declarations get a defined diagnostic policy and single-root trailing structure must be consumed. XML comparison must include text/tail."
+    },
+    {
+      "case_id": "man04-malformed-axml-rejected",
+      "matrix_ids": [
+        "MAN-04"
+      ],
+      "audit_refs": [],
+      "owner_package": "A06",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:MalformedInput",
+        "facts_path": null,
+        "facts_kind": "manifest"
+      },
+      "status": "planned",
+      "notes": "Broken chunk/string-pool/indices, stack mismatches, duplicate attributes, a second root, and EOF truncations all fail cleanly; release profile shows no input-triggered panic."
+    },
+    {
+      "case_id": "man04-dtd-rejected",
+      "matrix_ids": [
+        "MAN-04"
+      ],
+      "audit_refs": [],
+      "owner_package": "A06",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:UnsupportedFormat",
+        "facts_path": null,
+        "facts_kind": "manifest"
+      },
+      "status": "planned",
+      "notes": "DTDs and custom/external entities are rejected without any I/O, and non-UTF-8/XML-1.0 declarations report unsupported rather than being guessed."
+    },
+    {
+      "case_id": "man04-limit-boundaries",
+      "matrix_ids": [
+        "MAN-04"
+      ],
+      "audit_refs": [],
+      "owner_package": "A06",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "error:ResourceLimit",
+        "facts_path": null,
+        "facts_kind": "manifest"
+      },
+      "status": "planned",
+      "notes": "Depth, node count, attribute count and output-size limits each reject on the exceeding side with ResourceLimit, using small overrides."
+    },
+    {
+      "case_id": "back01-vendor-archive-and-patch-inventory",
+      "matrix_ids": [
+        "BACK-01"
+      ],
+      "audit_refs": [],
+      "owner_package": "A13",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/back01-vendor-archive-and-patch-inventory.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: upstream archive hashes, patch registration and license completeness. Assembled incrementally by A04/A06; A13 finalizes and A14 re-verifies."
+    },
+    {
+      "case_id": "back02-embedding-sandbox",
+      "matrix_ids": [
+        "BACK-02"
+      ],
+      "audit_refs": [],
+      "owner_package": "A12",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/back02-embedding-sandbox.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: environment switch matrix, transitive dependency reachability, empty stdout/stderr embedding, no process side effects."
+    },
+    {
+      "case_id": "back03-scoped-vs-full-parity",
+      "matrix_ids": [
+        "BACK-03"
+      ],
+      "audit_refs": [],
+      "owner_package": "A05",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/back03-scoped-vs-full-parity.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: full/scoped/parallel decompile parity on shared fixtures; optimization disabled wherever modes diverge."
+    },
+    {
+      "case_id": "core01-default-feature-surface",
+      "matrix_ids": [
+        "CORE-01"
+      ],
+      "audit_refs": [],
+      "owner_package": "A10",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/core01-default-feature-surface.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: default features limit the public surface to input/classes/references with own DTOs; doc examples build outside the workspace. Target commands reference the post-A10 package layout."
+    },
+    {
+      "case_id": "core02-input-ownership-identity",
+      "matrix_ids": [
+        "CORE-02"
+      ],
+      "audit_refs": [],
+      "owner_package": "A11",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/core02-input-ownership-identity.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: path/Arc/raw-DEX identity rules, immutability of opened inputs, cross-account rejection, Engine clone sharing."
+    },
+    {
+      "case_id": "core03-pool-and-concurrency",
+      "matrix_ids": [
+        "CORE-03"
+      ],
+      "audit_refs": [],
+      "owner_package": "A11",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/core03-pool-and-concurrency.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: single pool, serialized top-level admission with internal parallelism, worker-count invariance, permit recycling."
+    },
+    {
+      "case_id": "core04-limit-boundaries",
+      "matrix_ids": [
+        "CORE-04"
+      ],
+      "audit_refs": [],
+      "owner_package": "A12",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/core04-limit-boundaries.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: limit-1/limit/limit+1 boundary sweep over every Limits field with small overrides; actual-growth accounting; 1k-member archive memory check."
+    },
+    {
+      "case_id": "core05-cancellation-checkpoints",
+      "matrix_ids": [
+        "CORE-05"
+      ],
+      "audit_refs": [],
+      "owner_package": "A12",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/core05-cancellation-checkpoints.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: cancellation honored at each checkpoint with cause reporting and no post-return background work."
+    },
+    {
+      "case_id": "core06-cli-core-separation",
+      "matrix_ids": [
+        "CORE-06"
+      ],
+      "audit_refs": [],
+      "owner_package": "A13",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/core06-cli-core-separation.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: CLI depends only on public core; no duplicated ZIP/DEX business logic; feature combinations agree on facts."
+    },
+    {
+      "case_id": "dist01-package-archives",
+      "matrix_ids": [
+        "DIST-01"
+      ],
+      "audit_refs": [],
+      "owner_package": "A13",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/dist01-package-archives.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: normalized package archives, checksums, packaged file inventory, version chain; no root patch/path/Git-only leakage. Registry publishing itself stays a separately authorized external action."
+    },
+    {
+      "case_id": "dist02-outside-workspace-consumers",
+      "matrix_ids": [
+        "DIST-02"
+      ],
+      "audit_refs": [],
+      "owner_package": "A13",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/dist02-outside-workspace-consumers.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: consumers outside the workspace across feature combinations run from the actual archives, including G02/041/unknown-AXML/environment scenarios."
+    },
+    {
+      "case_id": "dist03-toolchain-matrix",
+      "matrix_ids": [
+        "DIST-03"
+      ],
+      "audit_refs": [],
+      "owner_package": "A13",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/dist03-toolchain-matrix.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: Rust 1.93 and stable fmt/clippy/tests/doc plus three-platform native smoke; every skip counts as not passed."
+    },
+    {
+      "case_id": "dist04-patch-replay",
+      "matrix_ids": [
+        "DIST-04"
+      ],
+      "audit_refs": [],
+      "owner_package": "A13",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/dist04-patch-replay.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: patch replay onto clean upstream, single-patch removal isolation, and one upgrade drill."
+    },
+    {
+      "case_id": "qual01-oracle-selftest",
+      "matrix_ids": [
+        "QUAL-01"
+      ],
+      "audit_refs": [],
+      "owner_package": "A09",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/qual01-oracle-selftest.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: comparator negative controls (already enforced in tests/contract_harness.rs), bidirectional parity and the absence of global ignores."
+    },
+    {
+      "case_id": "qual02-real-corpus",
+      "matrix_ids": [
+        "QUAL-02"
+      ],
+      "audit_refs": [],
+      "owner_package": "A09",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/qual02-real-corpus.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: real DEX plus >=3 sourced APKs registered under tests/fixtures/contracts/corpus/ (owned by the A00 corpus subtask, not this file); non-empty four-reference-kind and fixed-point source results."
+    },
+    {
+      "case_id": "qual03-performance-protocol",
+      "matrix_ids": [
+        "QUAL-03"
+      ],
+      "audit_refs": [],
+      "owner_package": "A14",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/qual03-performance-protocol.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: fixed-environment timing protocol with median/p95/peak RSS for full and scoped operations. Executable only once the analysis stack exists (A14)."
+    },
+    {
+      "case_id": "qual04-fuzz-smoke",
+      "matrix_ids": [
+        "QUAL-04"
+      ],
+      "audit_refs": [],
+      "owner_package": "A13",
+      "source": {
+        "origin": "process",
+        "license": null,
+        "generator": null,
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": null,
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/qual04-fuzz-smoke.json",
+        "facts_kind": "process"
+      },
+      "status": "active",
+      "notes": "Process evidence: 10-minute fixed-seed fuzz smoke per target in debug and release plus a fixed regression corpus of minimized mutations."
+    },
+    {
+      "case_id": "corpus-org-schabi-newpipe",
+      "matrix_ids": [
+        "QUAL-02"
+      ],
+      "audit_refs": [],
+      "owner_package": "A09",
+      "source": {
+        "origin": "fdroid",
+        "license": "GPL-3.0-or-later",
+        "generator": "downloaded sample",
+        "seed": 0,
+        "url": "https://f-droid.org/repo/org.schabi.newpipe_1015.apk",
+        "version": "0.29.1"
+      },
+      "input": {
+        "path": "corpus/apks/org.schabi.newpipe-0.29.1.apk",
+        "sha256": "1d66d19eedbab969b1be2e44e0ea35f5f8921cbe83b5c5ac810767ca1a84b7e8",
+        "size": 11507122
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "corpus/expected/corpus-org.schabi.newpipe/provenance.json",
+        "facts_kind": "reference-archive"
+      },
+      "status": "active",
+      "notes": "Corpus sample corpus-org.schabi.newpipe: multi_dex=True, dex entries 3. Manifest complexity: 286 XML 节点 / 18 种标签 / 11 permissions / 13 activity / 11 service / 5 receiver / 4 provider / 12 meta-data / 25 intent-fil. Pinned reference outputs under corpus/expected/corpus-org.schabi.newpipe/ (four findrefs kinds non-empty + classes + manifest + getclass spot facts); provenance in provenance.json. Expected outputs are the Python baseline's behavior record, not a correctness oracle (known reference defects: G02/D03/V04 identity)."
+    },
+    {
+      "case_id": "corpus-de-danoeh-antennapod",
+      "matrix_ids": [
+        "QUAL-02"
+      ],
+      "audit_refs": [],
+      "owner_package": "A09",
+      "source": {
+        "origin": "fdroid",
+        "license": "GPL-3.0-only",
+        "generator": "downloaded sample",
+        "seed": 0,
+        "url": "https://f-droid.org/repo/de.danoeh.antennapod_3120195.apk",
+        "version": "3.12.1"
+      },
+      "input": {
+        "path": "corpus/apks/de.danoeh.antennapod-3.12.1.apk",
+        "sha256": "11b38c20b555b445a301c12028ccb912af24dce1d8b85532658b797b85d52638",
+        "size": 17733444
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "corpus/expected/corpus-de.danoeh.antennapod/provenance.json",
+        "facts_kind": "reference-archive"
+      },
+      "status": "active",
+      "notes": "Corpus sample corpus-de.danoeh.antennapod: multi_dex=True, dex entries 3. Manifest complexity: 225 XML 节点 / 19 种标签 / 11 permissions / 12 activity / 7 service / 16 receiver / 3 provider / 21 meta-data / 38 intent-fil. Pinned reference outputs under corpus/expected/corpus-de.danoeh.antennapod/ (four findrefs kinds non-empty + classes + manifest + getclass spot facts); provenance in provenance.json. Expected outputs are the Python baseline's behavior record, not a correctness oracle (known reference defects: G02/D03/V04 identity)."
+    },
+    {
+      "case_id": "corpus-com-kunzisoft-keepass-libre",
+      "matrix_ids": [
+        "QUAL-02"
+      ],
+      "audit_refs": [],
+      "owner_package": "A09",
+      "source": {
+        "origin": "fdroid",
+        "license": "GPL-3.0-or-later",
+        "generator": "downloaded sample",
+        "seed": 0,
+        "url": "https://f-droid.org/repo/com.kunzisoft.keepass.libre_45300.apk",
+        "version": "4.5.3"
+      },
+      "input": {
+        "path": "corpus/apks/com.kunzisoft.keepass.libre-4.5.3.apk",
+        "sha256": "7fb11c3b93554eeb4aa72d217801ac461d5789470376bf54630fe0353437db7c",
+        "size": 16733553
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "corpus/expected/corpus-com.kunzisoft.keepass.libre/provenance.json",
+        "facts_kind": "reference-archive"
+      },
+      "status": "active",
+      "notes": "Corpus sample corpus-com.kunzisoft.keepass.libre: multi_dex=True, dex entries 3. Manifest complexity: 164 XML 节点 / 19 种标签 / 9 permissions / 20 activity / 9 service / 2 receiver / 1 provider / 10 meta-data / 15 intent-filte. Pinned reference outputs under corpus/expected/corpus-com.kunzisoft.keepass.libre/ (four findrefs kinds non-empty + classes + manifest + getclass spot facts); provenance in provenance.json. Expected outputs are the Python baseline's behavior record, not a correctness oracle (known reference defects: G02/D03/V04 identity)."
+    },
+    {
+      "case_id": "corpus-net-gsantner-markor",
+      "matrix_ids": [
+        "QUAL-02"
+      ],
+      "audit_refs": [],
+      "owner_package": "A09",
+      "source": {
+        "origin": "fdroid",
+        "license": "Apache-2.0",
+        "generator": "downloaded sample",
+        "seed": 0,
+        "url": "https://f-droid.org/repo/net.gsantner.markor_163.apk",
+        "version": "2.16.1"
+      },
+      "input": {
+        "path": "corpus/apks/net.gsantner.markor-2.16.1.apk",
+        "sha256": "3f9f260dc3e32a1281cb8803eea6f926eef897579f68a5d35f922523974b84b9",
+        "size": 12054040
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "corpus/expected/corpus-net.gsantner.markor/provenance.json",
+        "facts_kind": "reference-archive"
+      },
+      "status": "active",
+      "notes": "Corpus sample corpus-net.gsantner.markor: multi_dex=True, dex entries 2. Manifest complexity: 374 XML 节点（4 个样本中最多）/ 20 种标签 / 7 permissions / 11 activity / 1 activity-alias / 2 service / 2 receiver / 2 provider / 7 . Pinned reference outputs under corpus/expected/corpus-net.gsantner.markor/ (four findrefs kinds non-empty + classes + manifest + getclass spot facts); provenance in provenance.json. Expected outputs are the Python baseline's behavior record, not a correctness oracle (known reference defects: G02/D03/V04 identity)."
+    },
+    {
+      "case_id": "corpus-reference-workload",
+      "matrix_ids": [
+        "QUAL-02"
+      ],
+      "audit_refs": [],
+      "owner_package": "A09",
+      "source": {
+        "origin": "external",
+        "license": "Apache-2.0（MG1937/ASC 仓库 LICENSE 为证；本地 zip 与该 commit 原始文件 cmp 逐字节一致）",
+        "generator": "MG1937/ASC tests/fixtures/reference-workload.zip classes.dex (commit ccc6bae)",
+        "seed": 0,
+        "url": "https://github.com/MG1937/ASC/blob/ccc6bae7704f5c5ef1a7271e27314837079621fb/tests/fixtures/reference-workload.zip（zip 内 classes.dex）",
+        "version": null
+      },
+      "input": {
+        "path": "corpus/apks/reference-workload-classes.dex",
+        "sha256": "5cd2401e9ec9a41fc5f78d06acb10d9f334a973bb82df9af381d3e5024aee337",
+        "size": 9577628
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "corpus/expected/corpus-reference-workload/provenance.json",
+        "facts_kind": "reference-archive"
+      },
+      "status": "active",
+      "notes": "Corpus sample corpus-reference-workload: multi_dex=False, dex entries 0. Manifest complexity: 不适用（裸 DEX，无 APK 容器）. Pinned reference outputs under corpus/expected/corpus-reference-workload/ (four findrefs kinds non-empty + classes + manifest + getclass spot facts); provenance in provenance.json. Expected outputs are the Python baseline's behavior record, not a correctness oracle (known reference defects: G02/D03/V04 identity)."
+    }
+  ]
+}

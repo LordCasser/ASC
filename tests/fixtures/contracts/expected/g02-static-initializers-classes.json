@@ -1,0 +1,29 @@
+{
+  "facts_kind": "classes",
+  "artifact": {
+    "input": "inputs/g02-static-initializers.dex",
+    "kind": "dex"
+  },
+  "dex_catalog": [
+    {
+      "entry_ordinal": 0,
+      "logical_ordinal": 0,
+      "raw_entry_name": "<memory.dex>",
+      "version": "035",
+      "header_offset": 0
+    }
+  ],
+  "classes": [
+    {
+      "class_def_idx": 0,
+      "descriptor": "Lexample/Statics;",
+      "java_name": "example.Statics",
+      "package": "example",
+      "simple_name": "Statics"
+    }
+  ],
+  "static_fields": [
+    { "name": "FIRST", "type_descriptor": "I", "field_idx": 0 },
+    { "name": "SECOND", "type_descriptor": "I", "field_idx": 1 }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "python_commit": "ccc6bae7704f5c5ef1a7271e27314837079621fb",
+  "python_commit_url": "https://github.com/MG1937/ASC/tree/ccc6bae7704f5c5ef1a7271e27314837079621fb",
+  "python_source_verified": "本地 asc-ref/python-main 的 src/ 与 main.py 与该 commit 逐字节一致（仅 __pycache__ 差异）",
+  "androguard": "4.1.3",
+  "python_version": "3.13.15",
+  "python_interpreter": "/Users/lordcasser/workspace/asc-ref/venv313/bin/python",
+  "captured_at": "2026-09-15",
+  "commands": [
+    "wrapper 构造（与参考仓库 tests/benchmark_compare.py 相同方式）: python3 - <<'EOF' 把 corpus/reference-workload-classes.dex 以 ZIP_DEFLATED 写为 workload-fixture.apk 内唯一条目 classes.dex EOF（临时目录，用后删除）",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 <tmp>/workload-fixture.apk string create > expected/corpus-reference-workload/findrefs_string_create.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 <tmp>/workload-fixture.apk type View > expected/corpus-reference-workload/findrefs_type_View.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 <tmp>/workload-fixture.apk method view > expected/corpus-reference-workload/findrefs_method_view.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 <tmp>/workload-fixture.apk field action > expected/corpus-reference-workload/findrefs_field_action.txt"
+  ],
+  "notes": [
+    "findrefs 输出按进程池 FIRST_COMPLETED 完成顺序拼接各 DEX 条目的块，块间顺序理论上依赖调度（本次在受控机器上复跑 2 次字节一致，含与存档文件排序后一致）；单块内部行序确定。比较器不应依赖块间顺序，应按行集合或按 dex 前缀分块后比较。",
+    "classes.txt 来自 GuiDexStore.class_names（sorted，确定性）。",
+    "manifest.xml 来自 get_manifest_xml(pretty=True)，确定性。",
+    "getclass 输出为单类反编译全文，确定性。",
+    "参考实现输出含已知缺陷（openspec 审计 G02/D03/D02 家族：方法身份错配、静态初始值、float 当整数等）。此处只固定'它当时输出什么'，不作为语义真值。",
+    "驱动环境偏差：指定 REF_PY=asc-ref/venv/bin/python 为 CPython 3.9.6，无法执行 findrefs（InsnLocator 的原子组正则要求 Python>=3.11，RELEASING.md 要求 3.11/3.12）；实际使用 asc-ref/venv313（CPython 3.13.15 + androguard 4.1.3，requirements.txt 同版本 pin）。"
+  ],
+  "files": {
+    "findrefs_field_action.txt": {
+      "sha256": "2437a666f018705e6b0a4aeee95fb2fdc36bd4a838561b5cd132d0cb27eef00b",
+      "bytes": 52813
+    },
+    "findrefs_method_view.txt": {
+      "sha256": "1b55a43048f90892d4e4acad40702173fc6ed2e83876970008b68069e1886951",
+      "bytes": 3601
+    },
+    "findrefs_string_create.txt": {
+      "sha256": "613498698e493112ea7f5178d9f9b56385cad29d7012c43ac49feb6231bb6bd5",
+      "bytes": 11343
+    },
+    "findrefs_type_View.txt": {
+      "sha256": "9574a73b9d93ced4d82e5eb5c1ec910e9fbc8e4c45ade774ed217a560cb7d81c",
+      "bytes": 179410
+    }
+  },
+  "input": {
+    "path": "reference-workload-classes.dex",
+    "sha256": "5cd2401e9ec9a41fc5f78d06acb10d9f334a973bb82df9af381d3e5024aee337",
+    "source": {
+      "repo": "https://github.com/MG1937/ASC",
+      "commit": "ccc6bae7704f5c5ef1a7271e27314837079621fb",
+      "artifact": "tests/fixtures/reference-workload.zip@ccc6bae7704f5c5ef1a7271e27314837079621fb",
+      "archive_sha256": "962cbae7a4a37d7ea154c4973dace151ee596a38413004e91417f2f001c0b07d",
+      "archive_bytes_verified": "本地 zip 与该 commit 的 GitHub 原始文件逐字节一致（cmp 通过）",
+      "license": "Apache-2.0（仓库 LICENSE 为证）",
+      "member": "classes.dex（zip 内另有 test.py、test_findrefs.py 驱动脚本）"
+    },
+    "queries_note": "四类查询词与该 zip 内 test_findrefs.py 的基准查询一致（string create / type View / method view / field action）；method view 输出 20 行与 reference-baseline.json 的 method_locator_none_class Count=20 一致。"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "python_commit": "ccc6bae7704f5c5ef1a7271e27314837079621fb",
+  "python_commit_url": "https://github.com/MG1937/ASC/tree/ccc6bae7704f5c5ef1a7271e27314837079621fb",
+  "python_source_verified": "本地 asc-ref/python-main 的 src/ 与 main.py 与该 commit 逐字节一致（仅 __pycache__ 差异）",
+  "androguard": "4.1.3",
+  "python_version": "3.13.15",
+  "python_interpreter": "/Users/lordcasser/workspace/asc-ref/venv313/bin/python",
+  "captured_at": "2026-09-15",
+  "commands": [
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/com.kunzisoft.keepass.libre-4.5.3.apk string keepass > expected/corpus-com.kunzisoft.keepass.libre/findrefs_string_keepass.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/com.kunzisoft.keepass.libre-4.5.3.apk type 'Ljava/lang/String;' > expected/corpus-com.kunzisoft.keepass.libre/findrefs_type_Ljava-lang-String-.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/com.kunzisoft.keepass.libre-4.5.3.apk method onCreate > expected/corpus-com.kunzisoft.keepass.libre/findrefs_method_onCreate.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/com.kunzisoft.keepass.libre-4.5.3.apk field INSTANCE > expected/corpus-com.kunzisoft.keepass.libre/findrefs_field_INSTANCE.txt",
+    "REF_ROOT=/Users/lordcasser/workspace/asc-ref/python-main /Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/projects/ASC/bench/reference_scenario.py classes /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/com.kunzisoft.keepass.libre-4.5.3.apk 8 > expected/corpus-com.kunzisoft.keepass.libre/classes.txt",
+    "REF_ROOT=/Users/lordcasser/workspace/asc-ref/python-main /Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/projects/ASC/bench/reference_scenario.py manifest /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/com.kunzisoft.keepass.libre-4.5.3.apk > expected/corpus-com.kunzisoft.keepass.libre/manifest.xml",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py getclass --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/com.kunzisoft.keepass.libre-4.5.3.apk 'Lcom/kunzisoft/keepass/activities/legacy/DatabaseActivity;' > expected/corpus-com.kunzisoft.keepass.libre/getclass_com.kunzisoft.keepass.activities.legacy.DatabaseActivity.txt"
+  ],
+  "notes": [
+    "findrefs 输出按进程池 FIRST_COMPLETED 完成顺序拼接各 DEX 条目的块，块间顺序理论上依赖调度（本次在受控机器上复跑 2 次字节一致，含与存档文件排序后一致）；单块内部行序确定。比较器不应依赖块间顺序，应按行集合或按 dex 前缀分块后比较。",
+    "classes.txt 来自 GuiDexStore.class_names（sorted，确定性）。",
+    "manifest.xml 来自 get_manifest_xml(pretty=True)，确定性。",
+    "getclass 输出为单类反编译全文，确定性。",
+    "参考实现输出含已知缺陷（openspec 审计 G02/D03/D02 家族：方法身份错配、静态初始值、float 当整数等）。此处只固定'它当时输出什么'，不作为语义真值。",
+    "驱动环境偏差：指定 REF_PY=asc-ref/venv/bin/python 为 CPython 3.9.6，无法执行 findrefs（InsnLocator 的原子组正则要求 Python>=3.11，RELEASING.md 要求 3.11/3.12）；实际使用 asc-ref/venv313（CPython 3.13.15 + androguard 4.1.3，requirements.txt 同版本 pin）。"
+  ],
+  "files": {
+    "classes.txt": {
+      "sha256": "2b6784225c92cf6e926785c3dcc2800d93057f58ec545a5cc21f0884d22ceb71",
+      "bytes": 1102768
+    },
+    "findrefs_field_INSTANCE.txt": {
+      "sha256": "f4251832abe9199fe007b0cfbd07863adba8b54fa2c45b460ed0e43a22255180",
+      "bytes": 517274
+    },
+    "findrefs_method_onCreate.txt": {
+      "sha256": "a0132b191bf0727ce3557cab5fe89dba2c5067c511185c0e56f748896384085c",
+      "bytes": 76681
+    },
+    "findrefs_string_keepass.txt": {
+      "sha256": "2cf5776e7f98b931e03d7e25fa18126fc49f42371944ff87685a87ace2385c6c",
+      "bytes": 22989
+    },
+    "findrefs_type_Ljava-lang-String-.txt": {
+      "sha256": "28f6dff698dd701e01c0af05638f4a57e7d49454a2f5e1b803ef83e24e5f733d",
+      "bytes": 110578
+    },
+    "getclass_com.kunzisoft.keepass.activities.legacy.DatabaseActivity.txt": {
+      "sha256": "ec0e561a7da04b5e41bd804d390b43dac051777aa05b8740eb0444d1cd80fbc8",
+      "bytes": 17127
+    },
+    "manifest.xml": {
+      "sha256": "a30ea6c4824816e68f7d19ca4f104b9fa2b56aa2d57c580d8cf95fa19a59562b",
+      "bytes": 14441
+    }
+  },
+  "input": {
+    "path": "apks/com.kunzisoft.keepass.libre-4.5.3.apk",
+    "sha256": "7fb11c3b93554eeb4aa72d217801ac461d5789470376bf54630fe0353437db7c"
+  },
+  "getclass_target": {
+    "dalvik_class": "Lcom/kunzisoft/keepass/activities/legacy/DatabaseActivity;",
+    "facts": {
+      "file": "getclass_com.kunzisoft.keepass.activities.legacy.DatabaseActivity.txt",
+      "lines": 302,
+      "contains": {
+        "onCreate": 3,
+        "databaseChangedDialogFragment": 3,
+        "Companion": 8
+      },
+      "class_decl": "public abstract class DatabaseActivity extends com.kunzisoft.keepass.activities.stylish.StylishActivity implements com.kunzisoft.keepass.activities.legacy.DatabaseRetrieval {"
+    }
+  }
+}

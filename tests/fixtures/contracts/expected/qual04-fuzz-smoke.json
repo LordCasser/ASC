@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. Select fuzz targets over ZIP/DEX headers, opcodes, 041 containers, AXML and the backend adapters; run each for 10 minutes with fixed seeds in both debug and an actual release profile (cargo-fuzz or the in-tree mutation driver), with timeouts/aborts observed by the test process rather than a human. 2. Minimize any crash to the smallest reproducer and add it to the fixed CI regression corpus (valid fixture mutations included). 3. Record targets, durations, exec counts, crashes/timeouts and peak RSS.",
+  "pass_criteria": "Every selected target completes its 10-minute fixed-seed smoke in both profiles; no crash on valid inputs; malformed-input crashes are minimized, filed and covered by regression cases; statistics are recorded."
+}

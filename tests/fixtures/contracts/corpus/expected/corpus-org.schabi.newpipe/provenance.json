@@ -1,0 +1,73 @@
+{
+  "python_commit": "ccc6bae7704f5c5ef1a7271e27314837079621fb",
+  "python_commit_url": "https://github.com/MG1937/ASC/tree/ccc6bae7704f5c5ef1a7271e27314837079621fb",
+  "python_source_verified": "本地 asc-ref/python-main 的 src/ 与 main.py 与该 commit 逐字节一致（仅 __pycache__ 差异）",
+  "androguard": "4.1.3",
+  "python_version": "3.13.15",
+  "python_interpreter": "/Users/lordcasser/workspace/asc-ref/venv313/bin/python",
+  "captured_at": "2026-09-15",
+  "commands": [
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/org.schabi.newpipe-0.29.1.apk string youtube > expected/corpus-org.schabi.newpipe/findrefs_string_youtube.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/org.schabi.newpipe-0.29.1.apk type 'Ljava/lang/String;' > expected/corpus-org.schabi.newpipe/findrefs_type_Ljava-lang-String-.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/org.schabi.newpipe-0.29.1.apk method onCreate > expected/corpus-org.schabi.newpipe/findrefs_method_onCreate.txt",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py findrefs --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/org.schabi.newpipe-0.29.1.apk field INSTANCE > expected/corpus-org.schabi.newpipe/findrefs_field_INSTANCE.txt",
+    "REF_ROOT=/Users/lordcasser/workspace/asc-ref/python-main /Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/projects/ASC/bench/reference_scenario.py classes /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/org.schabi.newpipe-0.29.1.apk 8 > expected/corpus-org.schabi.newpipe/classes.txt",
+    "REF_ROOT=/Users/lordcasser/workspace/asc-ref/python-main /Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/projects/ASC/bench/reference_scenario.py manifest /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/org.schabi.newpipe-0.29.1.apk > expected/corpus-org.schabi.newpipe/manifest.xml",
+    "/Users/lordcasser/workspace/asc-ref/venv313/bin/python /Users/lordcasser/workspace/asc-ref/python-main/main.py getclass --threads 8 /Users/lordcasser/workspace/projects/ASC/tests/fixtures/contracts/corpus/apks/org.schabi.newpipe-0.29.1.apk 'Lorg/schabi/newpipe/App;' > expected/corpus-org.schabi.newpipe/getclass_org.schabi.newpipe.App.txt"
+  ],
+  "notes": [
+    "findrefs 输出按进程池 FIRST_COMPLETED 完成顺序拼接各 DEX 条目的块，块间顺序理论上依赖调度（本次在受控机器上复跑 2 次字节一致，含与存档文件排序后一致）；单块内部行序确定。比较器不应依赖块间顺序，应按行集合或按 dex 前缀分块后比较。",
+    "classes.txt 来自 GuiDexStore.class_names（sorted，确定性）。",
+    "manifest.xml 来自 get_manifest_xml(pretty=True)，确定性。",
+    "getclass 输出为单类反编译全文，确定性。",
+    "参考实现输出含已知缺陷（openspec 审计 G02/D03/D02 家族：方法身份错配、静态初始值、float 当整数等）。此处只固定'它当时输出什么'，不作为语义真值。",
+    "驱动环境偏差：指定 REF_PY=asc-ref/venv/bin/python 为 CPython 3.9.6，无法执行 findrefs（InsnLocator 的原子组正则要求 Python>=3.11，RELEASING.md 要求 3.11/3.12）；实际使用 asc-ref/venv313（CPython 3.13.15 + androguard 4.1.3，requirements.txt 同版本 pin）。"
+  ],
+  "files": {
+    "classes.txt": {
+      "sha256": "cb19282d85ae1b124e4e9717a293db1050cc9a94fa1acf4ded7ceef5d74dad54",
+      "bytes": 599887
+    },
+    "findrefs_field_INSTANCE.txt": {
+      "sha256": "c660539ab108fbcef1471c6fed4e7a28378576371afc2c993421bec9305b0283",
+      "bytes": 383672
+    },
+    "findrefs_method_onCreate.txt": {
+      "sha256": "6d9822dddff3ebdce985ff2a3a52d538c64f1b3e79706469774485cc32f45d10",
+      "bytes": 24838
+    },
+    "findrefs_string_youtube.txt": {
+      "sha256": "f656a36e61e912333b2564e89ed4b8ade26a6a90bfe4012f4d9fbc2b5357e062",
+      "bytes": 22785
+    },
+    "findrefs_type_Ljava-lang-String-.txt": {
+      "sha256": "03382b691075b6953a5c668c1fe0ba221aee657c0c68031775e0193e1fc09336",
+      "bytes": 137913
+    },
+    "getclass_org.schabi.newpipe.App.txt": {
+      "sha256": "7bdcfbe1763278ef5f5d5f242c5ee2b7ce356aa76d210657684bdc28453834ae",
+      "bytes": 27597
+    },
+    "manifest.xml": {
+      "sha256": "7cd24488eaf8df2a35dd23b366333a82d47672fe37ca3e743f589a2ad46a27a0",
+      "bytes": 20497
+    }
+  },
+  "input": {
+    "path": "apks/org.schabi.newpipe-0.29.1.apk",
+    "sha256": "1d66d19eedbab969b1be2e44e0ea35f5f8921cbe83b5c5ac810767ca1a84b7e8"
+  },
+  "getclass_target": {
+    "dalvik_class": "Lorg/schabi/newpipe/App;",
+    "facts": {
+      "file": "getclass_org.schabi.newpipe.App.txt",
+      "lines": 510,
+      "contains": {
+        "onCreate": 3,
+        "TAG": 3,
+        "instance": 6
+      },
+      "class_decl": "public class App extends android.app.Application implements coil3.SingletonImageLoader$Factory {"
+    }
+  }
+}

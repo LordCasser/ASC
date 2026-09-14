@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. In a temporary directory outside the repository, create consumers that depend on the packaged archives from DIST-01 (via the staged registry or extracted .crate paths) for default, no-default, manifest, decompile and all-features configurations. 2. Run the same scenario set (including G02 static fields, a 041 container, an unknown-AXML manifest and the environment switch test) from the archives, not the checkout, and compare facts with the in-workspace runs. 3. Record whether the registry source is staging or official; the official state requires the separate authorization step.",
+  "pass_criteria": "Every consumer configuration compiles outside the workspace and reproduces the in-workspace facts; G02/041/AXML/env scenarios pass from the archive; the registry status (staged vs official) is stated accurately."
+}

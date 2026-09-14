@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. cargo +1.93.1 package for the two derived packages, core and CLI (target command after A13; packages must package from a clean tree). 2. Inspect each .crate archive: unpack it, hash the normalized file list, confirm build-required files and the vendor patch test targets are included, and that no root-level [patch] table, implicit path dependency or Git-only file leaked in. 3. Record the version chain (core, CLI, derived packages) and each archive's sha256 in the release evidence.",
+  "pass_criteria": "All packages package cleanly; archives are complete and reproducible in file list; no path/patch/Git-only leakage; the version chain is explicit and consistent across manifests."
+}

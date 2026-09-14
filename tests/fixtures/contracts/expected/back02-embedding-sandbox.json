@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. Run the environment switch matrix documented in the maintain-patched-analysis-backends change (each documented ASC_* toggle on/off/default) under cargo +1.93.1 test --locked; behavior facts must be identical across the matrix. 2. In an embedding smoke process, open the same APK and perform one analysis of each kind; assert stdout and stderr stay empty on success paths. 3. Grep the vendored and adapter sources for global logger installs, signal handlers, env/cwd writes and process exits (the tests/self_contained.rs scan pattern extended to vendor/ adapters). 4. Verify checked parse/decompile states propagate from the real backend into asc errors rather than being swallowed.",
+  "pass_criteria": "Switch matrix produces identical facts; embedding smoke keeps stdout/stderr empty; no global logger/signal/env/cwd/exit side effects are reachable from embedded paths; backend checked states surface as asc Error/Diagnostic values."
+}

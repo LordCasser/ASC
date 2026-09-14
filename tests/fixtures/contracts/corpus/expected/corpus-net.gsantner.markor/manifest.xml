@@ -1,0 +1,402 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:versionCode="163" android:versionName="2.16.1" android:compileSdkVersion="35" android:compileSdkVersionCodename="15" package="net.gsantner.markor" platformBuildVersionCode="35" platformBuildVersionName="15">
+  <uses-sdk android:minSdkVersion="18" android:targetSdkVersion="35"/>
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT"/>
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+  <uses-feature android:name="android.hardware.type.pc" android:required="false"/>
+  <uses-feature android:name="android.hardware.camera" android:required="false"/>
+  <queries>
+    <package android:name="com.android.chrome"/>
+    <package android:name="com.chrome.beta"/>
+    <package android:name="com.chrome.dev"/>
+    <package android:name="com.google.android.apps.chrome"/>
+    <package android:name="org.chromium.chrome"/>
+    <package android:name="org.mozilla.fennec_fdroid"/>
+    <package android:name="org.mozilla.firefox"/>
+    <package android:name="org.mozilla.firefox_beta"/>
+    <package android:name="org.mozilla.fennec_aurora"/>
+    <package android:name="org.mozilla.klar"/>
+    <package android:name="org.mozilla.focus"/>
+    <intent>
+      <action android:name="android.media.action.IMAGE_CAPTURE"/>
+    </intent>
+    <intent>
+      <action android:name="android.intent.action.VIEW"/>
+      <data android:scheme="https"/>
+    </intent>
+  </queries>
+  <permission android:name="net.gsantner.markor.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" android:protectionLevel="0x00000002"/>
+  <uses-permission android:name="net.gsantner.markor.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"/>
+  <application android:theme="@7F120013" android:label="@7F1100A1" android:icon="@7F0800D8" android:name="net.gsantner.markor.ApplicationObject" android:allowBackup="true" android:supportsRtl="true" android:isGame="false" android:extractNativeLibs="true" android:fullBackupContent="@7F140000" android:usesCleartextTraffic="true" android:resizeableActivity="true" android:appCategory="7" android:appComponentFactory="androidx.core.app.CoreComponentFactory" android:requestLegacyExternalStorage="true" android:dataExtractionRules="@7F140000">
+    <meta-data android:name="android.webkit.WebView.MetricsOptOut" android:value="true"/>
+    <activity android:label="@7F1100A1" android:name="net.gsantner.markor.activity.MainActivity" android:exported="true" android:launchMode="1" android:windowSoftInputMode="0x00000011">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+    <activity android:label="@7F110363" android:name="net.gsantner.markor.activity.SettingsActivity" android:parentActivityName="net.gsantner.markor.activity.MainActivity"/>
+    <activity android:label="@7F110284" android:name="net.gsantner.markor.activity.StoragePermissionActivity" android:parentActivityName="net.gsantner.markor.activity.MainActivity"/>
+    <activity android:name="net.gsantner.markor.activity.ActionButtonSettingsActivity" android:parentActivityName="net.gsantner.markor.activity.SettingsActivity">
+      <meta-data android:name="android.support.PARENT_ACTIVITY" android:value=".activity.SettingsActivity"/>
+    </activity>
+    <activity android:name="other.writeily.widget.WrWidgetConfigure" android:exported="true">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/>
+      </intent-filter>
+    </activity>
+    <receiver android:name="other.writeily.widget.WrMarkorWidgetProvider" android:exported="true">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+      </intent-filter>
+      <meta-data android:name="android.appwidget.provider" android:resource="@7F140002"/>
+    </receiver>
+    <service android:name="other.writeily.widget.WrFilesWidgetService" android:permission="android.permission.BIND_REMOTEVIEWS"/>
+    <receiver android:name="net.gsantner.markor.widget.TodoWidgetProvider" android:exported="true">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+      </intent-filter>
+      <meta-data android:name="android.appwidget.provider" android:resource="@7F14000C"/>
+    </receiver>
+    <service android:name="net.gsantner.markor.widget.TodoWidgetService" android:permission="android.permission.BIND_REMOTEVIEWS"/>
+    <provider android:name="androidx.core.content.FileProvider" android:exported="false" android:authorities="net.gsantner.markor.provider" android:grantUriPermissions="true">
+      <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@7F140006"/>
+    </provider>
+    <activity android:label="@7F1103A1" android:icon="@7F0800E5" android:name="net.gsantner.markor.activity.openeditor.OpenEditorTodoActivity" android:enabled="false" android:exported="true" android:noHistory="true">
+      <intent-filter>
+        <category android:name="android.intent.category.LAUNCHER"/>
+        <action android:name="android.intent.action.MAIN"/>
+      </intent-filter>
+    </activity>
+    <activity android:label="@7F11007D" android:name="net.gsantner.markor.activity.IntroActivity"/>
+    <activity android:label="@7F110327" android:icon="@7F0800DF" android:name="net.gsantner.markor.activity.openeditor.OpenEditorQuickNoteActivity" android:enabled="false" android:exported="true" android:noHistory="true">
+      <intent-filter>
+        <category android:name="android.intent.category.LAUNCHER"/>
+        <action android:name="android.intent.action.MAIN"/>
+      </intent-filter>
+    </activity>
+    <activity android:label="@7F110367" android:icon="@7F0800E2" android:name="net.gsantner.markor.activity.openeditor.OpenShareIntoActivity" android:enabled="false" android:exported="true" android:noHistory="true">
+      <intent-filter>
+        <category android:name="android.intent.category.LAUNCHER"/>
+        <action android:name="android.intent.action.MAIN"/>
+      </intent-filter>
+    </activity>
+    <activity android:theme="@android:01030055" android:name="net.gsantner.markor.activity.openeditor.OpenFromShortcutOrWidgetActivity" android:launchMode="0"/>
+    <activity android:theme="@7F120013" android:name="net.gsantner.markor.activity.DocumentActivity" android:exported="true" android:launchMode="0" android:windowSoftInputMode="0x00000011" android:maxRecents="5">
+      <intent-filter>
+        <action android:name="android.intent.action.SEND"/>
+        <action android:name="com.google.android.gm.action.AUTO_SEND"/>
+        <action android:name="com.google.android.gms.actions.CREATE_NOTE"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="com.google.android.voicesearch.SELF_NOTE"/>
+        <data android:mimeType="text/plain"/>
+        <data android:mimeType="text/*"/>
+        <data android:mimeType="*/*"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <action android:name="android.intent.action.EDIT"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:mimeType="text/*"/>
+        <data android:mimeType="text/plain"/>
+        <data android:mimeType="text/plain+md"/>
+        <data android:mimeType="text/markdown"/>
+        <data android:mimeType="text/x-markdown"/>
+        <data android:mimeType="text/htm"/>
+        <data android:mimeType="text/html"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.EDIT"/>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:scheme="content"/>
+        <data android:scheme="file"/>
+        <data android:mimeType="text/*"/>
+        <data android:mimeType="text/plain"/>
+        <data android:mimeType="text/plain+md"/>
+        <data android:mimeType="text/markdown"/>
+        <data android:mimeType="text/x-markdown"/>
+        <data android:mimeType="application/octet-stream"/>
+        <data android:host="*"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.markdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.markdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.markdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.markdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.markdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.markdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.markdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.markdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.markdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.markdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.md"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.md"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.md"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.md"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.md"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.md"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.md"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.md"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.md"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.md"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.jenc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.jenc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.jenc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.jenc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.jenc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.jenc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.jenc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.jenc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.jenc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.jenc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.mdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.mdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.mdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.mdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.mdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.mdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.mdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.mdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.mdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.mdown"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.mdwn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.mdwn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.mdwn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.mdwn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.mdwn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.mdwn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.mdwn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.mdwn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.mdwn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.mdwn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.mkd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.mkd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.mkd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.mkd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.mkd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.mkd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.mkd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.mkd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.mkd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.mkd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.mkdn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.mkdn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.mkdn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.mkdn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.mkdn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.mkdn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.mkdn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.mkdn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.mkdn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.mkdn"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.Rmd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.Rmd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.Rmd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.Rmd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.Rmd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.Rmd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.Rmd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.Rmd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.Rmd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.Rmd"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.text"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.text"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.text"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.text"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.text"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.text"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.text"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.text"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.text"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.text"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.txt"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.txt"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.txt"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.txt"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.txt"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.txt"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.txt"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.txt"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.txt"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.txt"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.taskpaper"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.taskpaper"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.taskpaper"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.taskpaper"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.taskpaper"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.taskpaper"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.taskpaper"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.taskpaper"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.taskpaper"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.taskpaper"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.adoc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.adoc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.adoc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.adoc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.adoc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.adoc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.adoc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.adoc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.adoc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.adoc"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.patch"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.patch"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.patch"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.patch"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.patch"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.patch"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.patch"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.patch"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.patch"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.patch"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.diff"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.diff"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.diff"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.diff"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.diff"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.diff"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.diff"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.diff"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.diff"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.diff"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.ldg"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.ldg"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.ldg"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.ldg"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.ldg"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.ldg"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.ldg"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.ldg"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.ldg"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.ldg"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.ledger"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.ledger"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.ledger"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.ledger"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.ledger"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.ledger"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.ledger"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.ledger"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.ledger"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.ledger"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.org"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.org"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.org"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.org"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.org"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.org"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.org"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.org"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.org"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.org"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.yml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.yml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.yml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.yml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.yml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.yml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.yml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.yml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.yml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.yml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.yaml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.yaml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.yaml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.yaml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.yaml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.yaml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.yaml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.yaml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.yaml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.yaml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.xlf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.xlf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.xlf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.xlf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.xlf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.xlf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.xlf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.xlf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.xlf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.xlf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.toml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.toml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.toml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.toml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.toml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.toml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.toml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.toml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.toml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.toml"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.vcf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.vcf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.vcf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.vcf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.vcf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.vcf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.vcf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.vcf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.vcf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.vcf"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.ics"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.ics"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.ics"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.ics"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.ics"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.ics"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.ics"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.ics"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.ics"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.ics"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.ini"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.ini"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.ini"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.ini"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.ini"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.ini"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.ini"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.ini"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.ini"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.ini"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.json"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.json"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.json"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.json"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.json"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.json"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.json"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.json"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.json"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.json"/>
+        <data android:mimeType="*/*" android:pathPattern=".*.csv"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*.csv"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*.csv"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*.csv"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*.csv"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*.csv"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*.csv"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*.csv"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*.csv"/>
+        <data android:mimeType="*/*" android:pathPattern=".*..*..*..*..*..*..*..*..*..*.csv"/>
+      </intent-filter>
+    </activity>
+    <activity-alias android:label="@7F1100A1" android:name="net.gsantner.markor.AliasDocumentProcessText" android:enabled="false" android:exported="true" android:targetActivity="net.gsantner.markor.activity.DocumentActivity">
+      <intent-filter>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <action android:name="android.intent.action.PROCESS_TEXT"/>
+        <data android:mimeType="text/plain"/>
+        <data android:mimeType="text/*"/>
+      </intent-filter>
+    </activity-alias>
+    <uses-library android:name="androidx.window.extensions" android:required="false"/>
+    <uses-library android:name="androidx.window.sidecar" android:required="false"/>
+    <provider android:name="androidx.startup.InitializationProvider" android:exported="false" android:authorities="net.gsantner.markor.androidx-startup">
+      <meta-data android:name="androidx.emoji2.text.EmojiCompatInitializer" android:value="androidx.startup"/>
+      <meta-data android:name="androidx.lifecycle.ProcessLifecycleInitializer" android:value="androidx.startup"/>
+    </provider>
+  </application>
+</manifest>

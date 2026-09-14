@@ -1,0 +1,510 @@
+package org.schabi.newpipe;
+public class App extends android.app.Application implements coil3.SingletonImageLoader$Factory {
+    public static final org.schabi.newpipe.App$Companion Companion;
+    public static final String TAG;
+    public static org.schabi.newpipe.App instance;
+    public boolean isFirstRun;
+    public boolean notificationsRequested;
+
+    static App()
+    {
+        org.schabi.newpipe.App.Companion = new org.schabi.newpipe.App$Companion();
+        String v0_3 = org.schabi.newpipe.App.toString();
+        v0_3.getClass();
+        org.schabi.newpipe.App.TAG = v0_3;
+        return;
+    }
+
+    public App()
+    {
+        return;
+    }
+
+    public final void attachBaseContext(android.content.Context p54)
+    {
+        super.attachBaseContext(p54);
+        if (!org.acra.ACRA.isACRASenderServiceProcess()) {
+            String v9_3;
+            org.acra.config.CoreConfiguration v1_8 = new org.acra.config.CoreConfigurationBuilder();
+            org.acra.reporter.ErrorReporterImpl v2_66 = org.acra.config.CoreConfigurationBuilder.$$delegatedProperties;
+            v2_66[14].getClass();
+            String v4_0 = v1_8.buildConfigClass$delegate;
+            v4_0.value = androidx.room.Room;
+            String v5_1 = v4_0.this$0;
+            v5_1._defaultsBitField0 = (v5_1._defaultsBitField0 & -16385);
+            String v5_3 = new Class[30];
+            v5_3[0] = String;
+            String v9_5 = Boolean.TYPE;
+            v5_3[1] = v9_5;
+            v5_3[2] = java.util.List;
+            Integer v13_6 = Integer.TYPE;
+            v5_3[3] = v13_6;
+            v5_3[4] = java.util.List;
+            v5_3[5] = java.util.List;
+            v5_3[6] = v9_5;
+            v5_3[7] = v9_5;
+            v5_3[8] = java.util.List;
+            v5_3[9] = v9_5;
+            v5_3[10] = v9_5;
+            v5_3[11] = v9_5;
+            v5_3[12] = java.util.List;
+            v5_3[13] = java.util.List;
+            v5_3[14] = Class;
+            v5_3[15] = String;
+            v5_3[16] = v13_6;
+            v5_3[17] = org.acra.file.Directory;
+            v5_3[18] = Class;
+            v5_3[19] = v9_5;
+            v5_3[20] = java.util.List;
+            v5_3[21] = Class;
+            v5_3[22] = String;
+            v5_3[23] = String;
+            v5_3[24] = org.acra.data.StringFormat;
+            v5_3[25] = v9_5;
+            v5_3[26] = org.acra.plugins.PluginLoader;
+            v5_3[27] = java.util.List;
+            v5_3[28] = v13_6;
+            v5_3[29] = kotlin.jvm.internal.DefaultConstructorMarker;
+            String v5_9 = org.acra.config.CoreConfiguration.getConstructor(v5_3);
+            v2_66[0].getClass();
+            String v7_13 = ((String) v1_8.sharedPreferencesName$delegate.value);
+            v2_66[1].getClass();
+            String v9_2 = ((Boolean) v1_8.includeDropBoxSystemTags$delegate.value);
+            if (v9_2 == null) {
+                v9_3 = 0;
+            } else {
+                v9_3 = v9_2.booleanValue();
+            }
+            Integer v13_4;
+            String v9_4 = Boolean.valueOf(v9_3);
+            v2_66[2].getClass();
+            java.util.List v11_3 = ((java.util.List) v1_8.additionalDropBoxTags$delegate.value);
+            v2_66[3].getClass();
+            Integer v13_3 = ((Integer) v1_8.dropboxCollectionMinutes$delegate.value);
+            if (v13_3 == null) {
+                v13_4 = 0;
+            } else {
+                v13_4 = v13_3.intValue();
+            }
+            Boolean v12_3;
+            Integer v13_5 = Integer.valueOf(v13_4);
+            v2_66[4].getClass();
+            android.content.SharedPreferences v3_2 = ((java.util.List) v1_8.logcatArguments$delegate.value);
+            v2_66[5].getClass();
+            java.util.List v10_2 = ((java.util.List) v1_8.reportContent$delegate.value);
+            v2_66[6].getClass();
+            Boolean v12_2 = ((Boolean) v1_8.deleteUnapprovedReportsOnApplicationStart$delegate.value);
+            if (v12_2 == null) {
+                v12_3 = 0;
+            } else {
+                v12_3 = v12_2.booleanValue();
+            }
+            Boolean v14_3;
+            Boolean v12_4 = Boolean.valueOf(v12_3);
+            v2_66[7].getClass();
+            Boolean v14_2 = ((Boolean) v1_8.alsoReportToAndroidFramework$delegate.value);
+            if (v14_2 == null) {
+                v14_3 = 0;
+            } else {
+                v14_3 = v14_2.booleanValue();
+            }
+            String v6_5;
+            Boolean v14_4 = Boolean.valueOf(v14_3);
+            v2_66[8].getClass();
+            java.util.List v15_2 = ((java.util.List) v1_8.additionalSharedPreferences$delegate.value);
+            v2_66[9].getClass();
+            String v6_4 = ((Boolean) v1_8.logcatFilterByPid$delegate.value);
+            if (v6_4 == null) {
+                v6_5 = 0;
+            } else {
+                v6_5 = v6_4.booleanValue();
+            }
+            int v8_3;
+            String v6_6 = Boolean.valueOf(v6_5);
+            v2_66[10].getClass();
+            int v8_2 = ((Boolean) v1_8.logcatReadNonBlocking$delegate.value);
+            if (v8_2 == 0) {
+                v8_3 = 0;
+            } else {
+                v8_3 = v8_2.booleanValue();
+            }
+            org.acra.reporter.ErrorReporterImpl v2_3;
+            int v8_4 = Boolean.valueOf(v8_3);
+            v2_66[11].getClass();
+            org.acra.plugins.PluginLoader v37_1 = v2_66;
+            org.acra.reporter.ErrorReporterImpl v2_2 = ((Boolean) v1_8.sendReportsInDevMode$delegate.value);
+            if (v2_2 == null) {
+                v2_3 = 0;
+            } else {
+                v2_3 = v2_2.booleanValue();
+            }
+            org.acra.reporter.ErrorReporterImpl v2_17;
+            org.acra.reporter.ErrorReporterImpl v2_4 = Boolean.valueOf(v2_3);
+            v37_1[12].getClass();
+            Boolean v38_1 = v2_4;
+            org.acra.reporter.ErrorReporterImpl v2_7 = ((java.util.List) v1_8.excludeMatchingSharedPreferencesKeys$delegate.value);
+            v37_1[13].getClass();
+            java.util.List v39_1 = v2_7;
+            org.acra.reporter.ErrorReporterImpl v2_10 = ((java.util.List) v1_8.excludeMatchingSettingsKeys$delegate.value);
+            v37_1[14].getClass();
+            String v4_2 = ((Class) v4_0.value);
+            v37_1[15].getClass();
+            java.util.List v40_2 = v2_10;
+            org.acra.reporter.ErrorReporterImpl v2_13 = ((String) v1_8.applicationLogFile$delegate.value);
+            v37_1[16].getClass();
+            String v41_1 = v2_13;
+            org.acra.reporter.ErrorReporterImpl v2_16 = ((Integer) v1_8.applicationLogFileLines$delegate.value);
+            if (v2_16 == null) {
+                v2_17 = 0;
+            } else {
+                v2_17 = v2_16.intValue();
+            }
+            org.acra.reporter.ErrorReporterImpl v2_28;
+            org.acra.reporter.ErrorReporterImpl v2_18 = Integer.valueOf(v2_17);
+            v37_1[17].getClass();
+            Integer v42_1 = v2_18;
+            org.acra.reporter.ErrorReporterImpl v2_21 = ((org.acra.file.Directory) v1_8.applicationLogFileDir$delegate.value);
+            v37_1[18].getClass();
+            org.acra.file.Directory v43_1 = v2_21;
+            org.acra.reporter.ErrorReporterImpl v2_24 = ((Class) v1_8.retryPolicyClass$delegate.value);
+            v37_1[19].getClass();
+            Class v44_1 = v2_24;
+            org.acra.reporter.ErrorReporterImpl v2_27 = ((Boolean) v1_8.stopServicesOnCrash$delegate.value);
+            if (v2_27 == null) {
+                v2_28 = 0;
+            } else {
+                v2_28 = v2_27.booleanValue();
+            }
+            org.acra.reporter.ErrorReporterImpl v2_48;
+            org.acra.reporter.ErrorReporterImpl v2_29 = Boolean.valueOf(v2_28);
+            v37_1[20].getClass();
+            Boolean v45_1 = v2_29;
+            org.acra.reporter.ErrorReporterImpl v2_32 = ((java.util.List) v1_8.attachmentUris$delegate.value);
+            v37_1[21].getClass();
+            java.util.List v46_1 = v2_32;
+            org.acra.reporter.ErrorReporterImpl v2_35 = ((Class) v1_8.attachmentUriProvider$delegate.value);
+            v37_1[22].getClass();
+            Class v47_2 = v2_35;
+            org.acra.reporter.ErrorReporterImpl v2_38 = ((String) v1_8.reportSendSuccessToast$delegate.value);
+            v37_1[23].getClass();
+            String v48_2 = v2_38;
+            org.acra.reporter.ErrorReporterImpl v2_41 = ((String) v1_8.reportSendFailureToast$delegate.value);
+            v37_1[24].getClass();
+            String v49_2 = v2_41;
+            org.acra.reporter.ErrorReporterImpl v2_44 = ((org.acra.data.StringFormat) v1_8.reportFormat$delegate.value);
+            v37_1[25].getClass();
+            org.acra.data.StringFormat v50_2 = v2_44;
+            org.acra.reporter.ErrorReporterImpl v2_47 = ((Boolean) v1_8.parallel$delegate.value);
+            if (v2_47 == null) {
+                v2_48 = 0;
+            } else {
+                v2_48 = v2_47.booleanValue();
+            }
+            org.acra.reporter.ErrorReporterImpl v2_49 = Boolean.valueOf(v2_48);
+            v37_1[26].getClass();
+            Boolean v51_2 = v2_49;
+            org.acra.reporter.ErrorReporterImpl v2_52 = ((org.acra.plugins.PluginLoader) v1_8.pluginLoader$delegate.value);
+            v37_1[27].getClass();
+            org.acra.plugins.PluginLoader v37_3 = v2_52;
+            org.acra.reporter.ErrorReporterImpl v2_55 = ((java.util.List) v1_8.pluginConfigurations$delegate.value);
+            Integer v52_1 = Integer.valueOf(v1_8._defaultsBitField0);
+            org.acra.config.CoreConfiguration v1_4 = new Object[30];
+            v1_4[0] = v7_13;
+            v1_4[1] = v9_4;
+            v1_4[2] = v11_3;
+            v1_4[3] = v13_5;
+            v1_4[4] = v3_2;
+            v1_4[5] = v10_2;
+            v1_4[6] = v12_4;
+            v1_4[7] = v14_4;
+            v1_4[8] = v15_2;
+            v1_4[9] = v6_6;
+            v1_4[10] = v8_4;
+            v1_4[11] = v38_1;
+            v1_4[12] = v39_1;
+            v1_4[13] = v40_2;
+            v1_4[14] = v4_2;
+            v1_4[15] = v41_1;
+            v1_4[16] = v42_1;
+            v1_4[17] = v43_1;
+            v1_4[18] = v44_1;
+            v1_4[19] = v45_1;
+            v1_4[20] = v46_1;
+            v1_4[21] = v47_2;
+            v1_4[22] = v48_2;
+            v1_4[23] = v49_2;
+            v1_4[24] = v50_2;
+            v1_4[25] = v51_2;
+            v1_4[26] = v37_3;
+            v1_4[27] = v2_55;
+            v1_4[28] = v52_1;
+            v1_4[29] = 0;
+            org.acra.config.CoreConfiguration v1_5 = v5_9.newInstance(v1_4);
+            v1_5.getClass();
+            org.acra.config.CoreConfiguration v1_6 = ((org.acra.config.CoreConfiguration) v1_5);
+            org.acra.reporter.ErrorReporterImpl v2_58 = org.acra.ACRA.isACRASenderServiceProcess();
+            if ((org.acra.ACRA.errorReporter instanceof org.acra.reporter.ErrorReporterImpl)) {
+                android.util.Log.w("ACRA", "ACRA#init called more than once. This might have unexpected side effects. Doing this outside of tests is discouraged.");
+                android.content.SharedPreferences v3_13 = org.acra.ACRA.errorReporter;
+                v3_13.getClass();
+                Thread.setDefaultUncaughtExceptionHandler(((org.acra.reporter.ErrorReporterImpl) v3_13).defaultExceptionHandler);
+                android.content.SharedPreferences v3_17 = new org.acra.util.StubCreator$$ExternalSyntheticLambda0();
+                String v5_5 = kotlin.ranges.RangesKt.getClassLoader();
+                String v7_1 = new Class[1];
+                v7_1[0] = org.acra.ErrorReporter;
+                org.acra.ACRA.errorReporter = ((org.acra.ErrorReporter) reflect.Proxy.newProxyInstance(v5_5, v7_1, v3_17));
+            }
+            String v5_6;
+            android.content.SharedPreferences v3_21;
+            if (v1_6.getSharedPreferencesName() == null) {
+                v5_6 = 0;
+                v3_21 = android.preference.PreferenceManager.getDefaultSharedPreferences(this);
+                v3_21.getClass();
+            } else {
+                v5_6 = 0;
+                v3_21 = this.getSharedPreferences(v1_6.getSharedPreferencesName(), 0);
+                v3_21.getClass();
+            }
+            if (v2_58 == null) {
+                try {
+                    int v8_6;
+                    int v36_2 = 1;
+                } catch (Exception) {
+                    v36_2 = 1;
+                    v8_6 = v36_2;
+                    org.acra.reporter.ErrorReporterImpl v2_62;
+                    if (v8_6 == 0) {
+                        v2_62 = "disabled";
+                    } else {
+                        v2_62 = "enabled";
+                    }
+                    android.util.Log.i("ACRA", androidx.compose.ui.node.Owner$-CC.m("ACRA is ", v2_62, " for ", this.getPackageName(), ", initializing..."));
+                    org.acra.reporter.ErrorReporterImpl v2_65 = new org.acra.reporter.ErrorReporterImpl(this, v1_6, v8_6);
+                    org.acra.ACRA.errorReporter = v2_65;
+                    v3_21.registerOnSharedPreferenceChangeListener(v2_65);
+                } catch (Exception) {
+                }
+                v8_6 = v3_21.getBoolean("acra.enable", (v3_21.getBoolean("acra.disable", v5_6) ^ 1));
+            }
+        }
+        return;
+    }
+
+    public final coil3.RealImageLoader newImageLoader(android.content.Context p15)
+    {
+        p15.getClass();
+        okhttp3.Dispatcher v15_2 = new okhttp3.Dispatcher(this);
+        coil3.RealImageLoader v14_4 = this.getSystemService(android.app.ActivityManager);
+        v14_4.getClass();
+        java.util.ArrayList v0_1 = ((coil3.Extras$Builder) v15_2.runningSyncCalls);
+        v0_1.data.put(coil3.request.ImageRequests_androidKt.allowRgb565Key, Boolean.valueOf(((android.app.ActivityManager) v14_4).isLowRamDevice()));
+        coil3.RealImageLoader v14_2 = new coil3.transition.CrossfadeTransition$Factory;
+        v14_2(200);
+        v0_1.data.put(coil3.request.ImageRequests_androidKt.transitionFactoryKey, v14_2);
+        coil3.RealImageLoader v14_3 = new java.util.ArrayList;
+        v14_3();
+        java.util.ArrayList v0_4 = new java.util.ArrayList();
+        java.util.ArrayList v1_4 = new java.util.ArrayList();
+        java.util.ArrayList v2_2 = new java.util.ArrayList();
+        java.util.ArrayList v3_1 = new java.util.ArrayList();
+        kotlin.jvm.internal.ClassReference v4_1 = org.schabi.newpipe.DownloaderImpl.instance.client;
+        v4_1.getClass();
+        v2_2.add(new coil3.ComponentRegistry$Builder$$ExternalSyntheticLambda0(new coil3.network.NetworkFetcher$Factory(new androidx.work.Worker$$ExternalSyntheticLambda0(v4_1, 25)), kotlin.jvm.internal.Reflection.getOrCreateKotlinClass(coil3.Uri), 0));
+        v15_2.runningAsyncCalls = new coil3.ComponentRegistry(coil3.util.UtilsKt.toImmutableList(v14_3), coil3.util.UtilsKt.toImmutableList(v0_4), coil3.util.UtilsKt.toImmutableList(v1_4), coil3.util.UtilsKt.toImmutableList(v2_2), coil3.util.UtilsKt.toImmutableList(v3_1));
+        return v15_2.build();
+    }
+
+    public final void onCreate()
+    {
+        super.onCreate();
+        org.schabi.newpipe.App.instance = this;
+        String v0_62 = android.os.Process.myPid();
+        org.schabi.newpipe.util.image.PreferredImageQuality$Companion v1_6 = ((android.app.ActivityManager) this.getSystemService("activity")).getRunningAppProcesses();
+        if (v1_6 != null) {
+            org.schabi.newpipe.util.image.PreferredImageQuality$Companion v1_0 = v1_6.iterator();
+            while (v1_0.hasNext()) {
+                String v2_27 = ((android.app.ActivityManager$RunningAppProcessInfo) v1_0.next());
+                if ((v2_27.pid == v0_62) && (v2_27.processName.endsWith(":phoenix"))) {
+                    android.util.Log.i(org.schabi.newpipe.App.TAG, "This is a phoenix process! Aborting initialization of App[onCreate]");
+                    return;
+                }
+            }
+        }
+        String v0_56;
+        if (this.getSharedPreferences(androidx.preference.PreferenceManager.getDefaultSharedPreferencesName(this), 0).getInt(this.getString(2131952188), -1) != -1) {
+            v0_56 = 0;
+        } else {
+            v0_56 = 1;
+        }
+        this.isFirstRun = v0_56;
+        String v0 = org.schabi.newpipe.settings.migration.SettingMigrations.sp;
+        org.schabi.newpipe.settings.migration.SettingMigrations.sp = this.getSharedPreferences(androidx.preference.PreferenceManager.getDefaultSharedPreferencesName(this), 0);
+        String v2_25 = this.getString(2131952188);
+        String v5_15 = org.schabi.newpipe.settings.migration.SettingMigrations.sp.getInt(v2_25, 0);
+        org.schabi.newpipe.App.Companion.getClass();
+        if (!org.schabi.newpipe.App$Companion.getInstance().isFirstRun) {
+            if (v5_15 != 8) {
+                String v0_96 = org.schabi.newpipe.settings.migration.SettingMigrations.SETTING_MIGRATIONS;
+                int v6_6 = v0_96.length;
+                String v7_6 = 0;
+                android.net.Uri v8_5 = v5_15;
+                while (v7_6 < v6_6) {
+                    int v9_2 = v0_96[v7_6];
+                    try {
+                        if (v9_2.ints >= v8_5) {
+                            v9_2.migrate(this);
+                            v8_5 = v9_2.objects;
+                        }
+                        v7_6++;
+                    } catch (String v0_100) {
+                        androidx.core.app.NotificationChannelCompat v10_3 = v0_100;
+                        org.schabi.newpipe.settings.migration.SettingMigrations.sp.edit().putInt(v2_25, v8_5).apply();
+                        String v0_105 = new StringBuilder("Migrating preferences from version ");
+                        v0_105.append(v5_15);
+                        v0_105.append(" to 8. Error at ");
+                        v0_105.append(v8_5);
+                        v0_105.append(" => ");
+                        v0_105.append((v8_5 + 1));
+                        int v9_4 = new org.schabi.newpipe.error.ErrorInfo(v10_3, org.schabi.newpipe.error.UserAction.PREFERENCES_MIGRATION, v0_105.toString(), 0, 24);
+                        org.schabi.newpipe.error.ErrorUtil.Companion.getClass();
+                        org.schabi.newpipe.error.ErrorUtil$Companion.openActivity(this, v9_4);
+                    }
+                }
+                org.schabi.newpipe.settings.migration.SettingMigrations.sp.edit().putInt(v2_25, v8_5).apply();
+            }
+        } else {
+            org.schabi.newpipe.settings.migration.SettingMigrations.sp.edit().putInt(v2_25, 8).apply();
+        }
+        int v6_3;
+        androidx.preference.PreferenceManager.setDefaultValues(this, 2132148234);
+        androidx.preference.PreferenceManager.setDefaultValues(this, 2132148239);
+        androidx.preference.PreferenceManager.setDefaultValues(this, 2132148230);
+        androidx.preference.PreferenceManager.setDefaultValues(this, 2132148225);
+        androidx.preference.PreferenceManager.setDefaultValues(this, 2132148232);
+        androidx.preference.PreferenceManager.setDefaultValues(this, 2132148228);
+        androidx.preference.PreferenceManager.setDefaultValues(this, 2132148237);
+        androidx.preference.PreferenceManager.setDefaultValues(this, 2132148238);
+        androidx.preference.PreferenceManager.setDefaultValues(this, 2132148229);
+        androidx.preference.PreferenceManager.setDefaultValues(this, 2132148227);
+        okio.Options$Companion.saveDefaultDirectory(this, 2131951900, android.os.Environment.DIRECTORY_MOVIES);
+        okio.Options$Companion.saveDefaultDirectory(this, 2131951894, android.os.Environment.DIRECTORY_MUSIC);
+        String v0_15 = this.getSharedPreferences(androidx.preference.PreferenceManager.getDefaultSharedPreferencesName(this), 0);
+        String v2_3 = this.getString(2131951875);
+        String v5_1 = this.getString(2131951879);
+        if (994 == v0_15.getInt(this.getString(2131952338), 0)) {
+            v6_3 = 0;
+        } else {
+            v6_3 = 1;
+        }
+        if ((v0_15.getInt(v5_1, -1) != 0) || (v0_15.getBoolean(v2_3, 0))) {
+            String v0_17 = 0;
+        } else {
+            v0_17 = 1;
+        }
+        org.schabi.newpipe.App.Companion.getClass();
+        if ((org.schabi.newpipe.App$Companion.getInstance().isFirstRun) || ((v6_3 != 0) && (v0_17 == null))) {
+            okio.Options$Companion.setMediaTunneling(this);
+        }
+        String v0_20 = new org.schabi.newpipe.DownloaderImpl(new okhttp3.OkHttpClient$Builder());
+        org.schabi.newpipe.DownloaderImpl.instance = v0_20;
+        String v2_11 = this.getSharedPreferences(androidx.preference.PreferenceManager.getDefaultSharedPreferencesName(this), 0);
+        org.schabi.newpipe.extractor.services.peertube.PeertubeInstance v4_2 = this.getString(2131952655);
+        v4_2.getClass();
+        v0_20.mCookies.put("recaptcha_cookies", v2_11.getString(v4_2, 0));
+        v0_20.updateYoutubeRestrictedModeCookies(this);
+        String v2_13 = org.schabi.newpipe.util.Localization.getPreferredLocale(this);
+        org.schabi.newpipe.extractor.services.peertube.PeertubeInstance v4_5 = new org.schabi.newpipe.extractor.localization.Localization(v2_13.getLanguage(), v2_13.getCountry());
+        String v2_15 = org.schabi.newpipe.util.Localization.getPreferredContentCountry(this);
+        android.net.Uri v8_0 = new Object[3];
+        v8_0[0] = v0_20;
+        v8_0[1] = v4_5;
+        v8_0[2] = v2_15;
+        org.schabi.newpipe.extractor.utils.JavaScript.d("Initializing with downloader={}, localization={}, country={}", v8_0);
+        us.shandian.giga.util.Utility.downloader = v0_20;
+        us.shandian.giga.util.Utility.preferredLocalization = v4_5;
+        us.shandian.giga.util.Utility.preferredContentCountry = v2_15;
+        org.schabi.newpipe.util.Localization.initPrettyTime(org.schabi.newpipe.util.Localization.resolvePrettyTime());
+        String v2 = com.livefront.bridge.Bridge;
+        com.livefront.bridge.Bridge.sDelegate = new com.livefront.bridge.BridgeDelegate(this, com.livefront.bridge.Bridge.sExecutorService, new okio.ByteString$Companion(11));
+        String v0_25 = this.getExternalCacheDir();
+        if (v0_25 != null) {
+            org.schabi.newpipe.util.StateSaver.cacheDirPath = v0_25.getAbsolutePath();
+        }
+        if (android.text.TextUtils.isEmpty(org.schabi.newpipe.util.StateSaver.cacheDirPath)) {
+            org.schabi.newpipe.util.StateSaver.cacheDirPath = this.getCacheDir().getAbsolutePath();
+        }
+        String v2_19 = new androidx.core.app.NotificationChannelCompat(this.getString(2131952517), 2);
+        v2_19.mName = this.getString(2131952518);
+        v2_19.mDescription = this.getString(2131952516);
+        org.schabi.newpipe.extractor.services.peertube.PeertubeInstance v4_10 = new androidx.core.app.NotificationChannelCompat(this.getString(2131951679), 2);
+        v4_10.mName = this.getString(2131951680);
+        v4_10.mDescription = this.getString(2131951678);
+        String v5_7 = new androidx.core.app.NotificationChannelCompat(this.getString(2131952124), 4);
+        v5_7.mName = this.getString(2131952125);
+        v5_7.mDescription = this.getString(2131952123);
+        androidx.core.app.NotificationChannelCompat v10_1 = new androidx.core.app.NotificationChannelCompat(this.getString(2131951972), 2);
+        v10_1.mName = this.getString(2131951973);
+        v10_1.mDescription = this.getString(2131951971);
+        androidx.core.app.NotificationChannelCompat v11_1 = new androidx.core.app.NotificationChannelCompat(this.getString(2131952846), 3);
+        v11_1.mName = this.getString(2131952847);
+        v11_1.mDescription = this.getString(2131952845);
+        String v0_66 = new androidx.core.app.NotificationChannelCompat[5];
+        v0_66[0] = v2_19;
+        v0_66[1] = v4_10;
+        v0_66[2] = v5_7;
+        v0_66[3] = v10_1;
+        v0_66[4] = v11_1;
+        String v0_67 = org.jsoup.Jsoup.listOf(v0_66);
+        String v2_21 = new androidx.core.app.NotificationManagerCompat(this);
+        if ((android.os.Build$VERSION.SDK_INT >= 26) && (!v0_67.isEmpty())) {
+            org.schabi.newpipe.extractor.services.peertube.PeertubeService v3_5 = new java.util.ArrayList(v0_67.size());
+            String v0_68 = v0_67.iterator();
+            while (v0_68.hasNext()) {
+                String v7_5;
+                String v5_13 = ((androidx.core.app.NotificationChannelCompat) v0_68.next());
+                if (android.os.Build$VERSION.SDK_INT >= 26) {
+                    v7_5 = androidx.core.app.NotificationChannelCompat$Api26Impl.createNotificationChannel(v5_13.mId, v5_13.mName, v5_13.mImportance);
+                    androidx.core.app.NotificationChannelCompat$Api26Impl.setDescription(v7_5, v5_13.mDescription);
+                    androidx.core.app.NotificationChannelCompat$Api26Impl.setGroup(v7_5);
+                    androidx.core.app.NotificationChannelCompat$Api26Impl.setShowBadge(v7_5);
+                    androidx.core.app.NotificationChannelCompat$Api26Impl.setSound(v7_5, v5_13.mSound, v5_13.mAudioAttributes);
+                    androidx.core.app.NotificationChannelCompat$Api26Impl.enableLights(v7_5);
+                    androidx.core.app.NotificationChannelCompat$Api26Impl.setLightColor(v7_5);
+                    androidx.core.app.NotificationChannelCompat$Api26Impl.setVibrationPattern(v7_5);
+                    androidx.core.app.NotificationChannelCompat$Api26Impl.enableVibration(v7_5);
+                } else {
+                    v5_13.getClass();
+                    v7_5 = 0;
+                }
+                v3_5.add(v7_5);
+            }
+            androidx.core.app.NotificationChannelCompat$Api26Impl.createNotificationChannels(v2_21.mNotificationManager, v3_5);
+        }
+        String v0_70 = org.schabi.newpipe.extractor.ServiceList.SERVICES;
+        v0_70.getClass();
+        String v2_22 = v0_70.iterator();
+        while (v2_22.hasNext()) {
+            if (((org.schabi.newpipe.extractor.StreamingService) v2_22.next()).serviceId == org.schabi.newpipe.extractor.ServiceList.PeerTube.serviceId) {
+                String v0_85 = this.getSharedPreferences(androidx.preference.PreferenceManager.getDefaultSharedPreferencesName(this), 0).getString(this.getString(2131952571), 0);
+                if (v0_85 != null) {
+                    try {
+                        String v0_87 = ((com.grack.nanojson.JsonObject) com.grack.nanojson.JsonParser.object().from(v0_85));
+                    } catch (String v0_88) {
+                        v0_87 = new kotlin.Result$Failure(v0_88);
+                    }
+                    if (kotlin.Result.exceptionOrNull-impl(v0_87) == null) {
+                        String v0_89 = ((com.grack.nanojson.JsonObject) v0_87);
+                        org.schabi.newpipe.extractor.ServiceList.PeerTube.instance = new org.schabi.newpipe.extractor.services.peertube.PeertubeInstance(v0_89.getString("url", 0), v0_89.getString("name", 0));
+                    }
+                }
+            }
+        }
+        String v0_75 = this.getSharedPreferences(androidx.preference.PreferenceManager.getDefaultSharedPreferencesName(this), 0).getString(this.getString(2131952136), this.getString(2131952133));
+        org.schabi.newpipe.util.image.PreferredImageQuality.Companion.getClass();
+        org.schabi.newpipe.util.image.ImageStrategy.preferredImageQuality = org.schabi.newpipe.util.image.PreferredImageQuality$Companion.fromPreferenceKey(this, v0_75);
+        kotlin.math.MathKt.errorHandler = new okio.ByteString$Companion(this);
+        org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor.poTokenProvider = org.schabi.newpipe.util.potoken.PoTokenProviderImpl.INSTANCE;
+        return;
+    }
+}
+

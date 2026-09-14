@@ -1,0 +1,5 @@
+{
+  "facts_kind": "process",
+  "procedure": "1. cargo +1.93.1 tree for the CLI package (target command after the A10 split; today: cargo +1.93.1 tree in the root) and confirm the CLI depends on the public core API plus rendering-only dependencies, with no second ZIP/DEX implementation. 2. Grep CLI sources for zip/DEX table parsing that duplicates core behavior. 3. Build with feature combinations default, no-default-features, manifest, decompile and all-features, then run the shared fixture set and compare facts and diagnostics across combinations. 4. Inspect the actual transitive dependency list (cargo tree -e no-dev) against the declared surface.",
+  "pass_criteria": "CLI contains no duplicated ZIP/DEX business logic; every feature combination produces the same facts and diagnostics for the scenarios it supports; the real transitive dependency graph matches the documented one."
+}
