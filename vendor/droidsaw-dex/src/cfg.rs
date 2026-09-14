@@ -68,7 +68,7 @@ impl Cfg {
                 exception_regions: Vec::new(),
                 addr_to_block: BTreeMap::new(),
             };
-            droidsaw_common::diag::stage_dump("cfg", &cfg);
+            crate::analysis::stage_dump_gated("cfg", &cfg);
             return Ok(cfg);
         }
 
@@ -85,7 +85,7 @@ impl Cfg {
             exception_regions,
             addr_to_block,
         };
-        droidsaw_common::diag::stage_dump("cfg", &cfg);
+        crate::analysis::stage_dump_gated("cfg", &cfg);
         Ok(cfg)
     }
 

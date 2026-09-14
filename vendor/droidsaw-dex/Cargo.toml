@@ -46,6 +46,15 @@ repository = "https://github.com/droidsaw/droidsaw-dex"
 name = "droidsaw_dex"
 path = "src/lib.rs"
 
+# PATCHED (asc, DX-P03): A04 controlled-interface contract tests.
+# `harness = false` is deliberate: the BACK-02 env matrix spawns this
+# binary as a child process and asserts byte-empty stdout/stderr,
+# which the libtest harness cannot provide. No new dependencies.
+[[test]]
+name = "asc_contracts"
+path = "tests/asc_contracts.rs"
+harness = false
+
 [[example]]
 name = "emit_audit"
 path = "examples/emit_audit.rs"

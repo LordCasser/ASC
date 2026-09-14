@@ -474,7 +474,7 @@ impl SsaBody {
             var_counter,
         };
         body.remove_trivial_phis();
-        droidsaw_common::diag::stage_dump("ssa", &body);
+        crate::analysis::stage_dump_gated("ssa", &body);
         Ok(body)
     }
 

@@ -837,7 +837,7 @@ struct StructureCtx<'a> {
 pub fn structure(ssa: &SsaBody, cfg: &Cfg) -> Stmt {
     if cfg.blocks.is_empty() {
         let out = Stmt::Seq(vec![]);
-        droidsaw_common::diag::stage_dump("structure", &out);
+        crate::analysis::stage_dump_gated("structure", &out);
         return out;
     }
 
@@ -856,7 +856,7 @@ pub fn structure(ssa: &SsaBody, cfg: &Cfg) -> Stmt {
 
     let out = structure_region(&mut ctx, cfg.entry, None);
     let out = reconstruct_short_circuit_guards(out);
-    droidsaw_common::diag::stage_dump("structure", &out);
+    crate::analysis::stage_dump_gated("structure", &out);
     out
 }
 

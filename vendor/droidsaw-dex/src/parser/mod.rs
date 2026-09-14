@@ -1240,6 +1240,21 @@ impl<'a> From<&'a DexFile> for ParserSnapshot<'a> {
     reason = "PROOF: two cast classes in this impl block. (1) Narrowing — every `pool.len() as u32` populates `DexError::IndexOob::pool_size`. Per DEX spec §III.0 every pool count is read from a u32 header field (`string_ids_size`, `type_ids_size`, `proto_ids_size`, `field_ids_size`, `method_ids_size`, `class_defs_size`) and bounded by `bound_count` before `Vec::with_capacity`; narrowing usize→u32 is exact for any spec-compliant input. (2) Widening — every `idx.0 as usize` / `header.xxx_off as usize` / `string_data_off as usize` / `pool_idx as usize` is u32→usize; lossless on all 32-bit-and-wider targets (workspace targets 64-bit only). Slice access is guarded by the `.get()` call that follows, so OOB is handled without UB."
 )]
 impl DexFile {
+    /// PATCHED (asc, DX-P03): crate-internal entry used by
+    /// [`crate::analysis::parse_for_analysis`]. Direct exposure of
+    /// `parse_inner` so the checked path bypasses [`Self::parse`]'s
+    /// `droidsaw-common` diag wrapper (`DefaultHasher` +
+    /// `with_input_hash` + `stage_dump`) — the wrapper is what makes
+    /// the plain parse read `DROIDSAW_DUMP` env vars. Behaviour of
+    /// `parse_inner` itself is unchanged.
+    pub(crate) fn parse_view(
+        data: &[u8],
+        emit_support: bool,
+        target: Option<&str>,
+    ) -> Result<Self> {
+        Self::parse_inner(data, emit_support, target)
+    }
+
     /// Parse a DEX file from a byte slice, optionally charging an explicit
     /// resource budget.
     ///
@@ -1283,6 +1298,9 @@ impl DexFile {
     /// encoded arrays, plus the section-walk parse-error side-channel).
     /// Decompilation reads none of them; rasc verifies that on every corpus
     /// APK by diffing `decompile_class` output against the full parse.
+    ///
+    /// PATCHED (asc, DX-P03): legacy entry, not ASC-reachable. The ASC
+    /// core uses [`crate::analysis::parse_for_analysis`].
     pub fn parse_for_decompilation(data: &[u8]) -> Result<Self> {
         Self::parse_inner(data, false, None)
     }
@@ -1291,6 +1309,12 @@ impl DexFile {
     /// Others' class_data / code_item / static-value tables are left empty;
     /// rasc verifies the decompiled output is byte-identical to the full parse
     /// for every class it asks for (see the equivalence sweep in the harness).
+    ///
+    /// PATCHED (asc, DX-P03): **deprecated-by-checked** — kept only until
+    /// A07 rewires `src/apk.rs` onto
+    /// [`crate::analysis::parse_for_analysis`] (which adds explicit
+    /// options, budget, control, structured scope reporting and the
+    /// controlled-mode side-effect guarantees).
     pub fn parse_for_class(data: &[u8], descriptor: &str) -> Result<Self> {
         let scoped = Self::parse_inner(data, false, Some(descriptor))?;
         // Safety net: a descriptor that matches no class would leave every

@@ -67,6 +67,7 @@
 #![warn(unreachable_pub)]
 
 pub mod access_flags;
+pub mod analysis;
 pub mod annotation;
 pub mod api;
 pub mod cfg;
@@ -108,6 +109,16 @@ pub use dex_string::DexString;
 pub use error::DexError;
 pub use parser::DexFile;
 pub use xrefs::{method_key_for_idx, CallSite, FieldKey, InvokeKind, MethodKey, Xrefs};
+
+// PATCHED (asc, DX-P03): re-export the checked analysis entry points so
+// the ASC core decompile adapter can `use droidsaw_dex::analysis::*`
+// (the module path `droidsaw_dex::analysis` remains canonical).
+pub use analysis::{
+    decompile_checked, parse_for_analysis, BackendDiagnostic, BackendError, BackendMetadata,
+    BackendReport, Budget, Completeness, Control, DeclarationKind, DiagnosticCode, EmitOptions,
+    IncompleteReason, InitializerDropReason, MethodOutcome, MethodStatus, ParseOptions, ParseScope,
+    ParsedDex, StaticFieldReport, SuppressionReason,
+};
 
 // Kani proofs for MUTF-8 decode identity are not yet added: the String-returning
 // outer API causes CBMC heap explosion; the inner decode_one_codepoint function

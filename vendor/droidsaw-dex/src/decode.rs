@@ -1587,7 +1587,7 @@ pub fn decode_insns(
         payloads.insert(payload_pc, payload);
     }
 
-    droidsaw_common::diag::stage_dump("decode", &instructions);
+    crate::analysis::stage_dump_gated("decode", &instructions);
     Ok((instructions, payloads, violations))
 }
 

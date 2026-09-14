@@ -1,0 +1,16 @@
+{
+  "package": "droidsaw-dex",
+  "version": "2.0.0",
+  "registry_archive_url": "https://crates.io/api/v1/crates/droidsaw-dex/2.0.0/download",
+  "archive_sha256": "19ebb88232385e3109ca6e0b4d7abb8f98326f5ae6c6a5c887b2c55d53bdca9b",
+  "repository": "https://github.com/droidsaw/droidsaw-dex",
+  "revision": "7ab1497281512d72eb50642bd3323235b141f409",
+  "imported_tree_hash": "c3efaef7580840cfcef8919283057e7955b3751ec228f0158346b50b60b10833",
+  "derived_version": "2.0.0-asc1",
+  "notes": {
+    "archive_sha256_source": "sha256 of the .crate tarball fetched 2026-09-15 from https://static.crates.io/crates/droidsaw-dex/droidsaw-dex-2.0.0.crate (the registry_archive_url above 302-redirects to that static URL). Verified: tar lists droidsaw-dex-2.0.0/ and its src/ tree is byte-identical to this directory except src/parser/mod.rs (DX-P01/DX-P02 patch site).",
+    "revision_source": "Taken from .cargo_vcs_info.json shipped inside the registry archive (packaging-time git sha1 of the upstream repo). Treated as provenance metadata only; no upstream git history was cloned to re-verify it.",
+    "imported_tree_hash_method": "Deterministic hash over the current patched tree: LC_ALL=C sort of `find src tests -type f`, then for each file emit its relative path NUL-terminated followed by raw bytes, piped through sha256. Recompute after every patch series change. Values: upstream-2.0.0 src (53 files, before DX-P01/02) differs from registry only in src/parser/mod.rs; post-DX-P01/02 (A04 base, 53 src files) = fc6ff0e3dba16ca09f6824d12e1e3c3f732b7b414dfc6db183f3b2696249952e; post-DX-P03 (A04 head, 53 src files + tests/asc_contracts.rs) = c3efaef7580840cfcef8919283057e7955b3751ec228f0158346b50b60b10833.",
+    "derived_version_note": "Package rename and final version scheme are A13's call (work name asc-droidsaw-dex); this field records the derivation counter only."
+  }
+}

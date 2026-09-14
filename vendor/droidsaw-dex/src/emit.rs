@@ -5425,7 +5425,7 @@ pub fn emit_method(
         }
         out = fixed.join("\n") + "\n";
 
-        droidsaw_common::diag::stage_dump("emit", &out);
+        crate::analysis::stage_dump_gated("emit", &out);
         return out;
     }
 
@@ -5919,7 +5919,7 @@ pub fn emit_method(
         out = kotlinify_facade_when_inline_return(&out);
     }
 
-    droidsaw_common::diag::stage_dump("emit", &out);
+    crate::analysis::stage_dump_gated("emit", &out);
     out
 }
 

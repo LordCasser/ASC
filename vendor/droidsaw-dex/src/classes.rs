@@ -23,6 +23,15 @@ use crate::types::{self, DexType};
 
 /// Decompile a single class from a DEX file into Java source.
 ///
+/// PATCHED (asc, DX-P03): legacy upstream entry. Reads
+/// `DROIDSAW_DECOMPILE_TRACE` / `DROIDSAW_DEX_EMIT_LINE_COMMENTS` /
+/// `DROIDSAW_PANIC_ON_DECOMPILE_ERR` once at this boundary. **Not
+/// ASC-reachable** — the ASC core uses
+/// [`crate::analysis::decompile_checked`], which passes explicit
+/// [`crate::analysis::EmitOptions`] and never consults the
+/// environment. Kept for the crate's own examples/tools until A07
+/// rewires the last internal callers.
+///
 /// Thin wrapper over the private `decompile_class_impl` passing `None` for the
 /// `TypeToClassDefMap` — single-class callers (e.g. MCP `dex_classes`
 /// subcommand) pay an O(n_classes) linear scan inside the enum
@@ -30,11 +39,18 @@ use crate::types::{self, DexType};
 /// through [`classes_to_decompile`] + [`decompile_class_ext`] which
 /// build the cache once per DEX and thread it through.
 pub fn decompile_class(dex: &DexFile, data: &[u8], class_def: &ClassDefItem) -> String {
-    // S8 hoist: read `DROIDSAW_DECOMPILE_TRACE` once at the API
-    // boundary. Every method decompiled under this call sees the same
-    // trace setting; downstream `decompile_method` no longer re-reads
-    // the env var per call.
-    decompile_class_impl(dex, data, class_def, None, Trace::from_env(), None)
+    // S8 hoist: read the env knobs once at the API boundary. Every
+    // method decompiled under this call sees the same settings;
+    // downstream `decompile_method` no longer re-reads env vars.
+    decompile_class_impl(
+        dex,
+        data,
+        class_def,
+        None,
+        &RunCtx::legacy(),
+        None,
+        None,
+    )
 }
 
 /// Decompile a class with an externally-provided
@@ -44,6 +60,9 @@ pub fn decompile_class(dex: &DexFile, data: &[u8], class_def: &ClassDefItem) -> 
 /// cost where `decompile_class` would otherwise rebuild the census
 /// per class. On a 7000-class production DEX the difference is
 /// minutes vs seconds.
+///
+/// PATCHED (asc, DX-P03): legacy env-reading entry, not ASC-reachable
+/// (see [`decompile_class`]).
 pub fn decompile_class_with_census(
     dex: &DexFile,
     data: &[u8],
@@ -55,21 +74,100 @@ pub fn decompile_class_with_census(
         data,
         class_def,
         None,
-        Trace::from_env(),
+        &RunCtx::legacy(),
         Some(r8_census),
+        None,
     )
+}
+
+/// PATCHED (asc, DX-P03): run-scoped knobs threaded from one API
+/// boundary to every method pipeline stage. The legacy boundaries
+/// (`decompile_class` et al.) fill it from env switches once
+/// (unchanged upstream behaviour); the checked entry
+/// (`crate::analysis::decompile_checked`) fills it from explicit
+/// `EmitOptions` / `Budget` / `Control`, so the deep path below never
+/// reads the environment. `control` / `deadline` add the cooperative
+/// cancellation checkpoints required by BACK-02/CORE-05; they are
+/// `None` on the legacy path, making the checkpoints zero-cost no-ops.
+#[derive(Clone)]
+pub(crate) struct RunCtx {
+    /// Existing `DROIDSAW_DECOMPILE_TRACE` flag.
+    pub(crate) trace: Trace,
+    /// `DROIDSAW_DEX_EMIT_LINE_COMMENTS` flag.
+    pub(crate) line_comments: bool,
+    /// `DROIDSAW_PANIC_ON_DECOMPILE_ERR` flag (debug facility).
+    pub(crate) panic_on_err: bool,
+    /// Cancel token; `None` on the legacy path.
+    pub(crate) control: Option<crate::analysis::Control>,
+    /// Deadline; `None` on the legacy path.
+    pub(crate) deadline: Option<std::time::Instant>,
+}
+
+impl RunCtx {
+    /// Legacy fill: read the three env switches once at an upstream
+    /// API boundary. Behaviour-identical to the pre-DX-P03 code (which
+    /// read them at these same boundaries or inside the pipeline).
+    pub(crate) fn legacy() -> Self {
+        Self {
+            trace: Trace::from_env(),
+            line_comments: std::env::var_os("DROIDSAW_DEX_EMIT_LINE_COMMENTS").is_some(),
+            panic_on_err: std::env::var_os("DROIDSAW_PANIC_ON_DECOMPILE_ERR").is_some(),
+            control: None,
+            deadline: None,
+        }
+    }
+
+    /// Checked fill: explicit options, no env reads.
+    pub(crate) fn checked(
+        emit: &crate::analysis::EmitOptions,
+        budget: &crate::analysis::Budget,
+        control: &crate::analysis::Control,
+    ) -> Self {
+        Self {
+            trace: Trace { enabled: emit.trace },
+            line_comments: emit.line_comments,
+            panic_on_err: emit.panic_on_err,
+            control: Some(control.clone()),
+            deadline: budget.deadline,
+        }
+    }
+
+    /// Stage-boundary checkpoint (BACK-02/CORE-05). Returns the typed
+    /// control abort so pipeline stages can propagate it as an `Err`
+    /// instead of panicking. No-op on the legacy path.
+    pub(crate) fn check(&self) -> crate::error::Result<()> {
+        if let Some(control) = &self.control {
+            if control.is_cancelled() {
+                return Err(DexError::AnalysisControlAbort { deadline: false });
+            }
+        }
+        if let Some(deadline) = self.deadline {
+            if std::time::Instant::now() >= deadline {
+                return Err(DexError::AnalysisControlAbort { deadline: true });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Inner implementation of `decompile_class` with an optional
 /// `TypeToClassDefMap` for O(1) type-to-class_def resolution.
+///
+/// PATCHED (asc, DX-P03): additionally takes a [`RunCtx`] (explicit
+/// knobs + cancellation) and an optional [`crate::analysis::ClassOutcome`]
+/// sink. With `sink = None` the emitted `String` is byte-identical to
+/// the pre-patch behaviour. With a sink the same emit path records
+/// per-method outcomes, dropped static initializers and indeterminate
+/// detectors as structured data — never by scanning the source.
 #[allow(clippy::arithmetic_side_effects, reason = "usize arithmetic on parser-validated class-def fields (instance_field_count + static_field_count) bounded by uleb128 counts capped via bound_count.")]
-fn decompile_class_impl(
+pub(crate) fn decompile_class_impl(
     dex: &DexFile,
     data: &[u8],
     class_def: &ClassDefItem,
     ttm: Option<&TypeToClassDefMap>,
-    trace: Trace,
+    ctx: &RunCtx,
     r8_census_override: Option<&r8_inversion::TrampolineCensus>,
+    mut sink: Option<&mut crate::analysis::ClassOutcome>,
 ) -> String {
     let mut out = String::new();
 
@@ -177,6 +275,26 @@ fn decompile_class_impl(
         .is_indeterminate()
     {
         indeterminate_detectors.insert("is_kotlin_sealed_class_subclass");
+    }
+
+    // PATCHED (asc, DX-P03): surface the Indeterminate-detector set as a
+    // structured diagnostic for the checked entry, instead of forcing
+    // consumers to scrape the `// DROIDSAW_INDETERMINATE` banner out of
+    // the source. The banner itself still lands in the source below
+    // (unchanged behaviour).
+    if let Some(out) = sink.as_deref_mut() {
+        if !indeterminate_detectors.is_empty() {
+            let names: Vec<&str> = indeterminate_detectors.iter().copied().collect();
+            out.diagnostics.push(crate::analysis::BackendDiagnostic {
+                code: crate::analysis::DiagnosticCode::DetectorIndeterminate,
+                message: format!(
+                    "rendering detectors refused to answer: {}",
+                    names.join(", ")
+                ),
+                method_idx: None,
+                field_idx: None,
+            });
+        }
     }
 
     // Source file comment. Suppressed in facade and data-class mode:
@@ -502,6 +620,7 @@ fn decompile_class_impl(
                 &clinit_assigned_fields,
                 &non_clinit_assigned_static_fields,
                 &enum_ctx,
+                &mut sink,
             );
             emit_fields(
                 &mut out,
@@ -512,6 +631,7 @@ fn decompile_class_impl(
                 &clinit_assigned_fields,
                 &non_clinit_assigned_static_fields,
                 &enum_ctx,
+                &mut None,
             );
         }
 
@@ -526,8 +646,10 @@ fn decompile_class_impl(
             &enum_ctx,
             ttm,
             is_kt_facade,
-            trace,
+            ctx,
             r8_census,
+            &mut sink,
+            true,
         );
         emit_methods(
             &mut out,
@@ -539,8 +661,10 @@ fn decompile_class_impl(
             &enum_ctx,
             ttm,
             is_kt_facade,
-            trace,
+            ctx,
             r8_census,
+            &mut sink,
+            false,
         );
 
         // Throws cascade: if any method in this class ran the
@@ -697,7 +821,7 @@ fn parse_static_values(data: &[u8], off: u32) -> Vec<EncodedValue> {
 }
 
 /// Render an EncodedValue as a Java literal.
-fn encoded_value_to_java(dex: &DexFile, v: &EncodedValue) -> Option<String> {
+pub(crate) fn encoded_value_to_java(dex: &DexFile, v: &EncodedValue) -> Option<String> {
     match v {
         EncodedValue::Int(n) => Some(format!("{n}")),
         EncodedValue::Long(n) => Some(format!("{n}L")),
@@ -908,6 +1032,13 @@ fn emit_fields(
     clinit_assigned: &BTreeSet<u32>,
     non_clinit_assigned: &BTreeSet<u32>,
     enum_ctx: &EnumCtx,
+    // PATCHED (asc, DX-P03): static-field report sink. `None` on the
+    // legacy path (and for the instance-field call). Records
+    // per-field encoded-value presence, whether the declaration
+    // carried an initializer, and — when an encoded value exists but
+    // was not reflected — the drop reason. This is the G02
+    // defect-as-data surface; the emitted text is unchanged.
+    report: &mut Option<&mut crate::analysis::ClassOutcome>,
 ) {
     for (i, ef) in fields.iter().enumerate() {
         // Row 1 (v2 matrix): suppress `$VALUES` on enum classes.
@@ -960,6 +1091,14 @@ fn emit_fields(
             // assigned by the inlining method body at runtime, and the
             // plain-decl shape ("static TYPE NAME;") leaves the slot
             // open for that assignment.
+            //
+            // PATCHED (asc, DX-P03): capture the explicit encoded value
+            // once so the report below can distinguish "encoded value
+            // exists but unrenderable" from "slot elided", mirroring
+            // exactly what this emitter branch consults.
+            let encoded_entry = if is_static { static_values.get(i) } else { None };
+            let explicit_init = encoded_entry.and_then(|ev| encoded_value_to_java(dex, ev));
+            let mut initializer_emitted = false;
             if is_final && is_static && !final_inlined {
                 // A field assigned by <clinit> must NOT carry a
                 // declaration initializer — javac rejects the double-
@@ -979,22 +1118,116 @@ fn emit_fields(
                 let lit = if is_clinit_assigned {
                     None
                 } else {
-                    let explicit_init = static_values
-                        .get(i)
-                        .and_then(|ev| encoded_value_to_java(dex, ev));
-                    explicit_init.or_else(|| type_default_literal(&ty))
+                    explicit_init.clone().or_else(|| type_default_literal(&ty))
                 };
                 if let Some(lit) = lit {
                     let _ = writeln!(out, "    {access} {ty} {name} = {lit};");
+                    initializer_emitted = true;
+                    if let Some(rep) = &mut *report {
+                        let rep = &mut rep.static_fields;
+                        push_static_field_report(
+                            rep,
+                            dex,
+                            ef,
+                            field,
+                            explicit_init.clone(),
+                            initializer_emitted,
+                            drop_reason_for(
+                                is_final,
+                                final_inlined,
+                                is_clinit_assigned,
+                                encoded_entry,
+                                &explicit_init,
+                            ),
+                        );
+                    }
                     continue;
                 }
             }
             let _ = writeln!(out, "    {access} {ty} {name};");
+            if let Some(rep) = &mut *report {
+                let rep = &mut rep.static_fields;
+                push_static_field_report(
+                    rep,
+                    dex,
+                    ef,
+                    field,
+                    explicit_init.clone(),
+                    initializer_emitted,
+                    drop_reason_for(
+                        is_final,
+                        final_inlined,
+                        clinit_assigned.contains(&ef.field_idx.0),
+                        encoded_entry,
+                        &explicit_init,
+                    ),
+                );
+            }
         }
     }
     if !fields.is_empty() {
         out.push('\n');
     }
+}
+
+/// PATCHED (asc, DX-P03): classify why an existing encoded value was
+/// not reflected in the declaration, mirroring the emitter's own
+/// branch order. `None` means the value was used (or no encoded value
+/// exists). Kept as a helper so the recorded reason cannot drift from
+/// the emit logic above.
+fn drop_reason_for(
+    is_final: bool,
+    final_inlined: bool,
+    is_clinit_assigned: bool,
+    encoded_entry: Option<&EncodedValue>,
+    explicit_init: &Option<String>,
+) -> Option<crate::analysis::InitializerDropReason> {
+    use crate::analysis::InitializerDropReason;
+    // No encoded entry → nothing was dropped.
+    encoded_entry?;
+    if !is_final {
+        return Some(InitializerDropReason::NonFinalStatic);
+    }
+    if final_inlined {
+        return Some(InitializerDropReason::R8InlinedAssignment);
+    }
+    if is_clinit_assigned {
+        return Some(InitializerDropReason::AssignedInClinit);
+    }
+    if explicit_init.is_none() {
+        return Some(InitializerDropReason::UnrenderableValue);
+    }
+    None
+}
+
+/// PATCHED (asc, DX-P03): append one `StaticFieldReport`. Positional
+/// encoded-array indexing matches the emitter's own indexing above
+/// (identity is `field_idx`, so enum-constant-filtered slices stay
+/// diagnosable even where the positional view is ambiguous).
+#[allow(clippy::too_many_arguments, reason = "single internal call site; a builder struct would not reduce coupling here")]
+fn push_static_field_report(
+    rep: &mut Vec<crate::analysis::StaticFieldReport>,
+    dex: &DexFile,
+    ef: &decode::EncodedField,
+    field: &crate::ids::FieldIdItem,
+    encoded_value_java: Option<String>,
+    initializer_emitted: bool,
+    drop_reason: Option<crate::analysis::InitializerDropReason>,
+) {
+    let type_descriptor = dex
+        .get_type_descriptor(field.type_idx)
+        .unwrap_or("?")
+        .to_string();
+    let name = dex.get_string(field.name_idx).unwrap_or("?").to_string();
+    rep.push(crate::analysis::StaticFieldReport {
+        field_idx: ef.field_idx.0,
+        name,
+        type_descriptor,
+        access_flags: ef.access_flags,
+        encoded_value_java,
+        initializer_emitted,
+        drop_reason,
+    });
 }
 
 /// Type-zero Java literal for use as the default initializer on a
@@ -1030,14 +1263,50 @@ fn emit_methods(
     enum_ctx: &EnumCtx,
     ttm: Option<&TypeToClassDefMap>,
     is_kt_facade: bool,
-    trace: Trace,
+    ctx: &RunCtx,
     r8_census: &r8_inversion::TrampolineCensus,
+    // PATCHED (asc, DX-P03): per-class outcome sink; `None` on the
+    // legacy path. Records one MethodOutcome per method, classified
+    // at the exact branch that decides its fate — never by inspecting
+    // the emitted text.
+    sink: &mut Option<&mut crate::analysis::ClassOutcome>,
+    is_direct: bool,
 ) {
     for em in methods {
+        // PATCHED (asc, DX-P03): resolve the raw name once for the
+        // outcome record (and diagnose the `?` fallback).
+        #[allow(clippy::as_conversions, reason = "PROOF: widen u32→usize; method_idx.0 bounded < dex.methods.len() by parser validation of method_ids pool.")]
+        let raw_name = dex
+            .methods
+            .get(em.method_idx.0 as usize)
+            .and_then(|m| dex.get_string(m.name_idx).ok())
+            .unwrap_or("?")
+            .to_string();
+        if raw_name == "?" {
+            if let Some(s) = &mut *sink {
+                s.diagnostics.push(crate::analysis::BackendDiagnostic {
+                    code: crate::analysis::DiagnosticCode::UnresolvedName,
+                    message: "method_ids name lookup failed; `?` placeholder recorded".to_string(),
+                    method_idx: Some(em.method_idx.0),
+                    field_idx: None,
+                });
+            }
+        }
+
         // Rows 2-6 (v2 matrix): `$values()`, synthetic bridge ctor,
         // `values()`, `valueOf(String)`, `<clinit>` if its body is a pure
         // enum-const-population. Bail-not-suppress on any deviation.
         if enum_suppress::is_suppressed_method(enum_ctx, dex, data, em, ttm) {
+            if let Some(s) = &mut *sink {
+                s.method_outcomes.push(crate::analysis::MethodOutcome {
+                    method_idx: em.method_idx.0,
+                    name: raw_name,
+                    is_direct,
+                    status: crate::analysis::MethodStatus::Suppressed {
+                        reason: crate::analysis::SuppressionReason::EnumSyntheticMethod,
+                    },
+                });
+            }
             continue;
         }
 
@@ -1049,26 +1318,70 @@ fn emit_methods(
         // when the facade has no instance state), but the guard is
         // defensive against compiler-version drift and against
         // top-level-property facades that may emit a `<clinit>`.
-        if is_kt_facade {
-            #[allow(clippy::as_conversions, reason = "PROOF: widen u32→usize; method_idx.0 bounded < dex.methods.len() by parser validation of method_ids pool.")]
-            if let Some(name) = dex
-                .methods
-                .get(em.method_idx.0 as usize)
-                .and_then(|m| dex.get_string(m.name_idx).ok())
-            {
-                if name == "<init>" || name == "<clinit>" {
-                    continue;
-                }
+        if is_kt_facade && (raw_name == "<init>" || raw_name == "<clinit>") {
+            if let Some(s) = &mut *sink {
+                s.method_outcomes.push(crate::analysis::MethodOutcome {
+                    method_idx: em.method_idx.0,
+                    name: raw_name,
+                    is_direct,
+                    status: crate::analysis::MethodStatus::Suppressed {
+                        reason: crate::analysis::SuppressionReason::KotlinFacadeSynthetic,
+                    },
+                });
             }
+            continue;
         }
 
         if em.code_off == 0 {
             // Abstract or native method
             emit_abstract_method(out, dex, em);
+            if let Some(s) = &mut *sink {
+                let kind = if em.access_flags & 0x0400 != 0 {
+                    crate::analysis::DeclarationKind::Abstract
+                } else if em.access_flags & 0x0100 != 0 {
+                    crate::analysis::DeclarationKind::Native
+                } else {
+                    crate::analysis::DeclarationKind::NoCode
+                };
+                s.method_outcomes.push(crate::analysis::MethodOutcome {
+                    method_idx: em.method_idx.0,
+                    name: raw_name,
+                    is_direct,
+                    status: crate::analysis::MethodStatus::DeclarationOnly { kind },
+                });
+            }
             continue;
         }
 
-        match decompile_method(dex, data, em, class_def, imports, is_kt_facade, trace, r8_census) {
+        // PATCHED (asc, DX-P03): per-method control checkpoint
+        // (BACK-02/CORE-05). No-op on the legacy path.
+        if let Err(err) = ctx.check() {
+            if let Some(s) = &mut *sink {
+                s.method_outcomes.push(crate::analysis::MethodOutcome {
+                    method_idx: em.method_idx.0,
+                    name: raw_name,
+                    is_direct,
+                    status: crate::analysis::MethodStatus::Cancelled,
+                });
+            }
+            let prefix = if is_kt_facade { "" } else { "    " };
+            let _ = writeln!(out, "{prefix}// Failed to decompile: {err}");
+            out.push('\n');
+            continue;
+        }
+
+        let mut rec = crate::analysis::MethodRecord::default();
+        match decompile_method(
+            dex,
+            data,
+            em,
+            class_def,
+            imports,
+            is_kt_facade,
+            ctx,
+            r8_census,
+            if sink.is_some() { Some(&mut rec) } else { None },
+        ) {
             Ok(source) => {
                 // Row 7 (v2 matrix): in an enum ctor, strip the implicit
                 // `super(name, ordinal)` call — javac re-inserts it
@@ -1089,11 +1402,54 @@ fn emit_methods(
                     }
                     out.push('\n');
                 }
+                if let Some(s) = &mut *sink {
+                    let status = if rec.unrecognized.is_empty() {
+                        crate::analysis::MethodStatus::Emitted
+                    } else {
+                        let regions = rec.unrecognized.len();
+                        let kinds: Vec<&str> =
+                            rec.unrecognized.iter().map(|(_, k)| *k).collect();
+                        crate::analysis::MethodStatus::Unsupported {
+                            regions,
+                            detail: kinds.join(","),
+                        }
+                    };
+                    s.method_outcomes.push(crate::analysis::MethodOutcome {
+                        method_idx: em.method_idx.0,
+                        name: raw_name,
+                        is_direct,
+                        status,
+                    });
+                    s.diagnostics.extend(rec.diagnostics);
+                }
             }
             Err(e) => {
                 let prefix = if is_kt_facade { "" } else { "    " };
                 let _ = writeln!(out, "{prefix}// Failed to decompile: {e}");
                 out.push('\n');
+                if let Some(s) = &mut *sink {
+                    let cancelled = matches!(e, DexError::AnalysisControlAbort { .. });
+                    let status = if cancelled {
+                        crate::analysis::MethodStatus::Cancelled
+                    } else {
+                        crate::analysis::MethodStatus::Failed { detail: e.to_string() }
+                    };
+                    s.method_outcomes.push(crate::analysis::MethodOutcome {
+                        method_idx: em.method_idx.0,
+                        name: raw_name,
+                        is_direct,
+                        status,
+                    });
+                    s.diagnostics.extend(rec.diagnostics);
+                    if !cancelled {
+                        s.diagnostics.push(crate::analysis::BackendDiagnostic {
+                            code: crate::analysis::DiagnosticCode::MethodFailed,
+                            message: e.to_string(),
+                            method_idx: Some(em.method_idx.0),
+                            field_idx: None,
+                        });
+                    }
+                }
             }
         }
     }
@@ -1152,16 +1508,24 @@ fn build_param_string(dex: &DexFile, proto: &crate::ids::ProtoIdItem) -> String 
     }
 }
 
-/// Env-gated debug facility: when `DROIDSAW_PANIC_ON_DECOMPILE_ERR` is set,
-/// promote typed pipeline errors at a specific stage to `panic!()` so the
-/// panic-hook + diag-wire + triage-promote machinery captures a full
-/// diagnostic bundle per-failure. Production path (env unset, the default)
-/// is a no-op.
-fn maybe_panic_on_err<E: std::fmt::Display>(class: &str, method: &str, stage: &str, err: &E) {
-    if std::env::var_os("DROIDSAW_PANIC_ON_DECOMPILE_ERR").is_some() {
+/// Env-gated debug facility: when enabled, promote typed pipeline errors at
+/// a specific stage to `panic!()` so the panic-hook + diag-wire +
+/// triage-promote machinery captures a full diagnostic bundle per-failure.
+/// PATCHED (asc, DX-P03): the switch is now an explicit `RunCtx` knob
+/// (`DROIDSAW_PANIC_ON_DECOMPILE_ERR` is read once at the legacy API
+/// boundaries; the checked entry passes `false`), so the deep pipeline
+/// never reads the environment. Production paths (knob off) are no-ops.
+fn maybe_panic_on_err<E: std::fmt::Display>(
+    enabled: bool,
+    class: &str,
+    method: &str,
+    stage: &str,
+    err: &E,
+) {
+    if enabled {
         #[allow(
             clippy::panic,
-            reason = "env-gated debug facility; never reached when DROIDSAW_PANIC_ON_DECOMPILE_ERR is unset (production default)"
+            reason = "debug facility; never reached when the knob is off (checked entry and production default)"
         )]
         {
             panic!("dex-decompile-panic-on-err: class={class} method={method} stage={stage} err={err}");
@@ -1324,7 +1688,7 @@ fn read_proc_rss_kb() -> Option<u64> {
 )]
 #[allow(
     clippy::too_many_arguments,
-    reason = "8 params: each is explicit context threaded from decompile_class_impl. r8_census was added to support the R8 inversion pass's repetition + helper-body verification gates. Bundling into a ctx struct has larger cost than value — every call site already has the right locals in scope, and the recogniser API surface keeps cross-method state explicit."
+    reason = "9 params: each is explicit context threaded from decompile_class_impl. r8_census was added to support the R8 inversion pass's repetition + helper-body verification gates. Bundling into a ctx struct has larger cost than value — every call site already has the right locals in scope, and the recogniser API surface keeps cross-method state explicit."
 )]
 fn decompile_method(
     dex: &DexFile,
@@ -1333,8 +1697,14 @@ fn decompile_method(
     class_def: &ClassDefItem,
     imports: &mut BTreeSet<String>,
     is_kt_facade: bool,
-    trace: Trace,
+    // PATCHED (asc, DX-P03): explicit knobs + control checkpoints
+    // replace the per-call env reads (trace hoist, line comments,
+    // panic-on-err). The legacy boundaries fill this from env once.
+    rctx: &RunCtx,
     r8_census: &r8_inversion::TrampolineCensus,
+    // PATCHED (asc, DX-P03): per-method record for the checked entry
+    // (unrecognized regions + name/type fallback diagnostics).
+    mut rec: Option<&mut crate::analysis::MethodRecord>,
 ) -> Result<String, DexError> {
     let class_desc = dex.get_type_descriptor(class_def.class_idx).unwrap_or("L?;");
     let method_name = dex
@@ -1342,6 +1712,17 @@ fn decompile_method(
         .get(em.method_idx.0 as usize)
         .and_then(|m| dex.get_string(m.name_idx).ok())
         .unwrap_or("?");
+    if method_name == "?" {
+        if let Some(r) = &mut rec {
+            r.diagnostics.push(crate::analysis::BackendDiagnostic {
+                code: crate::analysis::DiagnosticCode::UnresolvedName,
+                message: "method name lookup failed; `?` placeholder in output".to_string(),
+                method_idx: Some(em.method_idx.0),
+                field_idx: None,
+            });
+        }
+    }
+    let trace = rctx.trace;
 
     let trace_step = |label: &str| {
         if trace.enabled {
@@ -1361,31 +1742,40 @@ fn decompile_method(
     };
 
     trace_step("enter");
+    // PATCHED (asc, DX-P03): cooperative stage checkpoints. Each `?`
+    // below can additionally surface `AnalysisControlAbort`; the
+    // checkpoints are no-ops on the legacy path (`ctx.control` and
+    // `ctx.deadline` both `None`).
     let code = decode::parse_code_item(data, em.code_off).inspect_err(|e| {
-        maybe_panic_on_err(class_desc, method_name, "parse", e);
+        maybe_panic_on_err(rctx.panic_on_err, class_desc, method_name, "parse", e);
     })?;
+    rctx.check()?;
     trace_step("after decode::parse_code_item");
     let cfg = Cfg::build(&code).inspect_err(|e| {
-        maybe_panic_on_err(class_desc, method_name, "cfg", e);
+        maybe_panic_on_err(rctx.panic_on_err, class_desc, method_name, "cfg", e);
     })?;
+    rctx.check()?;
     trace_step("after Cfg::build");
     let mut ssa = SsaBody::build(&code, &cfg).map_err(|e| {
         // SsaError → DexError via existing From impl in error.rs.
         let de: DexError = e;
-        maybe_panic_on_err(class_desc, method_name, "ssa", &de);
+        maybe_panic_on_err(rctx.panic_on_err, class_desc, method_name, "ssa", &de);
         de
     })?;
+    rctx.check()?;
     trace_step("after SsaBody::build");
 
     let is_static = em.access_flags & 0x0008 != 0;
     let mut env = types::infer_types(dex, em.method_idx, &ssa, &code, &cfg, is_static);
     trace_step("after types::infer_types");
     optimize::optimize(&mut ssa, &mut env, dex);
+    rctx.check()?;
     trace_step("after optimize::optimize");
 
     let mut stmt = structure::structure(&ssa, &cfg);
     trace_step("after structure::structure");
     stmt = structure::wrap_try_catch(stmt, &cfg, &ssa);
+    rctx.check()?;
     trace_step("after structure::wrap_try_catch");
     // Drop CFG early. After `wrap_try_catch`, the CFG is not referenced
     // anywhere downstream — `sugar::desugar`, the param/debug-info passes,
@@ -1404,7 +1794,42 @@ fn decompile_method(
     );
     trace_step("after r8_inversion::apply");
     sugar::desugar(&mut stmt, dex, &env, class_def.class_idx);
+    rctx.check()?;
     trace_step("after sugar::desugar");
+
+    // PATCHED (asc, DX-P03): record real (non-sentinel) unrecognized
+    // regions from the statement tree into the method record, reusing
+    // the diag walker. Sentinel-tagged regions (closest Some + distance
+    // 0, e.g. coroutine state machines) are recognized shapes and do
+    // not count, mirroring `diag::collect_unrecognized_findings`. This
+    // is what lets the checked entry classify a method as `Unsupported`
+    // structurally instead of scraping `// region #N:` comments out of
+    // the emitted text.
+    if let Some(r) = &mut rec {
+        let mut regions: Vec<(u32, &'static str)> = Vec::new();
+        crate::diag::walk_unrecognized(&stmt, &mut |reason, block| {
+            use droidsaw_common::signature::UnrecognizedReason;
+            let kind: Option<&'static str> = match reason {
+                UnrecognizedReason::NoSignatureMatch {
+                    closest: Some(_),
+                    distance: 0,
+                } => None, // recognized tagged region
+                UnrecognizedReason::NoSignatureMatch { closest: None, .. } => {
+                    Some("no-near-miss")
+                }
+                UnrecognizedReason::NoSignatureMatch { .. } => Some("near-miss"),
+                UnrecognizedReason::AmbiguousSignature { .. } => Some("ambiguous"),
+                UnrecognizedReason::StructurerInternalLimit { .. } => Some("structurer-limit"),
+                UnrecognizedReason::DetectorIndeterminate { .. } => {
+                    Some("detector-indeterminate")
+                }
+            };
+            if let Some(k) = kind {
+                regions.push((block.0, k));
+            }
+        });
+        r.unrecognized = regions;
+    }
 
     let method = dex
         .methods
@@ -1473,8 +1898,18 @@ fn decompile_method(
         }
         result
     };
-    let return_type = dex
-        .get_type_descriptor(proto.return_type_idx)
+    let return_type_res = dex.get_type_descriptor(proto.return_type_idx);
+    if return_type_res.is_err() {
+        if let Some(r) = &mut rec {
+            r.diagnostics.push(crate::analysis::BackendDiagnostic {
+                code: crate::analysis::DiagnosticCode::UnresolvedType,
+                message: "return-type descriptor lookup failed; `void` assumed".to_string(),
+                method_idx: Some(em.method_idx.0),
+                field_idx: None,
+            });
+        }
+    }
+    let return_type = return_type_res
         .map(DexType::from_descriptor)
         .unwrap_or(DexType::Void);
     let raw_name = dex.get_string(method.name_idx).unwrap_or("?");
@@ -1587,11 +2022,13 @@ fn decompile_method(
                 }
             }
         }
-        // Opt-in line-number annotations. Gated on the same env
-        // convention as other DROIDSAW_DEX_* emit flags. Default off
-        // keeps goldens byte-stable; RE consumers flip the flag for
-        // stack-trace-correlation output.
-        if std::env::var_os("DROIDSAW_DEX_EMIT_LINE_COMMENTS").is_some() {
+        // Opt-in line-number annotations. PATCHED (asc, DX-P03): gated
+        // on the explicit `EmitOptions::line_comments` knob threaded
+        // through `RunCtx` instead of the `DROIDSAW_DEX_EMIT_LINE_COMMENTS`
+        // env read (the legacy boundaries snapshot that env switch once
+        // per run). Default off keeps goldens byte-stable; RE consumers
+        // flip the flag for stack-trace-correlation output.
+        if rctx.line_comments {
             ctx.line_debug = Some(debug.clone());
         }
     }
@@ -3113,11 +3550,12 @@ impl EnumInlineMap {
     /// `unsafe_to_inline` flags.
     #[allow(clippy::arithmetic_side_effects, reason = "usize counter increment on parser-validated class set; bounded by class_defs.len().")]
     pub fn build(dex: &DexFile, data: &[u8], ttm: &TypeToClassDefMap) -> Self {
-        // Read `DROIDSAW_DECOMPILE_TRACE` once for this build run.
-        // Public API unchanged (callers in tests + fuzz continue to
-        // call `build(dex, data, ttm)` unmodified). Every subclass
-        // body decompiled under this build sees the same trace setting.
-        let trace = Trace::from_env();
+        // Read the env knobs once for this build run. Public API
+        // unchanged (callers in tests + fuzz continue to call
+        // `build(dex, data, ttm)` unmodified). Every subclass body
+        // decompiled under this build sees the same settings.
+        // PATCHED (asc, DX-P03): legacy entry — not ASC-reachable.
+        let rctx = RunCtx::legacy();
         let mut by_field: std::collections::BTreeMap<u32, EnumInline> =
             std::collections::BTreeMap::new();
         let mut constants_remaining = MAX_ENUM_INLINE_CONSTS_TOTAL;
@@ -3195,7 +3633,7 @@ impl EnumInlineMap {
                     ttm,
                     class_def.class_idx,
                     pop.subclass_type,
-                    trace,
+                    &rctx,
                 );
                 by_field.insert(pop.backing_field.0, inline);
             }
@@ -3219,7 +3657,7 @@ fn extract_subclass_inline(
     ttm: &TypeToClassDefMap,
     parent_class_idx: TypeIdx,
     subclass_type: TypeIdx,
-    trace: Trace,
+    rctx: &RunCtx,
 ) -> EnumInline {
     let bail = |_reason: &'static str| EnumInline {
         method_bodies: Vec::new(),
@@ -3288,7 +3726,17 @@ fn extract_subclass_inline(
         // subclass body, so feeding an empty census avoids the full
         // DEX walk per inlined subclass without changing behaviour.
         let empty_census = r8_inversion::TrampolineCensus::default();
-        match decompile_method(dex, data, em, sub_cd, &mut imports, false, trace, &empty_census) {
+        match decompile_method(
+            dex,
+            data,
+            em,
+            sub_cd,
+            &mut imports,
+            false,
+            rctx,
+            &empty_census,
+            None,
+        ) {
             Ok(source) => method_bodies.push(source),
             Err(_) => {
                 return bail("subclass method decompile error");
@@ -3377,10 +3825,19 @@ pub fn decompile_class_ext_with_census(
     type_to_class_def: Option<&TypeToClassDefMap>,
     r8_census: Option<&r8_inversion::TrampolineCensus>,
 ) -> String {
-    // Read `DROIDSAW_DECOMPILE_TRACE` once at the API boundary.
-    // Same shape as `decompile_class`.
-    let trace = Trace::from_env();
-    let base = decompile_class_impl(dex, data, class_def, type_to_class_def, trace, r8_census);
+    // Read the env knobs once at the API boundary. Same shape as
+    // `decompile_class`. PATCHED (asc, DX-P03): legacy entry — not
+    // ASC-reachable.
+    let rctx = RunCtx::legacy();
+    let base = decompile_class_impl(
+        dex,
+        data,
+        class_def,
+        type_to_class_def,
+        &rctx,
+        r8_census,
+        None,
+    );
     let Some(map) = enum_inlines else {
         return base;
     };

@@ -1145,7 +1145,7 @@ fn build_method_stmt(
 /// `Stmt::Unrecognized` node encountered. The walker visits all nested
 /// Stmt children of every variant; never recurses into the `raw`
 /// SSA-insn slice of an Unrecognized region.
-fn walk_unrecognized<F>(stmt: &Stmt, f: &mut F)
+pub(crate) fn walk_unrecognized<F>(stmt: &Stmt, f: &mut F)
 where
     F: FnMut(&UnrecognizedReason, BlockIdx),
 {

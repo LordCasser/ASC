@@ -255,6 +255,17 @@ pub enum DexError {
         section: &'static str,
         why: &'static str,
     },
+
+    /// PATCHED (asc, DX-P03): the checked analysis entry
+    /// (`crate::analysis`) aborted a stage because its explicit
+    /// `Control` cancel token was set or the caller-provided deadline
+    /// passed. Produced by the stage-boundary checkpoints in the
+    /// decompile pipeline instead of a panic; the checked entry maps it
+    /// back to `BackendError::Cancelled` / `BackendError::DeadlineExceeded`
+    /// and discards the partial source. `deadline` distinguishes the two
+    /// causes so callers do not have to scrape the message.
+    #[error("analysis aborted by control (deadline={deadline})")]
+    AnalysisControlAbort { deadline: bool },
 }
 
 /// Clamp a parse-time count against the physical size of the input.
