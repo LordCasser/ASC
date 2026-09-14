@@ -1,0 +1,1018 @@
+{
+  "python_baseline": "ccc6bae7704f5c5ef1a7271e27314837079621fb",
+  "rust_baseline": "e809c7b4b454ebc8eb4467f56d44a82e6139472b",
+  "python_version": "3.12.9",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "androguard_available": true,
+  "real_dex_sha256": "5cd2401e9ec9a41fc5f78d06acb10d9f334a973bb82df9af381d3e5024aee337",
+  "note": "Finite probes; a difference is an observation, not automatically a regression. Source output is not a semantic equivalence proof.",
+  "cases": [
+    {
+      "id": "stored-string",
+      "args": [
+        "findrefs",
+        "--threads",
+        "2",
+        "<fixture>/stored.apk",
+        "string",
+        "token"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 0,
+        "stdout": "classes2.dex | Lexample/Test;->first | matched=(token)\nclasses2.dex | Lexample/Test;->second | matched=(token)\nclasses.dex | Lexample/Test;->first | matched=(token)\nclasses.dex | Lexample/Test;->second | matched=(token)\n",
+        "stderr": "",
+        "stdout_sha256": "4bd2f878c44a39256561d7c670a68253f4246fe0277e405553a6793f883f44da",
+        "stdout_lines": 4,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "classes.dex | Lexample/Test;->first | matched=(token)\nclasses.dex | Lexample/Test;->second | matched=(token)\nclasses2.dex | Lexample/Test;->first | matched=(token)\nclasses2.dex | Lexample/Test;->second | matched=(token)\n",
+        "stderr": "",
+        "stdout_sha256": "e76be6e1160efef919a5b96d044f49b16d1b3e701612192173e5fccb4346db9e",
+        "stdout_lines": 4,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "stored-getclass",
+      "args": [
+        "getclass",
+        "--threads",
+        "2",
+        "<fixture>/stored.apk",
+        "example.Test"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "package example;\npublic class Test {\n\n    public static void first()\n    {\n        return;\n    }\n\n    public static void second()\n    {\n        return;\n    }\n}\n\n",
+        "stderr": "",
+        "stdout_sha256": "5e8e88fb0386075f8972f89940c5b4ba56961294b210b3565228cff909978b02",
+        "stdout_lines": 14,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "package example;\n\npublic class Test {\n    public static void first() {\n    }\n\n    public static void second() {\n    }\n\n}\n\n",
+        "stderr": "",
+        "stdout_sha256": "00ad7848d592556231b9387093107eea60d4b4c8164b449b3273966e2ad65c44",
+        "stdout_lines": 11,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "deflated-string",
+      "args": [
+        "findrefs",
+        "--threads",
+        "2",
+        "<fixture>/deflated.apk",
+        "string",
+        "token"
+      ],
+      "same_exit": true,
+      "same_stdout": true,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 0,
+        "stdout": "classes.dex | Lexample/Test;->first | matched=(token)\nclasses.dex | Lexample/Test;->second | matched=(token)\nclasses2.dex | Lexample/Test;->first | matched=(token)\nclasses2.dex | Lexample/Test;->second | matched=(token)\n",
+        "stderr": "",
+        "stdout_sha256": "e76be6e1160efef919a5b96d044f49b16d1b3e701612192173e5fccb4346db9e",
+        "stdout_lines": 4,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "classes.dex | Lexample/Test;->first | matched=(token)\nclasses.dex | Lexample/Test;->second | matched=(token)\nclasses2.dex | Lexample/Test;->first | matched=(token)\nclasses2.dex | Lexample/Test;->second | matched=(token)\n",
+        "stderr": "",
+        "stdout_sha256": "e76be6e1160efef919a5b96d044f49b16d1b3e701612192173e5fccb4346db9e",
+        "stdout_lines": 4,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "deflated-getclass",
+      "args": [
+        "getclass",
+        "--threads",
+        "2",
+        "<fixture>/deflated.apk",
+        "example.Test"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "package example;\npublic class Test {\n\n    public static void first()\n    {\n        return;\n    }\n\n    public static void second()\n    {\n        return;\n    }\n}\n\n",
+        "stderr": "",
+        "stdout_sha256": "5e8e88fb0386075f8972f89940c5b4ba56961294b210b3565228cff909978b02",
+        "stdout_lines": 14,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "package example;\n\npublic class Test {\n    public static void first() {\n    }\n\n    public static void second() {\n    }\n\n}\n\n",
+        "stderr": "",
+        "stdout_sha256": "00ad7848d592556231b9387093107eea60d4b4c8164b449b3273966e2ad65c44",
+        "stdout_lines": 11,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "string-wildcard",
+      "args": [
+        "findrefs",
+        "--threads",
+        "1",
+        "<fixture>/stored.apk",
+        "string",
+        "tok.n"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "classes.dex | Lexample/Test;->first | matched=(token)\nclasses.dex | Lexample/Test;->second | matched=(token)\nclasses2.dex | Lexample/Test;->first | matched=(token)\nclasses2.dex | Lexample/Test;->second | matched=(token)\n",
+        "stderr": "",
+        "stdout_sha256": "e76be6e1160efef919a5b96d044f49b16d1b3e701612192173e5fccb4346db9e",
+        "stdout_lines": 4,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "string-alternation",
+      "args": [
+        "findrefs",
+        "--threads",
+        "1",
+        "<fixture>/stored.apk",
+        "string",
+        "tok(en|x)"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "classes.dex | Lexample/Test;->first | matched=(token)\nclasses.dex | Lexample/Test;->second | matched=(token)\nclasses2.dex | Lexample/Test;->first | matched=(token)\nclasses2.dex | Lexample/Test;->second | matched=(token)\n",
+        "stderr": "",
+        "stdout_sha256": "e76be6e1160efef919a5b96d044f49b16d1b3e701612192173e5fccb4346db9e",
+        "stdout_lines": 4,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "string-invalid-regex",
+      "args": [
+        "findrefs",
+        "--threads",
+        "1",
+        "<fixture>/stored.apk",
+        "string",
+        "["
+      ],
+      "same_exit": false,
+      "same_stdout": true,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 1,
+        "stdout": "",
+        "stderr": "Error: unterminated character set at position 0\n",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "ea4deb406e2dcde8eb91f24ebd2fd0baa105bb3f5f4ac9fb750153c6191c4b04",
+        "stderr_lines": 1,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "string-empty",
+      "args": [
+        "findrefs",
+        "--threads",
+        "1",
+        "<fixture>/stored.apk",
+        "string",
+        ""
+      ],
+      "same_exit": false,
+      "same_stdout": true,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 1,
+        "stdout": "",
+        "stderr": "Error: 0\n",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "88cad13bdbb8c7284275f15dbfe9f9488c209881f6d68903232ee93f54ff77b7",
+        "stderr_lines": 1,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "field-regex-unscoped",
+      "args": [
+        "findrefs",
+        "--threads",
+        "1",
+        "<fixture>/statics.apk",
+        "field",
+        "SEC.ND"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "classes.dex | Lexample/Statics;->getSecond | matched=(Lexample/Statics;->SECOND)\n",
+        "stderr": "",
+        "stdout_sha256": "e3db8de25912d5ce5772c593a210f3ab5d2cab1c15914d2dd7303c4f62fede36",
+        "stdout_lines": 1,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "field-regex-exact-class",
+      "args": [
+        "findrefs",
+        "--threads",
+        "1",
+        "<fixture>/statics.apk",
+        "field",
+        "SEC.ND",
+        "--class",
+        "example.Statics"
+      ],
+      "same_exit": true,
+      "same_stdout": true,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "field-regex-fuzzy-class",
+      "args": [
+        "findrefs",
+        "--threads",
+        "1",
+        "<fixture>/statics.apk",
+        "field",
+        "SEC.ND",
+        "--class",
+        "Lexample/Stat.cs;",
+        "--fuzzy-class"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "classes.dex | Lexample/Statics;->getSecond | matched=(Lexample/Statics;->SECOND)\n",
+        "stderr": "",
+        "stdout_sha256": "e3db8de25912d5ce5772c593a210f3ab5d2cab1c15914d2dd7303c4f62fede36",
+        "stdout_lines": 1,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "static-values-source",
+      "args": [
+        "getclass",
+        "--threads",
+        "1",
+        "<fixture>/statics.apk",
+        "example.Statics"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "package example;\npublic class Statics {\n    public static int FIRST = 11;\n    public static int SECOND = 22;\n\n    public static int getSecond()\n    {\n        return example.Statics.SECOND;\n    }\n}\n\n",
+        "stderr": "",
+        "stdout_sha256": "4c5dc3cb9fb812fe7c70f4626fee2b4a1843ffdfee713b6de7bf3674913c0895",
+        "stdout_lines": 11,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "package example;\n\npublic class Statics {\n    public static int FIRST;\n    public static int SECOND;\n\n    public static int getSecond() {\n        return example.Statics.SECOND;\n    }\n\n}\n\n",
+        "stderr": "",
+        "stdout_sha256": "8fb0206ef0959808af8748c45d40ff001a063448903f3e4121e03323560f7d6a",
+        "stdout_lines": 12,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "missing-class",
+      "args": [
+        "getclass",
+        "<fixture>/stored.apk",
+        "example.Absent"
+      ],
+      "same_exit": true,
+      "same_stdout": true,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 1,
+        "stdout": "",
+        "stderr": "Error: Class Lexample/Absent; not found in APK.\n",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "bd2293b0dfbfc61b8710c5f1e0a923f827b475960b2531c83a9c436da978c4e9",
+        "stderr_lines": 1,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 1,
+        "stdout": "",
+        "stderr": "Error: Class Lexample/Absent; not found in APK.\n",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "bd2293b0dfbfc61b8710c5f1e0a923f827b475960b2531c83a9c436da978c4e9",
+        "stderr_lines": 1,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "no-arguments",
+      "args": [],
+      "same_exit": false,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "usage: main.py [-h] {getclass,findrefs} ...\n\nASC tooling entry.\n\npositional arguments:\n  {getclass,findrefs}\n    getclass           Locate the target class in APK, extract one DEX in\n                       memory, then decompile.\n    findrefs           Find code references for string/type/method/field\n                       across all DEX entries in APK.\n\noptions:\n  -h, --help           show this help message and exit\n\nexamples:\n  python main.py app.apk --gui\n  python main.py getclass app.apk Lcom/poc/Main; -o Main.java\n  python main.py getclass app.apk com.poc.Main --threads 16\n  python main.py findrefs app.apk string token -o string_refs.txt\n  python main.py findrefs app.apk type com.poc.Main\n  python main.py findrefs app.apk method onCreate --class com.poc.Main\n  python main.py findrefs app.apk method notify --class MainActivity --fuzzy-class -o method_refs.txt\n  python main.py findrefs app.apk field apiKey -o field_refs.txt\n",
+        "stderr": "",
+        "stdout_sha256": "bc4b80a2cb9e2ecae95d4a64852e7d96721165a31b8785bdc302dd2d216589f0",
+        "stdout_lines": 23,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 2,
+        "stdout": "",
+        "stderr": "Native Rust APK and DEX analysis CLI\n\nUsage: rasc <COMMAND>\n\nCommands:\n  getclass  Locate a class in an APK and decompile it\n  findrefs  Find code references across every DEX in an APK\n  manifest  Decode and print AndroidManifest.xml from an APK\n  classes   List classes defined across every DEX in an APK\n  help      Print this message or the help of the given subcommand(s)\n\nOptions:\n  -h, --help     Print help\n  -V, --version  Print version\n",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "3a66f1eb6f318cf0e3d02e4062f92eac21a60f450976f1fdfca93ae06632e6b8",
+        "stderr_lines": 14,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "zero-workers",
+      "args": [
+        "findrefs",
+        "--threads",
+        "0",
+        "<fixture>/stored.apk",
+        "string",
+        "token"
+      ],
+      "same_exit": true,
+      "same_stdout": true,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 1,
+        "stdout": "",
+        "stderr": "Error: max_workers must be greater than 0\n",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "acc4a548cbbaaded17b53ceb4a34895f41e941c22738b139b52a32aa9967f2cd",
+        "stderr_lines": 1,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 1,
+        "stdout": "",
+        "stderr": "Error: worker count must be greater than zero\n",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "02d20ae79a3360b5e3f114ffbb1c6cb8d7785f92218b6282b0641a43a16a31e6",
+        "stderr_lines": 1,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "negative-workers",
+      "args": [
+        "findrefs",
+        "--threads",
+        "-1",
+        "<fixture>/stored.apk",
+        "string",
+        "token"
+      ],
+      "same_exit": false,
+      "same_stdout": true,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 1,
+        "stdout": "",
+        "stderr": "Error: max_workers must be greater than 0\n",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "acc4a548cbbaaded17b53ceb4a34895f41e941c22738b139b52a32aa9967f2cd",
+        "stderr_lines": 1,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 2,
+        "stdout": "",
+        "stderr": "error: unexpected argument '-1' found\n\n  tip: to pass '-1' as a value, use '-- -1'\n\nUsage: rasc findrefs [OPTIONS] <APK_PATH> <COMMAND>\n\nFor more information, try '--help'.\n",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "2f779bcc969968accde4953de7e53eb49c892c5cc912ff1315a89c4b7f8742a7",
+        "stderr_lines": 7,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "debug-stream",
+      "args": [
+        "findrefs",
+        "--debug",
+        "--threads",
+        "1",
+        "<fixture>/stored.apk",
+        "string",
+        "token"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "[APK] [P34517] 'classes.dex' inflate=8.00 us process=3392.67 us\nclasses.dex | Lexample/Test;->first | matched=(token)\nclasses.dex | Lexample/Test;->second | matched=(token)\n[APK] [P34517] 'classes2.dex' inflate=2.21 us process=78.13 us\nclasses2.dex | Lexample/Test;->first | matched=(token)\nclasses2.dex | Lexample/Test;->second | matched=(token)\n[APK] for_each_findrefs total=11995.50 us count=2 workers=1\n[DEBUG] Total Execution Time: 21737.21 us\n",
+        "stderr": "",
+        "stdout_sha256": "2b8c7a5010ea18addd1961c4e2254dedec08be9727ea0f643463cb9454189a6b",
+        "stdout_lines": 8,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "classes.dex | Lexample/Test;->first | matched=(token)\nclasses.dex | Lexample/Test;->second | matched=(token)\nclasses2.dex | Lexample/Test;->first | matched=(token)\nclasses2.dex | Lexample/Test;->second | matched=(token)\n",
+        "stderr": "[APK] 'classes.dex' inflate=1.12 us process=80.62 us\n[APK] 'classes2.dex' inflate=0.46 us process=17.54 us\n[findrefs] rows=4 scan=0.26 ms sort=0.00 ms assemble=0.01 ms payload=0 MiB\n[DEBUG] Total Execution Time: 519.21 us\n",
+        "stdout_sha256": "e76be6e1160efef919a5b96d044f49b16d1b3e701612192173e5fccb4346db9e",
+        "stdout_lines": 4,
+        "stdout_truncated": false,
+        "stderr_sha256": "71721a2db281efe5543d67e2a0cea5292c19f8f327808f014016770ee4f66e26",
+        "stderr_lines": 4,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "duplicate-fallback",
+      "args": [
+        "findrefs",
+        "--threads",
+        "1",
+        "<fixture>/duplicate-fallback.apk",
+        "string",
+        "token"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "a.dex | Lexample/Test;->first | matched=(token)\na.dex | Lexample/Test;->second | matched=(token)\na.dex | Lexample/Test;->first | matched=(token)\na.dex | Lexample/Test;->second | matched=(token)\n",
+        "stderr": "",
+        "stdout_sha256": "58c723587969917a249ab3d8163b9dac507d11aed459b32af34c2ad1cb1a11e4",
+        "stdout_lines": 4,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "a.dex | Lexample/Test;->first | matched=(token)\na.dex | Lexample/Test;->second | matched=(token)\n",
+        "stderr": "",
+        "stdout_sha256": "3823ffc972e3eac61ae60ce454b16038079cd81ccaf373dceb5cc4d1f838d7b3",
+        "stdout_lines": 2,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "zero-checksum-getclass",
+      "args": [
+        "getclass",
+        "--threads",
+        "1",
+        "<fixture>/zero-checksum.apk",
+        "example.Test"
+      ],
+      "same_exit": false,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "package example;\npublic class Test {\n\n    public static void first()\n    {\n        return;\n    }\n\n    public static void second()\n    {\n        return;\n    }\n}\n\n",
+        "stderr": "",
+        "stdout_sha256": "5e8e88fb0386075f8972f89940c5b4ba56961294b210b3565228cff909978b02",
+        "stdout_lines": 14,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 1,
+        "stdout": "",
+        "stderr": "Error: parse target DEX for decompilation: checksum mismatch: expected 0x00000000, computed 0xba25290d\n",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "9ebe5d01bfd4eabc384e9d3e47ea09daeef098c5a5000af499f4e0b397685f67",
+        "stderr_lines": 1,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "operand-false-positive",
+      "args": [
+        "findrefs",
+        "--threads",
+        "1",
+        "<fixture>/operand-false-positive.apk",
+        "string",
+        "token"
+      ],
+      "same_exit": true,
+      "same_stdout": true,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "type-example/Test",
+      "args": [
+        "findrefs",
+        "--threads",
+        "1",
+        "<fixture>/type.apk",
+        "type",
+        "example/Test"
+      ],
+      "same_exit": true,
+      "same_stdout": true,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 0,
+        "stdout": "classes.dex | Lexample/Test;->first | matched=(Lexample/Test;)\nclasses.dex | Lexample/Test;->second | matched=(Lexample/Test;)\n",
+        "stderr": "",
+        "stdout_sha256": "5f3260d12e9fae49511ed2cb4b14bfdec6c392d2a0a1d4f75ced81ef031dd175",
+        "stdout_lines": 2,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "classes.dex | Lexample/Test;->first | matched=(Lexample/Test;)\nclasses.dex | Lexample/Test;->second | matched=(Lexample/Test;)\n",
+        "stderr": "",
+        "stdout_sha256": "5f3260d12e9fae49511ed2cb4b14bfdec6c392d2a0a1d4f75ced81ef031dd175",
+        "stdout_lines": 2,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "type-example.Test",
+      "args": [
+        "findrefs",
+        "--threads",
+        "1",
+        "<fixture>/type.apk",
+        "type",
+        "example.Test"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "classes.dex | Lexample/Test;->first | matched=(Lexample/Test;)\nclasses.dex | Lexample/Test;->second | matched=(Lexample/Test;)\n",
+        "stderr": "",
+        "stdout_sha256": "5f3260d12e9fae49511ed2cb4b14bfdec6c392d2a0a1d4f75ced81ef031dd175",
+        "stdout_lines": 2,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "type-Lexample/T.st;",
+      "args": [
+        "findrefs",
+        "--threads",
+        "1",
+        "<fixture>/type.apk",
+        "type",
+        "Lexample/T.st;"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "classes.dex | Lexample/Test;->first | matched=(Lexample/Test;)\nclasses.dex | Lexample/Test;->second | matched=(Lexample/Test;)\n",
+        "stderr": "",
+        "stdout_sha256": "5f3260d12e9fae49511ed2cb4b14bfdec6c392d2a0a1d4f75ced81ef031dd175",
+        "stdout_lines": 2,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "corpus-string",
+      "args": [
+        "findrefs",
+        "--threads",
+        "2",
+        "<fixture>/reference-workload.apk",
+        "string",
+        "Authorization"
+      ],
+      "same_exit": true,
+      "same_stdout": true,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_lines": 0,
+        "stdout_truncated": false,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "corpus-method",
+      "args": [
+        "findrefs",
+        "--threads",
+        "2",
+        "<fixture>/reference-workload.apk",
+        "method",
+        "onCreate"
+      ],
+      "same_exit": true,
+      "same_stdout": true,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 0,
+        "stdout": "classes.dex | Landroidx/activity/ComponentActivity;->onCreate | matched=(Landroidx/core/app/ComponentActivity;->onCreate)\nclasses.dex | Landroidx/activity/ComponentActivity;->onCreatePanelMenu | matched=(Landroidx/core/app/ComponentActivity;->onCreatePanelMenu; Landroidx/core/view/MenuHostHelper;->onCreateMenu)\nclasses.dex | Landroidx/activity/ComponentDialog;->onCreate | matched=(Landroid/app/Dialog;->onCreate)\nclasses.dex | Landroidx/appcompat/app/AlertDialog;->onCreate | matched=(Landroidx/appcompat/app/AppCompatDialog;->onCreate)\nclasses.dex | Landroidx/appcompat/app/AppCompatActivity$2;->onContextAvailable | matched=(Landroidx/appcompat/app/AppCompatDelegate;->onCreate)\nclasses.dex | Landroidx/appcompat/app/AppCompatActivity;->onSupportNavigateUp | matched=(Landroidx/appcompat/app/AppCompatActivity;->onCreateSupportNavigateUpTaskStack)\nclasses.dex | Landroidx/appcompat/app/AppCompatDelegateImpl$ActionModeCallbackWrapperV9;->onCreateActionMode | matched=(Landroidx/appcompat/view/ActionMode$Callback;->onCreateActionMode)\nclasses.dex | Landroidx/appcompat/app/AppCompatDelegateImpl$AppCompatWindowCallback;->onCreatePanelMenu | matched=(Landroidx/appcompat/view/WindowCallbackWrapper;->onCreatePanelMenu)\nclasses.dex | Landroidx/appcompat/app/AppCompatDelegateImpl$AppCompatWindowCallback;->onCreatePanelView | matched=(Landroidx/appcompat/app/AppCompatDelegateImpl$ActionBarMenuCallback;->onCreatePanelView; Landroidx/appcompat/view/WindowCallbackWrapper;->onCreatePanelView)\nclasses.dex | Landroidx/appcompat/app/AppCompatDelegateImpl;->onCreateView | matched=(Landroidx/appcompat/app/AppCompatDelegateImpl;->onCreateView)\nclasses.dex | Landroidx/appcompat/app/AppCompatDelegateImpl;->preparePanel | matched=(Landroid/view/Window$Callback;->onCreatePanelMenu; Landroid/view/Window$Callback;->onCreatePanelView)\nclasses.dex | Landroidx/appcompat/app/AppCompatDelegateImpl;->startSupportActionModeFromWindow | matched=(Landroidx/appcompat/view/ActionMode$Callback;->onCreateActionMode)\nclasses.dex | Landroidx/appcompat/app/AppCompatDialog;-><init> | matched=(Landroidx/appcompat/app/AppCompatDelegate;->onCreate)\nclasses.dex | Landroidx/appcompat/app/AppCompatDialog;->onCreate | matched=(Landroidx/activity/ComponentDialog;->onCreate; Landroidx/appcompat/app/AppCompatDelegate;->onCreate)\nclasses.dex | Landroidx/appcompat/app/ToolbarActionBar;->populateOptionsMenu | matched=(Landroid/view/Window$Callback;->onCreatePanelMenu)\nclasses.dex | Landroidx/appcompat/app/WindowDecorActionBar$ActionModeImpl;->dispatchOnCreate | matched=(Landroidx/appcompat/view/ActionMode$Callback;->onCreateActionMode)\nclasses.dex | Landroidx/appcompat/view/SupportActionModeWrapper$CallbackWrapper;->onCreateActionMode | matched=(Landroid/view/ActionMode$Callback;->onCreateActionMode)\nclasses.dex | Landroidx/appcompat/view/WindowCallbackWrapper;->onCreatePanelMenu | matched=(Landroid/view/Window$Callback;->onCreatePanelMenu)\nclasses.dex | Landroidx/appcompat/view/WindowCallbackWrapper;->onCreat",
+        "stderr": "",
+        "stdout_sha256": "d0a996e8b372bac9a8ab6d300f2a0623489862fa81d96087e11120c90ea8279b",
+        "stdout_lines": 84,
+        "stdout_truncated": true,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "classes.dex | Landroidx/activity/ComponentActivity;->onCreate | matched=(Landroidx/core/app/ComponentActivity;->onCreate)\nclasses.dex | Landroidx/activity/ComponentActivity;->onCreatePanelMenu | matched=(Landroidx/core/app/ComponentActivity;->onCreatePanelMenu; Landroidx/core/view/MenuHostHelper;->onCreateMenu)\nclasses.dex | Landroidx/activity/ComponentDialog;->onCreate | matched=(Landroid/app/Dialog;->onCreate)\nclasses.dex | Landroidx/appcompat/app/AlertDialog;->onCreate | matched=(Landroidx/appcompat/app/AppCompatDialog;->onCreate)\nclasses.dex | Landroidx/appcompat/app/AppCompatActivity$2;->onContextAvailable | matched=(Landroidx/appcompat/app/AppCompatDelegate;->onCreate)\nclasses.dex | Landroidx/appcompat/app/AppCompatActivity;->onSupportNavigateUp | matched=(Landroidx/appcompat/app/AppCompatActivity;->onCreateSupportNavigateUpTaskStack)\nclasses.dex | Landroidx/appcompat/app/AppCompatDelegateImpl$ActionModeCallbackWrapperV9;->onCreateActionMode | matched=(Landroidx/appcompat/view/ActionMode$Callback;->onCreateActionMode)\nclasses.dex | Landroidx/appcompat/app/AppCompatDelegateImpl$AppCompatWindowCallback;->onCreatePanelMenu | matched=(Landroidx/appcompat/view/WindowCallbackWrapper;->onCreatePanelMenu)\nclasses.dex | Landroidx/appcompat/app/AppCompatDelegateImpl$AppCompatWindowCallback;->onCreatePanelView | matched=(Landroidx/appcompat/app/AppCompatDelegateImpl$ActionBarMenuCallback;->onCreatePanelView; Landroidx/appcompat/view/WindowCallbackWrapper;->onCreatePanelView)\nclasses.dex | Landroidx/appcompat/app/AppCompatDelegateImpl;->onCreateView | matched=(Landroidx/appcompat/app/AppCompatDelegateImpl;->onCreateView)\nclasses.dex | Landroidx/appcompat/app/AppCompatDelegateImpl;->preparePanel | matched=(Landroid/view/Window$Callback;->onCreatePanelMenu; Landroid/view/Window$Callback;->onCreatePanelView)\nclasses.dex | Landroidx/appcompat/app/AppCompatDelegateImpl;->startSupportActionModeFromWindow | matched=(Landroidx/appcompat/view/ActionMode$Callback;->onCreateActionMode)\nclasses.dex | Landroidx/appcompat/app/AppCompatDialog;-><init> | matched=(Landroidx/appcompat/app/AppCompatDelegate;->onCreate)\nclasses.dex | Landroidx/appcompat/app/AppCompatDialog;->onCreate | matched=(Landroidx/activity/ComponentDialog;->onCreate; Landroidx/appcompat/app/AppCompatDelegate;->onCreate)\nclasses.dex | Landroidx/appcompat/app/ToolbarActionBar;->populateOptionsMenu | matched=(Landroid/view/Window$Callback;->onCreatePanelMenu)\nclasses.dex | Landroidx/appcompat/app/WindowDecorActionBar$ActionModeImpl;->dispatchOnCreate | matched=(Landroidx/appcompat/view/ActionMode$Callback;->onCreateActionMode)\nclasses.dex | Landroidx/appcompat/view/SupportActionModeWrapper$CallbackWrapper;->onCreateActionMode | matched=(Landroid/view/ActionMode$Callback;->onCreateActionMode)\nclasses.dex | Landroidx/appcompat/view/WindowCallbackWrapper;->onCreatePanelMenu | matched=(Landroid/view/Window$Callback;->onCreatePanelMenu)\nclasses.dex | Landroidx/appcompat/view/WindowCallbackWrapper;->onCreat",
+        "stderr": "",
+        "stdout_sha256": "d0a996e8b372bac9a8ab6d300f2a0623489862fa81d96087e11120c90ea8279b",
+        "stdout_lines": 84,
+        "stdout_truncated": true,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "corpus-field",
+      "args": [
+        "findrefs",
+        "--threads",
+        "2",
+        "<fixture>/reference-workload.apk",
+        "field",
+        "INSTANCE"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 0,
+        "stdout": "classes.dex | Landroidx/activity/Api34Impl;-><clinit> | matched=(Landroidx/activity/Api34Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/BackEventCompat;-><init> | matched=(Landroidx/activity/Api34Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/BackEventCompat;->toBackEvent | matched=(Landroidx/activity/Api34Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporter;->addReporter | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporter;->fullyDrawnReported | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporter;->removeOnReportDrawnListener | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporter;->removeReporter | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporter;->reportRunnable$lambda$2 | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporterKt;->reportWhenComplete | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporterKt;->reportWhenComplete$$forInline | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$1;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$2;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$3;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$4;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$5;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$Api33Impl;-><clinit> | matched=(Landroidx/activity/OnBackPressedDispatcher$Api33Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$Api34Impl;-><clinit> | matched=(Landroidx/activity/OnBackPressedDispatcher$Api34Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$addCallback$1;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$addCancellableCallback$1;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher;-><init> | matched=(Landroidx/activity/OnBackPressedDispatcher$Api33Impl;->INSTANCE; Landroidx/activity/OnBackPressedDispatcher$Api34Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher;->updateBackInvokedCallbackState | matched=(Landroidx/activity/OnBackPressedDispatcher$Api33Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/SystemBarStyle$Companion$auto$1;-><clinit> | matched=(Landroidx/activity/SystemBarStyle$Companion$auto$1;->INSTANCE)\nclasses.dex | Landroidx/activity/SystemBarStyle$Companion$dark$1;-><clinit> | matched=(Landroidx/activity/SystemBarStyle$Companion$dark$1;->INSTANCE)\nclasses.dex | Landroidx/activity/SystemBarStyle$Companion$light$1;-><clinit> | matched=(Landroidx/activity/SystemBarStyle$Companion$light$1;->IN",
+        "stderr": "",
+        "stdout_sha256": "4ed2737418576754c9ed865f733459288f3b798547f114c8afc32594f2797b97",
+        "stdout_lines": 1055,
+        "stdout_truncated": true,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "classes.dex | Landroidx/activity/Api34Impl;-><clinit> | matched=(Landroidx/activity/Api34Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/BackEventCompat;-><init> | matched=(Landroidx/activity/Api34Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/BackEventCompat;->toBackEvent | matched=(Landroidx/activity/Api34Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporter;->addReporter | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporter;->fullyDrawnReported | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporter;->removeOnReportDrawnListener | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporter;->removeReporter | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporter;->reportRunnable$lambda$2 | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporterKt;->reportWhenComplete | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/FullyDrawnReporterKt;->reportWhenComplete$$forInline | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$1;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$2;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$3;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$4;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$5;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$Api33Impl;-><clinit> | matched=(Landroidx/activity/OnBackPressedDispatcher$Api33Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$Api34Impl;-><clinit> | matched=(Landroidx/activity/OnBackPressedDispatcher$Api34Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$addCallback$1;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher$addCancellableCallback$1;->invoke | matched=(Lkotlin/Unit;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher;-><init> | matched=(Landroidx/activity/OnBackPressedDispatcher$Api33Impl;->INSTANCE; Landroidx/activity/OnBackPressedDispatcher$Api34Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/OnBackPressedDispatcher;->updateBackInvokedCallbackState | matched=(Landroidx/activity/OnBackPressedDispatcher$Api33Impl;->INSTANCE)\nclasses.dex | Landroidx/activity/SystemBarStyle$Companion$auto$1;-><clinit> | matched=(Landroidx/activity/SystemBarStyle$Companion$auto$1;->INSTANCE)\nclasses.dex | Landroidx/activity/SystemBarStyle$Companion$dark$1;-><clinit> | matched=(Landroidx/activity/SystemBarStyle$Companion$dark$1;->INSTANCE)\nclasses.dex | Landroidx/activity/SystemBarStyle$Companion$light$1;-><clinit> | matched=(Landroidx/activity/SystemBarStyle$Companion$light$1;->IN",
+        "stderr": "",
+        "stdout_sha256": "7995c529d56d5f1a00773d125a44626956e8886bad53c79cf40ad11717e090a5",
+        "stdout_lines": 1055,
+        "stdout_truncated": true,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "corpus-type",
+      "args": [
+        "findrefs",
+        "--threads",
+        "2",
+        "<fixture>/reference-workload.apk",
+        "type",
+        "Activity"
+      ],
+      "same_exit": true,
+      "same_stdout": true,
+      "same_line_multiset": true,
+      "python": {
+        "exit": 0,
+        "stdout": "classes.dex | Landroidx/activity/ComponentActivity$1;->onLaunch | matched=(Landroidx/activity/ComponentActivity$1$1;; Landroidx/activity/ComponentActivity$1$2;)\nclasses.dex | Landroidx/activity/ComponentActivity$6;->onStateChanged | matched=(Landroidx/activity/ComponentActivity;)\nclasses.dex | Landroidx/activity/ComponentActivity$ReportFullyDrawnExecutorApi16Impl;->execute | matched=(Landroidx/activity/ComponentActivity$ReportFullyDrawnExecutorApi16Impl$$ExternalSyntheticLambda0;)\nclasses.dex | Landroidx/activity/ComponentActivity;-><init> | matched=(Landroidx/activity/ComponentActivity$$ExternalSyntheticLambda0;; Landroidx/activity/ComponentActivity$$ExternalSyntheticLambda1;; Landroidx/activity/ComponentActivity$$ExternalSyntheticLambda2;; Landroidx/activity/ComponentActivity$$ExternalSyntheticLambda3;; Landroidx/activity/ComponentActivity$1;; Landroidx/activity/ComponentActivity$2;; Landroidx/activity/ComponentActivity$3;; Landroidx/activity/ComponentActivity$4;)\nclasses.dex | Landroidx/activity/ComponentActivity;->createFullyDrawnExecutor | matched=(Landroidx/activity/ComponentActivity$ReportFullyDrawnExecutorApi16Impl;)\nclasses.dex | Landroidx/activity/ComponentActivity;->ensureViewModelStore | matched=(Landroidx/activity/ComponentActivity$NonConfigurationInstances;)\nclasses.dex | Landroidx/activity/ComponentActivity;->getLastCustomNonConfigurationInstance | matched=(Landroidx/activity/ComponentActivity$NonConfigurationInstances;)\nclasses.dex | Landroidx/activity/ComponentActivity;->getOnBackPressedDispatcher | matched=(Landroidx/activity/ComponentActivity$5;; Landroidx/activity/ComponentActivity$6;)\nclasses.dex | Landroidx/activity/ComponentActivity;->onRetainNonConfigurationInstance | matched=(Landroidx/activity/ComponentActivity$NonConfigurationInstances;)\nclasses.dex | Landroidx/activity/result/ActivityResult$1;->createFromParcel | matched=(Landroidx/activity/result/ActivityResult;)\nclasses.dex | Landroidx/activity/result/ActivityResult$1;->newArray | matched=([Landroidx/activity/result/ActivityResult;)\nclasses.dex | Landroidx/activity/result/ActivityResult;-><clinit> | matched=(Landroidx/activity/result/ActivityResult$1;)\nclasses.dex | Landroidx/activity/result/ActivityResultRegistry$1;->onStateChanged | matched=(Landroidx/activity/result/ActivityResult;; Landroidx/activity/result/ActivityResultRegistry$CallbackAndContract;)\nclasses.dex | Landroidx/activity/result/ActivityResultRegistry;->dispatchResult | matched=(Landroidx/activity/result/ActivityResultRegistry$CallbackAndContract;)\nclasses.dex | Landroidx/activity/result/ActivityResultRegistry;->dispatchResult | matched=(Landroidx/activity/result/ActivityResultRegistry$CallbackAndContract;)\nclasses.dex | Landroidx/activity/result/ActivityResultRegistry;->doDispatch | matched=(Landroidx/activity/result/ActivityResult;)\nclasses.dex | Landroidx/activity/result/ActivityResultRegistry;->register | matched=(Landroidx/activity/result/ActivityResult;; Landroidx/activity/result/ActivityResultR",
+        "stderr": "",
+        "stdout_sha256": "f6bae9e346296e19e98e1d6f50774eaf4d3c4e5572485377f55ace01f6fd754b",
+        "stdout_lines": 133,
+        "stdout_truncated": true,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "classes.dex | Landroidx/activity/ComponentActivity$1;->onLaunch | matched=(Landroidx/activity/ComponentActivity$1$1;; Landroidx/activity/ComponentActivity$1$2;)\nclasses.dex | Landroidx/activity/ComponentActivity$6;->onStateChanged | matched=(Landroidx/activity/ComponentActivity;)\nclasses.dex | Landroidx/activity/ComponentActivity$ReportFullyDrawnExecutorApi16Impl;->execute | matched=(Landroidx/activity/ComponentActivity$ReportFullyDrawnExecutorApi16Impl$$ExternalSyntheticLambda0;)\nclasses.dex | Landroidx/activity/ComponentActivity;-><init> | matched=(Landroidx/activity/ComponentActivity$$ExternalSyntheticLambda0;; Landroidx/activity/ComponentActivity$$ExternalSyntheticLambda1;; Landroidx/activity/ComponentActivity$$ExternalSyntheticLambda2;; Landroidx/activity/ComponentActivity$$ExternalSyntheticLambda3;; Landroidx/activity/ComponentActivity$1;; Landroidx/activity/ComponentActivity$2;; Landroidx/activity/ComponentActivity$3;; Landroidx/activity/ComponentActivity$4;)\nclasses.dex | Landroidx/activity/ComponentActivity;->createFullyDrawnExecutor | matched=(Landroidx/activity/ComponentActivity$ReportFullyDrawnExecutorApi16Impl;)\nclasses.dex | Landroidx/activity/ComponentActivity;->ensureViewModelStore | matched=(Landroidx/activity/ComponentActivity$NonConfigurationInstances;)\nclasses.dex | Landroidx/activity/ComponentActivity;->getLastCustomNonConfigurationInstance | matched=(Landroidx/activity/ComponentActivity$NonConfigurationInstances;)\nclasses.dex | Landroidx/activity/ComponentActivity;->getOnBackPressedDispatcher | matched=(Landroidx/activity/ComponentActivity$5;; Landroidx/activity/ComponentActivity$6;)\nclasses.dex | Landroidx/activity/ComponentActivity;->onRetainNonConfigurationInstance | matched=(Landroidx/activity/ComponentActivity$NonConfigurationInstances;)\nclasses.dex | Landroidx/activity/result/ActivityResult$1;->createFromParcel | matched=(Landroidx/activity/result/ActivityResult;)\nclasses.dex | Landroidx/activity/result/ActivityResult$1;->newArray | matched=([Landroidx/activity/result/ActivityResult;)\nclasses.dex | Landroidx/activity/result/ActivityResult;-><clinit> | matched=(Landroidx/activity/result/ActivityResult$1;)\nclasses.dex | Landroidx/activity/result/ActivityResultRegistry$1;->onStateChanged | matched=(Landroidx/activity/result/ActivityResult;; Landroidx/activity/result/ActivityResultRegistry$CallbackAndContract;)\nclasses.dex | Landroidx/activity/result/ActivityResultRegistry;->dispatchResult | matched=(Landroidx/activity/result/ActivityResultRegistry$CallbackAndContract;)\nclasses.dex | Landroidx/activity/result/ActivityResultRegistry;->dispatchResult | matched=(Landroidx/activity/result/ActivityResultRegistry$CallbackAndContract;)\nclasses.dex | Landroidx/activity/result/ActivityResultRegistry;->doDispatch | matched=(Landroidx/activity/result/ActivityResult;)\nclasses.dex | Landroidx/activity/result/ActivityResultRegistry;->register | matched=(Landroidx/activity/result/ActivityResult;; Landroidx/activity/result/ActivityResultR",
+        "stderr": "",
+        "stdout_sha256": "f6bae9e346296e19e98e1d6f50774eaf4d3c4e5572485377f55ace01f6fd754b",
+        "stdout_lines": 133,
+        "stdout_truncated": true,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    },
+    {
+      "id": "corpus-getclass",
+      "args": [
+        "getclass",
+        "--threads",
+        "2",
+        "<fixture>/reference-workload.apk",
+        "com.google.android.material.timepicker.ClockFaceView"
+      ],
+      "same_exit": true,
+      "same_stdout": false,
+      "same_line_multiset": false,
+      "python": {
+        "exit": 0,
+        "stdout": "package com.google.android.material.timepicker;\n class ClockFaceView extends com.google.android.material.timepicker.RadialViewGroup implements com.google.android.material.timepicker.ClockHandView$OnRotateListener {\n    private static final float EPSILON = 981668463;\n    private static final int INITIAL_CAPACITY = 12;\n    private static final String VALUE_PLACEHOLDER = \"\";\n    private final int clockHandPadding;\n    private final com.google.android.material.timepicker.ClockHandView clockHandView;\n    private final int clockSize;\n    private float currentHandRotation;\n    private final int[] gradientColors;\n    private final float[] gradientPositions;\n    private final int minimumHeight;\n    private final int minimumWidth;\n    private final android.graphics.RectF scratch;\n    private final android.graphics.Rect scratchLineBounds;\n    private final android.content.res.ColorStateList textColor;\n    private final android.util.SparseArray textViewPool;\n    private final android.graphics.Rect textViewRect;\n    private final androidx.core.view.AccessibilityDelegateCompat valueAccessibilityDelegate;\n    private String[] values;\n\n    public ClockFaceView(android.content.Context p2, android.util.AttributeSet p3)\n    {\n        this(p2, p3, com.google.android.material.R$attr.materialClockStyle);\n        return;\n    }\n\n    public ClockFaceView(android.content.Context p9, android.util.AttributeSet p10, int p11)\n    {\n        int v6_0;\n        super(p9, p10, p11);\n        super.textViewRect = new android.graphics.Rect();\n        super.scratch = new android.graphics.RectF();\n        super.scratchLineBounds = new android.graphics.Rect();\n        super.textViewPool = new android.util.SparseArray();\n        android.content.res.TypedArray v0_4 = new float[3];\n        v0_4 = {0, 1063675494, 1065353216};\n        super.gradientPositions = v0_4;\n        android.content.res.TypedArray v0_7 = p9.obtainStyledAttributes(p10, com.google.android.material.R$styleable.ClockFaceView, p11, com.google.android.material.R$style.Widget_MaterialComponents_TimePicker_Clock);\n        android.content.res.Resources v1_1 = super.getResources();\n        super.textColor = com.google.android.material.resources.MaterialResources.getColorStateList(p9, v0_7, com.google.android.material.R$styleable.ClockFaceView_clockNumberTextColor);\n        android.view.LayoutInflater.from(p9).inflate(com.google.android.material.R$layout.material_clockface_view, super, 1);\n        super.clockHandView = ((com.google.android.material.timepicker.ClockHandView) super.findViewById(com.google.android.material.R$id.material_clock_hand));\n        super.clockHandPadding = v1_1.getDimensionPixelSize(com.google.android.material.R$dimen.material_clock_hand_padding);\n        super.gradientColors = new int[] {super.textColor.getColorForState(new int[] {16842913}), super.textColor.getDefaultColor()), super.textColor.getColorForState(new int[] {16842913}), super.textColor.getDefaultColor()), super.textColor.getDefaultColor()});",
+        "stderr": "",
+        "stdout_sha256": "6dbdd7a63a2f5b114d288214a3f17c79cd788a682f0fafc82154a265a5912b5c",
+        "stdout_lines": 272,
+        "stdout_truncated": true,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      },
+      "rust": {
+        "exit": 0,
+        "stdout": "// Source: ClockFaceView.java\npackage com.google.android.material.timepicker;\n\nimport android.content.Context;\nimport android.graphics.RadialGradient;\nimport android.graphics.Rect;\nimport android.graphics.RectF;\nimport android.util.AttributeSet;\nimport android.util.SparseArray;\nimport android.view.accessibility.AccessibilityNodeInfo;\nimport android.widget.TextView;\nimport com.google.android.material.timepicker.ClockFaceView;\nimport com.google.android.material.timepicker.ClockHandView;\n\n class ClockFaceView extends com.google.android.material.timepicker.RadialViewGroup implements com.google.android.material.timepicker.ClockHandView$OnRotateListener {\n    private static final float EPSILON = 0.001f;\n    private static final int INITIAL_CAPACITY = 12;\n    private static final java.lang.String VALUE_PLACEHOLDER = \"\";\n\n    private final int clockHandPadding;\n    private final com.google.android.material.timepicker.ClockHandView clockHandView;\n    private final int clockSize;\n    private float currentHandRotation;\n    private final int[] gradientColors;\n    private final float[] gradientPositions;\n    private final int minimumHeight;\n    private final int minimumWidth;\n    private final android.graphics.RectF scratch;\n    private final android.graphics.Rect scratchLineBounds;\n    private final android.content.res.ColorStateList textColor;\n    private final android.util.SparseArray textViewPool;\n    private final android.graphics.Rect textViewRect;\n    private final androidx.core.view.AccessibilityDelegateCompat valueAccessibilityDelegate;\n    private java.lang.String[] values;\n\n    public ClockFaceView(Context context) {\n        super(context, null);\n    }\n\n    public ClockFaceView(Context context, AttributeSet attrs) {\n        super(context, attrs, v0);\n        int v0 = com.google.android.material.R$attr.materialClockStyle;\n    }\n\n    public ClockFaceView(Context context, AttributeSet attrs, int defStyleAttr) {\n        super(context, attrs, defStyleAttr);\n        android.graphics.Rect v0 = new android.graphics.Rect();\n        this.textViewRect = v0;\n        android.graphics.RectF v0_5 = new android.graphics.RectF();\n        this.scratch = v0_5;\n        v0 = new android.graphics.Rect();\n        this.scratchLineBounds = v0;\n        android.util.SparseArray v0_7 = new android.util.SparseArray();\n        this.textViewPool = v0_7;\n        float[] v0_9 = new float[3];\n        v0_9[0] = 0f;\n        v0_9[1] = 0.9f;\n        v0_9[2] = 1f;\n        this.gradientPositions = v0_9;\n        int[] v0_10 = com.google.android.material.R$styleable.ClockFaceView;\n        int v1 = com.google.android.material.R$style.Widget_MaterialComponents_TimePicker_Clock;\n        android.content.res.TypedArray v0_12 = context.obtainStyledAttributes(attrs, v0_10, defStyleAttr, v1);\n        android.content.res.Resources v1_13 = this.getResources();\n        int v2 = com.google.android.material.R$styleable.ClockFaceView_clockNumberTextColor;\n        android.content.res.ColorStateList v2_15",
+        "stderr": "",
+        "stdout_sha256": "b7c84aaa7c9e250c2bfadcd6f5496ddf5af1cc147544dff703c5ae4772e3d5eb",
+        "stdout_lines": 401,
+        "stdout_truncated": true,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_lines": 0,
+        "stderr_truncated": false
+      }
+    }
+  ],
+  "python_source_sha256": {
+    "main.py": "f456c0628cb4ba09e96b81cf33d5875120f514f19c59552f796a2f05f205d66f",
+    "requirements.txt": "47ca61e4fcf45578164296e183aaf634dffc470d9ea097c56df245fc09e40303",
+    "tests/dex_fixture.py": "e8782884cb8ab7a3d15ba70374fb7e69e993fa2f924ad08d343efc9578c3908c",
+    "src/asc_client/apk_handler.py": "fad38031a7367ccb7fdd471e7325e50def93bd6b5c95ab7c13d8bb3919f3b898",
+    "src/asc_client/asc_handler.py": "57f2badfecd88b7f3e00be02232b40a6bd337617a0feb927b2808bb673ee371c"
+  },
+  "rust_binary_sha256": "9364aa5751b2555ee5a09c8b78a25b8c17831c082f9c95838c9442a3594949ed"
+}

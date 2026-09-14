@@ -2,6 +2,9 @@
 
 [中文说明](README.zh-CN.md)
 
+[Maintenance specifications](openspec/README.md): Python CLI baseline, Rust parity audit,
+and the proposed library/CLI architecture. The proposals have not been implemented.
+
 ## What rasc is
 
 rasc is a Rust re-implementation of ASC: an APK/DEX analysis tool **built as an experiment,

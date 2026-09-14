@@ -1,0 +1,26 @@
+schema: spec-driven
+
+context: |
+  Language: zh-CN
+  All artifacts must be written in zh-CN.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+  项目只做 CLI；不记录或规划图形界面能力。
+  当前为审计与计划阶段；后续收到实施指令时按工作包执行，未验收任务保持未勾选。
+  工作分支 lordcasser/main，起点 rust e809c7b4b454ebc8eb4467f56d44a82e6139472b。
+  specs 的初始内容描述 Python main ccc6bae7704f5c5ef1a7271e27314837079621fb，
+  不是 Rust 已实现声明，也不是要求保留 Python 的缺陷。
+  audits/cli-parity 记录证据；changes 记录尚未实施的目标契约。
+  如非必要勿增实体，不考虑旧 API/文本格式兼容；保留分析能力与正确性。
+  自有产品层只有 core library 和薄 CLI 两个 crate；允许必要的 patched vendor，特性完整度优先。
+  第三方派生包独立保存来源、补丁与测试，以自有 package 名发布；core 私有适配，不暴露后端类型。
+  不依赖下游继承 workspace root patch，不以删功能换取无 vendor。
+  execution-plan.md 是分派入口；implementation/ 中的接口、验收与任务卡约束实施交接。
+rules:
+  specs:
+    - 每个 requirement 必须有可观测场景；区分基线事实、目标语义和未验证假设。
+  design:
+    - 写清数据归属、依赖方向、错误与部分结果、资源预算、并发、发布条件。
+    - 候选依赖未经契约测试不能宣称等价；未决项必须有决策方法和阻断条件。
+  tasks:
+    - 功能补齐与架构重组分开，未实施任务保持未勾选。
+    - 每项任务标记唯一 agent 工作包编号，列出前置条件、写入范围、验收和交接证据。

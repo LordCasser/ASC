@@ -2,6 +2,8 @@
 
 [English](README.md)（主文档）
 
+[维护规格与计划](openspec/README.md)：Python CLI 基线、Rust 特性审计，以及独立 library / 薄 CLI 架构。提案尚未实施。
+
 ## rasc 是什么
 
 rasc 是 ASC 的 Rust 重构实现，一个**出于测试目的、但确实可用**的 APK/DEX 分析工具。
