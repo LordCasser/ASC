@@ -17,6 +17,7 @@ memchr = "2.7"
 memmap2 = "0.9"
 rayon = "1.12"
 fancy-regex = "0.19"
+quick-xml = { version = "0.42.0", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
