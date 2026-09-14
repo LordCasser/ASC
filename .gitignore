@@ -20,3 +20,8 @@ artifacts/reference/
 .performance-base/
 artifacts/comparison/
 dist/
+
+
+# Added by cargo
+
+/target
