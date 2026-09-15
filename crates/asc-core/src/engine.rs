@@ -386,7 +386,7 @@ impl Artifact {
         measure: impl Fn(&T) -> (usize, usize, u64),
         op: impl Fn(&Root, &container::DexEntryViews<'_>, &ControlProbe<'_>) -> Result<Vec<T>, Error>
         + Sync,
-    ) -> Result<(Vec<T>, Vec<Diagnostic>), Error> {
+    ) -> Result<(Vec<T>, Vec<Diagnostic>, Vec<MemoryPermit>), Error> {
         let guard = ControlGuard::new(control);
         let probe = guard.probe();
         let input_limits = self.limits.input();
@@ -413,6 +413,11 @@ impl Artifact {
         let decoded = AtomicU64::new(0);
         let mut results = Vec::new();
         let mut integrity = Vec::new();
+        // Keep the scan estimate alive while rows produced by that scan are
+        // being folded and until the final report reservation succeeds.
+        // This closes the batch window in which rows outlived their scratch
+        // permit without charging the whole result limit up front.
+        let mut work_memory = Vec::new();
         let mut used = (0usize, 0usize, 0u64);
         // Bound in-flight result batches by private worker count. Fold in
         // ordinal order so scheduling cannot select a different error.
@@ -429,7 +434,7 @@ impl Artifact {
                 });
             }
             #[allow(clippy::type_complexity)]
-            let per_root: Vec<Result<(Vec<T>, Vec<Diagnostic>), Error>> =
+            let per_root: Vec<Result<(Vec<T>, Vec<Diagnostic>, MemoryPermit), Error>> =
                 self.runtime.pool.install(|| {
                     batch
                         .par_iter()
@@ -464,17 +469,19 @@ impl Artifact {
                                 .try_fold(0u64, |maximum, estimate| {
                                     estimate.map(|estimate| maximum.max(estimate))
                                 })?;
-                            let _scan_memory = self.runtime.memory.reserve_with_limit(
+                            let scan_memory = self.runtime.memory.reserve_with_limit(
                                 work_bytes,
                                 self.limits.max_engine_owned_bytes,
                                 "DEX scan working set",
                             )?;
-                            Ok((op(root, &views, &probe)?, entry_integrity))
+                            let rows = op(root, &views, &probe)?;
+                            Ok((rows, entry_integrity, scan_memory))
                         })
                         .collect()
                 });
             for entry in per_root {
-                let (rows, entry_integrity) = entry?;
+                let (rows, entry_integrity, scan_memory) = entry?;
+                work_memory.push(scan_memory);
                 for row in rows {
                     probe.check()?;
                     charge_results(&mut used, measure(&row), &self.limits.scan)?;
@@ -489,7 +496,7 @@ impl Artifact {
             .cloned()
             .chain(integrity.iter().cloned())
             .collect();
-        Ok((results, diagnostics))
+        Ok((results, diagnostics, work_memory))
     }
 
     fn require_roots(&self) -> Result<(), Error> {
@@ -597,7 +604,7 @@ fn reference_size(row: &crate::model::Reference) -> (usize, usize, u64) {
 /// The selected logical DEX entries: identity, names, version, header offset.
 /// A DEX-less archive yields a successful empty catalog.
 fn dexes(artifact: &Artifact, control: &OperationControl) -> Result<Report<Vec<DexEntry>>, Error> {
-    let (rows, diagnostics) = artifact.fold_roots(
+    let (rows, diagnostics, work_memory) = artifact.fold_roots(
         control,
         |entry: &DexEntry| (1, 128usize.saturating_add(entry.raw_entry_name().len()), 0),
         |_entry, views, _probe| {
@@ -617,6 +624,7 @@ fn dexes(artifact: &Artifact, control: &OperationControl) -> Result<Report<Vec<D
         .map(|entry| 128usize.saturating_add(entry.raw_entry_name().len()))
         .fold(0usize, usize::saturating_add);
     let memory = reserve_report_memory(artifact, bytes, &diagnostics, "DEX report")?;
+    drop(work_memory);
     Ok(Report::new(rows, diagnostics, stats).with_memory(memory))
 }
 
@@ -634,7 +642,7 @@ fn classes(
     // (class, descriptor) pairs: duplicates are counted across every
     // definition before the filter (a filtered-out duplicate is still a
     // duplicate definition).
-    let (pairs, mut diagnostics) = artifact.fold_roots(
+    let (pairs, mut diagnostics, work_memory) = artifact.fold_roots(
         control,
         |(class, _): &(Class, String)| {
             if filter.matches(class.java_name()) {
@@ -696,6 +704,7 @@ fn classes(
         })
         .fold(0usize, usize::saturating_add);
     let memory = reserve_report_memory(artifact, bytes, &diagnostics, "class report")?;
+    drop(work_memory);
     Ok(Report::new(rows, diagnostics, stats).with_memory(memory))
 }
 
@@ -709,7 +718,7 @@ fn references(
 ) -> Result<Report<Vec<crate::model::Reference>>, Error> {
     artifact.require_roots()?;
     let scan_limits = artifact.limits.scan;
-    let (rows, diagnostics) =
+    let (rows, diagnostics, work_memory) =
         artifact.fold_roots(control, reference_size, |_entry, views, probe| {
             let mut rows = Vec::new();
             for (logical, view) in views.views.iter().enumerate() {
@@ -734,6 +743,7 @@ fn references(
         .map(|(_, bytes, _)| bytes)
         .fold(0usize, usize::saturating_add);
     let memory = reserve_report_memory(artifact, bytes, &diagnostics, "reference report")?;
+    drop(work_memory);
     Ok(Report::new(rows, diagnostics, stats).with_memory(memory))
 }
 
@@ -744,7 +754,7 @@ fn classes_in_scope(
     control: &OperationControl,
 ) -> Result<Report<Vec<Class>>, Error> {
     let scan_limits = artifact.limits.scan;
-    let (pairs, mut diagnostics) = fold_scope(
+    let (pairs, mut diagnostics, work_memory) = fold_scope(
         artifact,
         scope,
         control,
@@ -804,6 +814,7 @@ fn classes_in_scope(
         })
         .fold(0usize, usize::saturating_add);
     let memory = reserve_report_memory(artifact, bytes, &diagnostics, "scoped class report")?;
+    drop(work_memory);
     Ok(Report::new(
         rows,
         diagnostics,
@@ -822,7 +833,7 @@ fn references_in_scope(
     control: &OperationControl,
 ) -> Result<Report<Vec<crate::model::Reference>>, Error> {
     let scan_limits = artifact.limits.scan;
-    let (rows, diagnostics) = fold_scope(
+    let (rows, diagnostics, work_memory) = fold_scope(
         artifact,
         scope,
         control,
@@ -844,6 +855,7 @@ fn references_in_scope(
         .map(|(_, bytes, _)| bytes)
         .fold(0usize, usize::saturating_add);
     let memory = reserve_report_memory(artifact, bytes, &diagnostics, "scoped reference report")?;
+    drop(work_memory);
     Ok(Report::new(
         rows.clone(),
         diagnostics,
@@ -862,7 +874,7 @@ fn strings_in_scope(
     control: &OperationControl,
 ) -> Result<Report<Vec<StringDeclaration>>, Error> {
     let scan_limits = artifact.limits.scan;
-    let (rows, diagnostics) = fold_scope(
+    let (rows, diagnostics, work_memory) = fold_scope(
         artifact,
         scope,
         control,
@@ -888,6 +900,7 @@ fn strings_in_scope(
         .map(|row| 160usize.saturating_add(row.value().unit_len().saturating_mul(2)))
         .fold(0usize, usize::saturating_add);
     let memory = reserve_report_memory(artifact, memory_bytes, &diagnostics, "string inventory report")?;
+    drop(work_memory);
     Ok(Report::new(
         rows.clone(),
         diagnostics,
@@ -961,7 +974,7 @@ fn instructions_in_scope_filtered(
     method_filter: Option<&std::collections::BTreeMap<crate::model::DexId, std::collections::BTreeSet<u32>>>,
 ) -> Result<Report<Vec<InstructionFact>>, Error> {
     let scan_limits = artifact.limits.scan;
-    let (rows, diagnostics) = fold_scope(
+    let (rows, diagnostics, work_memory) = fold_scope(
         artifact,
         scope,
         control,
@@ -991,6 +1004,7 @@ fn instructions_in_scope_filtered(
         .map(|(_, bytes, _)| bytes)
         .fold(0usize, usize::saturating_add);
     let memory = reserve_report_memory(artifact, bytes, &diagnostics, "instruction fact report")?;
+    drop(work_memory);
     Ok(Report::new(
         rows.clone(),
         diagnostics,
@@ -1015,7 +1029,7 @@ fn dexes_in_scope(
     scope: &MethodScope,
     control: &OperationControl,
 ) -> Result<Report<Vec<DexEntry>>, Error> {
-    let (rows, diagnostics) = fold_scope(
+    let (rows, diagnostics, work_memory) = fold_scope(
         artifact,
         scope,
         control,
@@ -1029,6 +1043,7 @@ fn dexes_in_scope(
         .map(|entry| 128usize.saturating_add(entry.raw_entry_name().len()))
         .fold(0usize, usize::saturating_add);
     let memory = reserve_report_memory(artifact, bytes, &diagnostics, "scoped DEX report")?;
+    drop(work_memory);
     Ok(Report::new(
         rows,
         diagnostics,
@@ -1203,7 +1218,7 @@ fn fold_scope<T: Send>(
         usize,
         &ControlProbe<'_>,
     ) -> Result<Vec<T>, Error>,
-) -> Result<(Vec<T>, Vec<Diagnostic>), Error> {
+) -> Result<(Vec<T>, Vec<Diagnostic>, Vec<MemoryPermit>), Error> {
     let inputs = resolve_method_scope(artifact, scope)?;
     let guard = ControlGuard::new(control);
     let probe = guard.probe();
@@ -1218,6 +1233,9 @@ fn fold_scope<T: Send>(
     let decoded = AtomicU64::new(0);
     let mut rows = Vec::new();
     let mut integrity = Vec::new();
+    // Keep each DEX scan estimate until its rows have been transferred into
+    // the final result and the caller has reserved the report allocation.
+    let mut work_memory = Vec::new();
     let mut used = (0usize, 0usize, 0u64);
     for input in inputs {
         probe.check()?;
@@ -1260,12 +1278,14 @@ fn fold_scope<T: Send>(
             let entry = views.dex_entry(logical);
             let dex_view = dex::DexView::new(entry, views.views[logical].bytes());
             let work_bytes = dex::estimated_scan_work(&dex_view, &artifact.limits.scan)?;
-            let _scan_memory = artifact.runtime.memory.reserve_with_limit(
+            let scan_memory = artifact.runtime.memory.reserve_with_limit(
                 work_bytes,
                 artifact.limits.max_engine_owned_bytes,
                 "scoped DEX scan working set",
             )?;
-            for row in op(&views, logical, &probe)? {
+            let logical_rows = op(&views, logical, &probe)?;
+            work_memory.push(scan_memory);
+            for row in logical_rows {
                 probe.check()?;
                 charge_results(&mut used, measure(&row), &artifact.limits.scan)?;
                 rows.push(row);
@@ -1278,7 +1298,7 @@ fn fold_scope<T: Send>(
         .cloned()
         .chain(integrity)
         .collect();
-    Ok((rows, diagnostics))
+    Ok((rows, diagnostics, work_memory))
 }
 
 #[cfg(feature = "decompile")]
