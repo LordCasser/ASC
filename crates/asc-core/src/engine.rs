@@ -2556,12 +2556,15 @@ fn manifest(
         &decoded,
         &probe,
     )?;
-    let report =
-        crate::manifest::decode_manifest_entry(&bytes, &artifact.limits.manifest, control)?;
-    let diagnostics: Vec<Diagnostic> = report
-        .diagnostics
-        .iter()
-        .cloned()
+    let (manifest, report_diagnostics, _report_stats, report_memory) =
+        crate::manifest::decode_manifest_entry(&bytes, &artifact.limits.manifest, control)?
+            .into_parts();
+    debug_assert!(
+        report_memory.is_none(),
+        "manifest decoder does not charge reports"
+    );
+    let diagnostics: Vec<Diagnostic> = report_diagnostics
+        .into_iter()
         .chain(artifact.open_diagnostics.iter().cloned())
         .collect();
     let memory = reserve_report_memory(
@@ -2571,7 +2574,7 @@ fn manifest(
         "manifest report",
     )?;
     Ok(Report::new(
-        report.value,
+        manifest,
         diagnostics,
         OperationStats {
             result_items: 1,
@@ -3509,6 +3512,12 @@ mod tests {
                 &no_control(),
             )
             .unwrap();
+        let report_clone = report.clone();
+        assert!(
+            std::ptr::eq(report.value(), report_clone.value()),
+            "cloning a report must share its charged payload allocation"
+        );
+        drop(report);
         let error = engine
             .archive_entries(
                 &artifact,
@@ -3517,7 +3526,7 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(error.kind(), ErrorKind::ResourceLimit));
-        drop(report);
+        drop(report_clone);
         assert!(engine
             .archive_entries(
                 &artifact,

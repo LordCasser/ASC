@@ -1798,14 +1798,23 @@ pub struct OperationStats {
 
 /// The uniform operation result: the value, everything diagnosed along the
 /// way, and stats. Stats do not participate in fact equality or the payload.
+///
+/// The inner value is shared by clones. This is deliberate: a report's
+/// `MemoryPermit` charges the allocation represented by that value, so a
+/// clone must keep the same allocation alive rather than deep-copying the
+/// payload under one shared charge.
 pub struct Report<T> {
-    pub(crate) value: T,
-    pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) stats: OperationStats,
+    inner: Arc<ReportInner<T>>,
+}
+
+struct ReportInner<T> {
+    value: T,
+    diagnostics: Vec<Diagnostic>,
+    stats: OperationStats,
     /// The measured result allocation remains charged while this report (or
     /// one of its clones) is alive. Consumer-side serialization is outside
     /// this core ledger.
-    pub(crate) memory: Option<MemoryPermit>,
+    memory: Option<MemoryPermit>,
 }
 
 /*
@@ -1816,9 +1825,9 @@ pub struct Report<T> {
 impl<T: fmt::Debug> fmt::Debug for Report<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Report")
-            .field("value", &self.value)
-            .field("diagnostics", &self.diagnostics)
-            .field("stats", &self.stats)
+            .field("value", &self.inner.value)
+            .field("diagnostics", &self.inner.diagnostics)
+            .field("stats", &self.inner.stats)
             .finish()
     }
 }
@@ -1826,53 +1835,60 @@ impl<T: fmt::Debug> fmt::Debug for Report<T> {
 impl<T> Report<T> {
     pub(crate) fn new(value: T, diagnostics: Vec<Diagnostic>, stats: OperationStats) -> Self {
         Self {
-            value,
-            diagnostics,
-            stats,
-            memory: None,
+            inner: Arc::new(ReportInner {
+                value,
+                diagnostics,
+                stats,
+                memory: None,
+            }),
         }
     }
 
     pub(crate) fn with_memory(mut self, memory: MemoryPermit) -> Self {
-        self.memory = Some(memory);
+        Arc::get_mut(&mut self.inner)
+            .expect("report memory must be attached before the report is cloned")
+            .memory = Some(memory);
         self
     }
 
-    pub fn value(&self) -> &T {
-        &self.value
+    /// Moves the complete report contents for crate-internal adapters. The
+    /// report is intentionally required to be unique so an owned payload and
+    /// its permit cannot be separated from a surviving clone.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (T, Vec<Diagnostic>, OperationStats, Option<MemoryPermit>) {
+        let inner = Arc::try_unwrap(self.inner)
+            .unwrap_or_else(|_| panic!("report parts cannot be moved while a clone is alive"));
+        (inner.value, inner.diagnostics, inner.stats, inner.memory)
     }
 
-    #[allow(dead_code)] // A08 payload projection
-    pub fn into_value(self) -> T {
-        self.value
+    pub fn value(&self) -> &T {
+        &self.inner.value
     }
 
     pub fn diagnostics(&self) -> &[Diagnostic] {
-        &self.diagnostics
+        &self.inner.diagnostics
     }
 
     #[allow(dead_code)] // A08 debug surface (never in payload)
     pub fn stats(&self) -> OperationStats {
-        self.stats
+        self.inner.stats
     }
 }
 
-impl<T: Clone> Clone for Report<T> {
+impl<T> Clone for Report<T> {
     fn clone(&self) -> Self {
         Self {
-            value: self.value.clone(),
-            diagnostics: self.diagnostics.clone(),
-            stats: self.stats,
-            memory: self.memory.clone(),
+            inner: Arc::clone(&self.inner),
         }
     }
 }
 
 impl<T: PartialEq> PartialEq for Report<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-            && self.diagnostics == other.diagnostics
-            && self.stats == other.stats
+        self.inner.value == other.inner.value
+            && self.inner.diagnostics == other.inner.diagnostics
+            && self.inner.stats == other.inner.stats
     }
 }
 

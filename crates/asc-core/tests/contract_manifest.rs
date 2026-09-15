@@ -411,13 +411,13 @@ fn man04_limit_variants_fail_with_resource_limit() {
     let report = decode_entry(&bytes).unwrap();
     let small_output = XmlRenderOptions { max_output_bytes: 40, ..XmlRenderOptions::default() };
     let error = report
-        .value
+        .value()
         .to_xml(&small_output, &OperationControl::new())
         .expect_err("output over the limit must fail");
     assert_eq!(*error.kind(), ErrorKind::ResourceLimit, "{error}");
     let small_depth = XmlRenderOptions { max_depth: 2, ..XmlRenderOptions::default() };
     let error = report
-        .value
+        .value()
         .to_xml(&small_depth, &OperationControl::new())
         .expect_err("render depth over the limit must fail");
     assert_eq!(*error.kind(), ErrorKind::ResourceLimit, "{error}");
@@ -541,7 +541,7 @@ fn man04_plain_xml_rejections() {
     // renderer refuses to serialize it silently.
     let report = decode("<a>&#1;</a>").expect("parse accepts, render rejects");
     let error = report
-        .value
+        .value()
         .to_xml(&XmlRenderOptions::default(), &OperationControl::new())
         .expect_err("illegal character must not be silently replaced");
     assert_eq!(*error.kind(), ErrorKind::UnsupportedEncoding, "{error}");
