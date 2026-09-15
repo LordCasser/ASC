@@ -1180,6 +1180,8 @@ pub struct InstructionFact {
     dex: DexEntry,
     method: MethodId,
     code_off: u32,
+    registers_size: u16,
+    ins_size: u16,
     pc: u32,
     opcode: u8,
     reads: Vec<u16>,
@@ -1196,6 +1198,8 @@ impl InstructionFact {
         dex: DexEntry,
         method: MethodId,
         code_off: u32,
+        registers_size: u16,
+        ins_size: u16,
         pc: u32,
         opcode: u8,
         reads: Vec<u16>,
@@ -1209,6 +1213,8 @@ impl InstructionFact {
             dex,
             method,
             code_off,
+            registers_size,
+            ins_size,
             pc,
             opcode,
             reads,
@@ -1230,6 +1236,17 @@ impl InstructionFact {
 
     pub fn code_off(&self) -> u32 {
         self.code_off
+    }
+
+    /// Total virtual registers declared by the containing `code_item`.
+    pub fn registers_size(&self) -> u16 {
+        self.registers_size
+    }
+
+    /// Number of incoming register words declared by the containing
+    /// `code_item`; this includes the implicit receiver for instance methods.
+    pub fn ins_size(&self) -> u16 {
+        self.ins_size
     }
 
     pub fn pc(&self) -> u32 {

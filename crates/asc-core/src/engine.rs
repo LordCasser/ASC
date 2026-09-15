@@ -917,6 +917,7 @@ fn instruction_fact_size(row: &InstructionFact) -> (usize, usize, u64) {
     });
     let bytes = 128usize
         .saturating_add(identity_bytes)
+        .saturating_add(4)
         .saturating_add(row.reads().len().saturating_mul(2))
         .saturating_add(row.writes().len().saturating_mul(2))
         .saturating_add(row.branch_targets().len().saturating_mul(4));

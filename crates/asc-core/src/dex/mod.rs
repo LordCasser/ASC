@@ -890,6 +890,8 @@ impl<'a> ScanDex<'a> {
         let malformed = |message: String| {
             Error::malformed_input(format!("method #{method_idx}: {message}"))
         };
+        let registers_size = self.u16(code_off)?;
+        let ins_size = self.u16(code_off + 2)?;
         let insns_size = self.u32(code_off + 12)? as usize;
         let start = code_off
             .checked_add(16)
@@ -1325,6 +1327,8 @@ impl<'a> ScanDex<'a> {
                 MethodId::new(entry.id(), method_idx),
                 u32::try_from(code_off)
                     .map_err(|_| malformed("code item offset exceeds u32".to_owned()))?,
+                registers_size,
+                ins_size,
                 u32::try_from(pc / 2)
                     .map_err(|_| malformed("code-unit pc exceeds u32".to_owned()))?,
                 opcode,
@@ -1772,6 +1776,8 @@ pub(crate) mod tests {
         assert_eq!(facts.len(), 2, "const-string plus return-void");
         let first = &facts[0];
         assert_eq!(first.method().method_idx(), 0);
+        assert_eq!(first.registers_size(), 1);
+        assert_eq!(first.ins_size(), 0);
         assert_eq!(first.pc(), 0);
         assert_eq!(first.opcode(), 0x1a);
         assert_eq!(first.reads(), &[] as &[u16]);
