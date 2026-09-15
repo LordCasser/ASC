@@ -630,24 +630,65 @@ pub enum AnnotationTarget {
 /// report-build time, so no vendor pool type crosses the checked API.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypedValue {
+    /// VALUE_NULL.
     Null,
+    /// VALUE_BOOLEAN.
     Boolean(bool),
+    /// VALUE_BYTE.
     Byte(i8),
+    /// VALUE_SHORT.
     Short(i16),
+    /// VALUE_CHAR (UTF-16 code unit).
     Char(u16),
+    /// VALUE_INT.
     Int(i32),
+    /// VALUE_LONG.
     Long(i64),
-    /// Raw IEEE-754 bits - the only lossless float/double form (DECL-01).
+    /// VALUE_FLOAT as raw IEEE-754 bits - the only lossless form (DECL-01).
     FloatBits(u32),
+    /// VALUE_DOUBLE as raw IEEE-754 bits - the only lossless form (DECL-01).
     DoubleBits(u64),
+    /// VALUE_STRING with the string resolved from the pool.
     Text(String),
+    /// VALUE_TYPE with the descriptor resolved from the pool.
     Type(String),
-    Field { class: String, name: String, ty: String },
-    Method { class: String, name: String, proto: String },
-    Enum { class: String, name: String },
+    /// VALUE_FIELD resolved to (declaring class, name, type descriptor).
+    Field {
+        /// Declaring class descriptor.
+        class: String,
+        /// Field name.
+        name: String,
+        /// Field type descriptor.
+        ty: String,
+    },
+    /// VALUE_METHOD resolved to (declaring class, name, prototype).
+    Method {
+        /// Declaring class descriptor.
+        class: String,
+        /// Method name.
+        name: String,
+        /// Prototype descriptor `(params)ret`.
+        proto: String,
+    },
+    /// VALUE_ENUM resolved to (enum class, constant name).
+    Enum {
+        /// Enum class descriptor.
+        class: String,
+        /// Constant name.
+        name: String,
+    },
+    /// VALUE_ARRAY with each element typed recursively.
     Array(Vec<TypedValue>),
-    Annotation { type_descriptor: String, elements: Vec<(String, TypedValue)> },
+    /// VALUE_ANNOTATION with the type descriptor and named elements.
+    Annotation {
+        /// Annotation type descriptor.
+        type_descriptor: String,
+        /// Named element values.
+        elements: Vec<(String, TypedValue)>,
+    },
+    /// VALUE_METHOD_TYPE with the prototype descriptor.
     MethodType(String),
+    /// VALUE_METHOD_HANDLE as the method_handles index.
     MethodHandle(u32),
 }
 

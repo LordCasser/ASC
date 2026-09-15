@@ -949,6 +949,7 @@ pub(crate) fn proto_descriptor_text(
     dex: &DexFile,
     pidx: crate::ids::ProtoIdx,
 ) -> Option<String> {
+    #[allow(clippy::as_conversions, reason = "PROOF: widen u32->usize; pidx.0 is a proto_ids pool index produced by the parser, bounded < dex.protos.len() by pool validation; lossless on 32+-bit platforms.")]
     let p = dex.protos.get(pidx.0 as usize)?;
     let ret = dex.get_type_descriptor(p.return_type_idx).ok()?;
     let params: Vec<String> = if p.parameters_off == 0 {
@@ -996,6 +997,7 @@ pub(crate) fn encoded_value_to_typed(
             TypedValue::Type(dex.get_type_descriptor(*tidx).unwrap_or("?").to_string())
         }
         EncodedValue::Field(fidx) => {
+            #[allow(clippy::as_conversions, reason = "PROOF: widen u32->usize; fidx.0 is a field_ids pool index produced by the parser, bounded < dex.fields.len() by pool validation; lossless on 32+-bit platforms.")]
             let field = dex.fields.get(fidx.0 as usize);
             let class = field
                 .and_then(|f| dex.get_type_descriptor(f.class_idx).ok())
@@ -1012,6 +1014,7 @@ pub(crate) fn encoded_value_to_typed(
             TypedValue::Field { class, name, ty }
         }
         EncodedValue::Method(midx) => {
+            #[allow(clippy::as_conversions, reason = "PROOF: widen u32->usize; midx.0 is a method_ids pool index produced by the parser, bounded < dex.methods.len() by pool validation; lossless on 32+-bit platforms.")]
             let method = dex.methods.get(midx.0 as usize);
             let class = method
                 .and_then(|m| dex.get_type_descriptor(m.class_idx).ok())
@@ -1027,6 +1030,7 @@ pub(crate) fn encoded_value_to_typed(
             TypedValue::Method { class, name, proto }
         }
         EncodedValue::Enum(fidx) => {
+            #[allow(clippy::as_conversions, reason = "PROOF: widen u32->usize; fidx.0 is a field_ids pool index produced by the parser, bounded < dex.fields.len() by pool validation; lossless on 32+-bit platforms.")]
             let field = dex.fields.get(fidx.0 as usize);
             let class = field
                 .and_then(|f| dex.get_type_descriptor(f.class_idx).ok())
