@@ -17,12 +17,12 @@
 //! ordinal order, so the merged output never depends on scheduling.
 
 use crate::bytes::ControlProbe;
+use crate::bytes::OperationControl;
 use crate::dex::container;
 #[cfg(feature = "decompile")]
 use crate::dex::container::ValidatedDexView;
 use crate::dex::{self, ScanOptions};
 use crate::error::{Error, ErrorKind};
-use crate::bytes::OperationControl;
 #[cfg(feature = "decompile")]
 use crate::model::{
     AnnotationEntry, AnnotationRecord, AnnotationTarget, AnnotationVisibility, ArtifactId, Class,
@@ -30,15 +30,18 @@ use crate::model::{
     Diagnostic, DiagnosticCode, EnclosingRecord, FieldMetadata, InnerClassRecord, MethodMetadata,
     OperationStats, Prototype, Report, Severity, Source, SourceMetadata, Stage,
 };
+use crate::model::{ArchiveEntry as ArchiveEntryFact, ArchiveEntryId, ArchiveEntryQuery};
 #[cfg(not(feature = "decompile"))]
-use crate::model::{ArtifactId, Class, ClassFilter, DexEntry, DexText, Diagnostic,
-    DiagnosticCode, OperationStats, Prototype, Report, Severity, Stage};
-use crate::zip::{self, ArchiveEntry};
+use crate::model::{
+    ArtifactId, Class, ClassFilter, DexEntry, DexText, Diagnostic, DiagnosticCode, OperationStats,
+    Prototype, Report, Severity, Stage,
+};
+use crate::zip::{self, ArchiveEntry as ZipArchiveEntry};
+use rayon::prelude::*;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use rayon::prelude::*;
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::Duration;
 
@@ -128,8 +131,14 @@ impl ControlGuard {
 
     fn probe(&self) -> ControlProbe<'_> {
         match &self.flag {
-            Some(flag) => ControlProbe { cancelled: flag, deadline: self.deadline },
-            None => ControlProbe { cancelled: &self.dummy, deadline: self.deadline },
+            Some(flag) => ControlProbe {
+                cancelled: flag,
+                deadline: self.deadline,
+            },
+            None => ControlProbe {
+                cancelled: &self.dummy,
+                deadline: self.deadline,
+            },
         }
     }
 
@@ -137,7 +146,10 @@ impl ControlGuard {
     /// plus an input-length cap for the bytes being parsed.
     #[cfg(feature = "decompile")]
     fn backend_budget(&self, input_len: u64) -> droidsaw_dex::analysis::Budget {
-        droidsaw_dex::analysis::Budget { deadline: self.deadline, max_input_bytes: Some(input_len) }
+        droidsaw_dex::analysis::Budget {
+            deadline: self.deadline,
+            max_input_bytes: Some(input_len),
+        }
     }
 }
 
@@ -153,7 +165,7 @@ struct Root {
 }
 
 enum RootSource {
-    Archive(ArchiveEntry),
+    Archive(ZipArchiveEntry),
     Raw,
 }
 
@@ -239,16 +251,20 @@ fn read_path_snapshot(
     control: &OperationControl,
 ) -> Result<Arc<[u8]>, Error> {
     control.check()?;
-    let mut file = File::open(path)
-        .map_err(|error| Error::new(ErrorKind::NotFound).with_context(format!("open {path:?}: {error}")))?;
-    let metadata = file.metadata()
-        .map_err(|error| Error::new(ErrorKind::NotFound).with_context(format!("stat {path:?}: {error}")))?;
+    let mut file = File::open(path).map_err(|error| {
+        Error::new(ErrorKind::NotFound).with_context(format!("open {path:?}: {error}"))
+    })?;
+    let metadata = file.metadata().map_err(|error| {
+        Error::new(ErrorKind::NotFound).with_context(format!("stat {path:?}: {error}"))
+    })?;
     if !metadata.is_file() {
         return Err(Error::new(ErrorKind::UnsupportedFormat)
             .with_context(format!("{path:?} is not a regular file")));
     }
     if metadata.len() > max_bytes {
-        return Err(Error::resource_limit(format!("{path:?} exceeds the {max_bytes} input limit")));
+        return Err(Error::resource_limit(format!(
+            "{path:?} exceeds the {max_bytes} input limit"
+        )));
     }
     read_snapshot(&mut file, max_bytes, control).map(|bytes| Arc::from(bytes.into_boxed_slice()))
 }
@@ -268,11 +284,16 @@ fn read_snapshot(
         let read = reader.read(&mut buffer[..wanted]).map_err(|error| {
             Error::new(ErrorKind::MalformedInput).with_context(format!("read input: {error}"))
         })?;
-        if read == 0 { break; }
-        if read as u64 > remaining {
-            return Err(Error::resource_limit(format!("input exceeds the {max_bytes} byte limit")));
+        if read == 0 {
+            break;
         }
-        bytes.try_reserve_exact(read)
+        if read as u64 > remaining {
+            return Err(Error::resource_limit(format!(
+                "input exceeds the {max_bytes} byte limit"
+            )));
+        }
+        bytes
+            .try_reserve_exact(read)
             .map_err(|error| Error::resource_limit(format!("input allocation: {error}")))?;
         bytes.extend_from_slice(&buffer[..read]);
     }
@@ -365,7 +386,7 @@ impl Artifact {
         control: &OperationControl,
         measure: impl Fn(&T) -> (usize, usize, u64),
         op: impl Fn(&Root, &container::DexEntryViews<'_>, &ControlProbe<'_>) -> Result<Vec<T>, Error>
-            + Sync,
+        + Sync,
     ) -> Result<(Vec<T>, Vec<Diagnostic>), Error> {
         let guard = ControlGuard::new(control);
         let probe = guard.probe();
@@ -380,8 +401,7 @@ impl Artifact {
         let mut declared_total: u64 = 0;
         for root in &self.roots {
             if let RootSource::Archive(entry) = &root.source {
-                declared_total =
-                    declared_total.saturating_add(entry.declared_uncompressed_bytes());
+                declared_total = declared_total.saturating_add(entry.declared_uncompressed_bytes());
             }
         }
         if declared_total > input_limits.max_total_decoded_bytes {
@@ -400,18 +420,31 @@ impl Artifact {
         for batch in self.roots.chunks(self.runtime.pool.current_num_threads()) {
             #[allow(clippy::type_complexity)]
             let per_root: Vec<Result<(Vec<T>, Vec<Diagnostic>), Error>> =
-                self.runtime.pool.install(|| batch.par_iter().map(|root| {
-                    let data: &[u8] = match &root.source {
-                        RootSource::Archive(entry) => {
-                            &zip::read_entry(&self.bytes, entry, &input_limits, &decoded, &probe)?
-                        }
-                        RootSource::Raw => &self.bytes,
-                    };
-                    let (views, entry_integrity) = container::validate_dex_entry(
-                        self.id, root.ordinal, &root.raw_name, data, &probe,
-                    )?;
-                    Ok((op(root, &views, &probe)?, entry_integrity))
-                }).collect());
+                self.runtime.pool.install(|| {
+                    batch
+                        .par_iter()
+                        .map(|root| {
+                            let data: &[u8] = match &root.source {
+                                RootSource::Archive(entry) => &zip::read_entry(
+                                    &self.bytes,
+                                    entry,
+                                    &input_limits,
+                                    &decoded,
+                                    &probe,
+                                )?,
+                                RootSource::Raw => &self.bytes,
+                            };
+                            let (views, entry_integrity) = container::validate_dex_entry(
+                                self.id,
+                                root.ordinal,
+                                &root.raw_name,
+                                data,
+                                &probe,
+                            )?;
+                            Ok((op(root, &views, &probe)?, entry_integrity))
+                        })
+                        .collect()
+                });
             for entry in per_root {
                 let (rows, entry_integrity) = entry?;
                 for row in rows {
@@ -422,8 +455,12 @@ impl Artifact {
                 integrity.extend(entry_integrity);
             }
         }
-        let diagnostics =
-            self.open_diagnostics.iter().cloned().chain(integrity.iter().cloned()).collect();
+        let diagnostics = self
+            .open_diagnostics
+            .iter()
+            .cloned()
+            .chain(integrity.iter().cloned())
+            .collect();
         Ok((results, diagnostics))
     }
 
@@ -444,11 +481,17 @@ fn charge_results(
     used.0 = used.0.saturating_add(added.0);
     used.1 = used.1.saturating_add(added.1);
     used.2 = used.2.saturating_add(added.2);
-    if used.0 > limits.max_result_items || used.1 > limits.max_result_bytes
-        || used.2 > limits.max_reference_locations {
+    if used.0 > limits.max_result_items
+        || used.1 > limits.max_result_bytes
+        || used.2 > limits.max_reference_locations
+    {
         return Err(Error::resource_limit(format!(
             "operation result uses {} items, {} estimated bytes, {} locations; limits are {}, {}, {}",
-            used.0, used.1, used.2, limits.max_result_items, limits.max_result_bytes,
+            used.0,
+            used.1,
+            used.2,
+            limits.max_result_items,
+            limits.max_result_bytes,
             limits.max_reference_locations,
         )));
     }
@@ -457,14 +500,21 @@ fn charge_results(
 
 fn reference_size(row: &crate::model::Reference) -> (usize, usize, u64) {
     // Same structural coefficients as the scanner, plus variable text storage.
-    fn text(value: &DexText) -> usize { value.unit_len().saturating_mul(2) }
+    fn text(value: &DexText) -> usize {
+        value.unit_len().saturating_mul(2)
+    }
     fn prototype(value: &Prototype) -> usize {
-        value.parameters().iter().fold(text(value.return_type()), |n, p| n.saturating_add(text(p)))
+        value
+            .parameters()
+            .iter()
+            .fold(text(value.return_type()), |n, p| n.saturating_add(text(p)))
     }
     use crate::model::TargetValue;
     let caller = row.caller();
-    let mut bytes = 320usize.saturating_add(text(caller.owner()))
-        .saturating_add(text(caller.name())).saturating_add(prototype(caller.prototype()))
+    let mut bytes = 320usize
+        .saturating_add(text(caller.owner()))
+        .saturating_add(text(caller.name()))
+        .saturating_add(prototype(caller.prototype()))
         .saturating_add(caller.dex().raw_entry_name().len());
     let mut locations = 0u64;
     for target in row.targets() {
@@ -472,10 +522,25 @@ fn reference_size(row: &crate::model::Reference) -> (usize, usize, u64) {
         locations = locations.saturating_add(count as u64);
         let value_bytes = match target.value() {
             TargetValue::String(t) | TargetValue::Type(t) => text(t),
-            TargetValue::Field { owner, name, field_type } => text(owner).saturating_add(text(name)).saturating_add(text(field_type)),
-            TargetValue::Method { owner, name, prototype: p } => text(owner).saturating_add(text(name)).saturating_add(prototype(p)),
+            TargetValue::Field {
+                owner,
+                name,
+                field_type,
+            } => text(owner)
+                .saturating_add(text(name))
+                .saturating_add(text(field_type)),
+            TargetValue::Method {
+                owner,
+                name,
+                prototype: p,
+            } => text(owner)
+                .saturating_add(text(name))
+                .saturating_add(prototype(p)),
         };
-        bytes = bytes.saturating_add(64).saturating_add(count.saturating_mul(8)).saturating_add(value_bytes);
+        bytes = bytes
+            .saturating_add(64)
+            .saturating_add(count.saturating_mul(8))
+            .saturating_add(value_bytes);
     }
     (1, bytes, locations)
 }
@@ -483,14 +548,21 @@ fn reference_size(row: &crate::model::Reference) -> (usize, usize, u64) {
 /// The selected logical DEX entries: identity, names, version, header offset.
 /// A DEX-less archive yields a successful empty catalog.
 fn dexes(artifact: &Artifact, control: &OperationControl) -> Result<Report<Vec<DexEntry>>, Error> {
-    let (rows, diagnostics) = artifact.fold_roots(control, |entry: &DexEntry| (1, 128 + entry.raw_entry_name().len(), 0), |_entry, views, _probe| {
-        let mut rows = Vec::with_capacity(views.views.len());
-        for logical in 0..views.views.len() {
-            rows.push(views.dex_entry(logical));
-        }
-        Ok(rows)
-    })?;
-    let stats = OperationStats { selected_dexes: rows.len() as u32, ..Default::default() };
+    let (rows, diagnostics) = artifact.fold_roots(
+        control,
+        |entry: &DexEntry| (1, 128 + entry.raw_entry_name().len(), 0),
+        |_entry, views, _probe| {
+            let mut rows = Vec::with_capacity(views.views.len());
+            for logical in 0..views.views.len() {
+                rows.push(views.dex_entry(logical));
+            }
+            Ok(rows)
+        },
+    )?;
+    let stats = OperationStats {
+        selected_dexes: rows.len() as u32,
+        ..Default::default()
+    };
     Ok(Report::new(rows, diagnostics, stats))
 }
 
@@ -508,21 +580,32 @@ fn classes(
     // (class, descriptor) pairs: duplicates are counted across every
     // definition before the filter (a filtered-out duplicate is still a
     // duplicate definition).
-    let (pairs, mut diagnostics) = artifact.fold_roots(control, |(class, _): &(Class, String)| {
-        if filter.matches(class.java_name()) {
-            (1, 320 + class.descriptor().as_str().len() * 8 + class.dex().raw_entry_name().len(), 0)
-        } else { (0, 0, 0) }
-    }, |_entry, views, probe| {
-        let mut pairs = Vec::new();
-        for (logical, view) in views.views.iter().enumerate() {
-            let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
-            for class in dex::list_classes(&dex_view, &scan_limits, Some(probe))? {
-                let descriptor = class.descriptor().as_str().to_owned();
-                pairs.push((class, descriptor));
+    let (pairs, mut diagnostics) = artifact.fold_roots(
+        control,
+        |(class, _): &(Class, String)| {
+            if filter.matches(class.java_name()) {
+                (
+                    1,
+                    320 + class.descriptor().as_str().len() * 8
+                        + class.dex().raw_entry_name().len(),
+                    0,
+                )
+            } else {
+                (0, 0, 0)
             }
-        }
-        Ok(pairs)
-    })?;
+        },
+        |_entry, views, probe| {
+            let mut pairs = Vec::new();
+            for (logical, view) in views.views.iter().enumerate() {
+                let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
+                for class in dex::list_classes(&dex_view, &scan_limits, Some(probe))? {
+                    let descriptor = class.descriptor().as_str().to_owned();
+                    pairs.push((class, descriptor));
+                }
+            }
+            Ok(pairs)
+        },
+    )?;
     let mut descriptor_counts: std::collections::BTreeMap<String, usize> = Default::default();
     let mut rows = Vec::with_capacity(pairs.len());
     for (class, descriptor) in pairs {
@@ -546,7 +629,10 @@ fn classes(
     }
     // Rows ordered by their (entry, logical, class_def) identity.
     rows.sort_by_key(|class| class.id());
-    let stats = OperationStats { result_items: rows.len() as u64, ..Default::default() };
+    let stats = OperationStats {
+        result_items: rows.len() as u64,
+        ..Default::default()
+    };
     Ok(Report::new(rows, diagnostics, stats))
 }
 
@@ -560,16 +646,20 @@ fn references(
 ) -> Result<Report<Vec<crate::model::Reference>>, Error> {
     artifact.require_roots()?;
     let scan_limits = artifact.limits.scan;
-    let (rows, diagnostics) = artifact.fold_roots(control, reference_size, |_entry, views, probe| {
-        let mut rows = Vec::new();
-        for (logical, view) in views.views.iter().enumerate() {
-            let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
-            let options =
-                ScanOptions { limits: scan_limits, control: Some(probe), prefilter: true };
-            rows.extend(dex::scan_references(&dex_view, query, &options)?);
-        }
-        Ok(rows)
-    })?;
+    let (rows, diagnostics) =
+        artifact.fold_roots(control, reference_size, |_entry, views, probe| {
+            let mut rows = Vec::new();
+            for (logical, view) in views.views.iter().enumerate() {
+                let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
+                let options = ScanOptions {
+                    limits: scan_limits,
+                    control: Some(probe),
+                    prefilter: true,
+                };
+                rows.extend(dex::scan_references(&dex_view, query, &options)?);
+            }
+            Ok(rows)
+        })?;
     let stats = OperationStats {
         result_items: rows.len() as u64,
         matched_targets: rows.iter().map(|row| row.targets().len() as u64).sum(),
@@ -595,12 +685,18 @@ fn decompile(
         class_def_idx: u32,
     }
     if let ClassSelector::Id(id) = selector
-        && id.dex().artifact() != artifact.id {
-        return Err(Error::invalid_query("class id belongs to a different artifact"));
+        && id.dex().artifact() != artifact.id
+    {
+        return Err(Error::invalid_query(
+            "class id belongs to a different artifact",
+        ));
     }
     if let ClassSelector::Descriptor(_, Some(id)) = selector
-        && id.artifact() != artifact.id {
-        return Err(Error::invalid_query("DEX id belongs to a different artifact"));
+        && id.artifact() != artifact.id
+    {
+        return Err(Error::invalid_query(
+            "DEX id belongs to a different artifact",
+        ));
     }
     let guard = ControlGuard::new(control);
     let probe = guard.probe();
@@ -615,26 +711,34 @@ fn decompile(
         probe.check()?;
         let buffer = match &root.source {
             RootSource::Archive(entry) => Some(zip::read_entry(
-                &artifact.bytes, entry, &artifact.limits.input(), &decoded, &probe,
+                &artifact.bytes,
+                entry,
+                &artifact.limits.input(),
+                &decoded,
+                &probe,
             )?),
             RootSource::Raw => None,
         };
         let data = buffer.as_deref().unwrap_or(&artifact.bytes);
-        let (views, integrity) = container::validate_dex_entry(
-            artifact.id, root.ordinal, &root.raw_name, data, &probe,
-        )?;
+        let (views, integrity) =
+            container::validate_dex_entry(artifact.id, root.ordinal, &root.raw_name, data, &probe)?;
         diagnostics.extend(integrity);
         let mut chose_entry = false;
         for (logical, view) in views.views.iter().enumerate() {
             let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
             let hits = match selector {
                 ClassSelector::Descriptor(descriptor, pinned) => {
-                    if pinned.is_some_and(|id| id != view.id()) { continue; }
+                    if pinned.is_some_and(|id| id != view.id()) {
+                        continue;
+                    }
                     dex::locate_class(&dex_view, descriptor, &artifact.limits.scan, Some(&probe))?
                 }
                 ClassSelector::Id(class_id) => {
-                    if view.id() != class_id.dex() { continue; }
-                    let classes = dex::list_classes(&dex_view, &artifact.limits.scan, Some(&probe))?;
+                    if view.id() != class_id.dex() {
+                        continue;
+                    }
+                    let classes =
+                        dex::list_classes(&dex_view, &artifact.limits.scan, Some(&probe))?;
                     if !classes.iter().any(|class| class.id() == *class_id) {
                         return Err(Error::invalid_query("class_def index does not exist"));
                     }
@@ -643,16 +747,25 @@ fn decompile(
             };
             definitions += hits.len();
             if resolution.is_none()
-                && let Some(&class_def_idx) = hits.first() {
-                resolution = Some(Resolved { entry_index, logical, class_def_idx });
+                && let Some(&class_def_idx) = hits.first()
+            {
+                resolution = Some(Resolved {
+                    entry_index,
+                    logical,
+                    class_def_idx,
+                });
                 chose_entry = true;
             }
         }
-        if chose_entry { selected_bytes = buffer; }
+        if chose_entry {
+            selected_bytes = buffer;
+        }
     }
-    let resolved = resolution.ok_or_else(|| Error::new(ErrorKind::NotFound)
-        .with_context("no selected DEX entry defines this class")
-        .with_diagnostics(diagnostics.clone()))?;
+    let resolved = resolution.ok_or_else(|| {
+        Error::new(ErrorKind::NotFound)
+            .with_context("no selected DEX entry defines this class")
+            .with_diagnostics(diagnostics.clone())
+    })?;
     if definitions > 1 {
         diagnostics.push(Diagnostic::new(
             DiagnosticCode::DuplicateClassDefinition, Severity::Warning, Stage::Dex,
@@ -662,9 +775,8 @@ fn decompile(
     let root = &artifact.roots[resolved.entry_index];
     let data = selected_bytes.as_deref().unwrap_or(&artifact.bytes);
     // Recreate borrowed views; integrity diagnostics were collected once above.
-    let (views, _) = container::validate_dex_entry(
-        artifact.id, root.ordinal, &root.raw_name, data, &probe,
-    )?;
+    let (views, _) =
+        container::validate_dex_entry(artifact.id, root.ordinal, &root.raw_name, data, &probe)?;
     let view = &views.views[resolved.logical];
     // Only integrity findings about *this* view decide whether it needs the
     // normalization scratch; a checksum warning on another entry must not
@@ -690,7 +802,8 @@ fn decompile(
         &guard.backend,
     )
     .map_err(|error| {
-        map_backend_error(error).with_context("backend parse")
+        map_backend_error(error)
+            .with_context("backend parse")
             .with_diagnostics(diagnostics.clone())
     })?;
     let report = droidsaw_dex::analysis::decompile_checked(
@@ -701,13 +814,17 @@ fn decompile(
         &guard.backend,
     )
     .map_err(|error| {
-        map_backend_error(error).with_context("backend decompile")
+        map_backend_error(error)
+            .with_context("backend decompile")
             .with_diagnostics(diagnostics.clone())
     })?;
 
     let class_def = &parsed.dex().class_defs[resolved.class_def_idx as usize];
-    let descriptor_text =
-        parsed.dex().get_type_descriptor(class_def.class_idx).unwrap_or("L?;").to_owned();
+    let descriptor_text = parsed
+        .dex()
+        .get_type_descriptor(class_def.class_idx)
+        .unwrap_or("L?;")
+        .to_owned();
     let entry_row = views.dex_entry(resolved.logical);
     let class = build_class(&entry_row, view, resolved.class_def_idx, &descriptor_text);
     let metadata = map_metadata(&report.metadata);
@@ -726,15 +843,18 @@ fn decompile(
     }
     match &report.completeness {
         droidsaw_dex::analysis::Completeness::Complete => {
-            let stats = OperationStats { result_items: 1, ..Default::default() };
+            let stats = OperationStats {
+                result_items: 1,
+                ..Default::default()
+            };
             Ok(Report::new(source, diagnostics, stats))
         }
-        droidsaw_dex::analysis::Completeness::Incomplete { reasons } => Err(Error::new(
-            ErrorKind::IncompleteDecompilation,
-        )
-        .with_context(format!("incomplete decompilation: {reasons:?}"))
-        .with_diagnostics(diagnostics)
-        .with_partial_source(source)),
+        droidsaw_dex::analysis::Completeness::Incomplete { reasons } => {
+            Err(Error::new(ErrorKind::IncompleteDecompilation)
+                .with_context(format!("incomplete decompilation: {reasons:?}"))
+                .with_diagnostics(diagnostics)
+                .with_partial_source(source))
+        }
     }
 }
 
@@ -759,12 +879,15 @@ fn manifest(
     let guard = ControlGuard::new(control);
     let probe = guard.probe();
     let decoded = AtomicU64::new(0);
-    let bytes = zip::read_entry(&artifact.bytes, entry, &artifact.limits.input(), &decoded, &probe)?;
-    let report = crate::manifest::decode_manifest_entry(
-        &bytes,
-        &artifact.limits.manifest,
-        control,
+    let bytes = zip::read_entry(
+        &artifact.bytes,
+        entry,
+        &artifact.limits.input(),
+        &decoded,
+        &probe,
     )?;
+    let report =
+        crate::manifest::decode_manifest_entry(&bytes, &artifact.limits.manifest, control)?;
     let diagnostics = report
         .diagnostics
         .iter()
@@ -774,7 +897,10 @@ fn manifest(
     Ok(Report::new(
         report.value,
         diagnostics,
-        OperationStats { result_items: 1, ..Default::default() },
+        OperationStats {
+            result_items: 1,
+            ..Default::default()
+        },
     ))
 }
 
@@ -783,8 +909,12 @@ fn map_backend_error(error: droidsaw_dex::analysis::BackendError) -> Error {
     use crate::error::CancelCause;
     use droidsaw_dex::analysis::BackendError as Backend;
     let kind = match &error {
-        Backend::Cancelled => ErrorKind::Cancelled { cause: CancelCause::User },
-        Backend::DeadlineExceeded => ErrorKind::Cancelled { cause: CancelCause::Deadline },
+        Backend::Cancelled => ErrorKind::Cancelled {
+            cause: CancelCause::User,
+        },
+        Backend::DeadlineExceeded => ErrorKind::Cancelled {
+            cause: CancelCause::Deadline,
+        },
         Backend::InputBudget { .. } => ErrorKind::ResourceLimit,
         Backend::InvalidClassDefIndex { .. } => ErrorKind::InvalidQuery,
         Backend::Dex(_) => ErrorKind::MalformedInput,
@@ -809,33 +939,49 @@ fn build_class(
             // defensive only.
             ClassDescriptor::from_normalized("L?;".to_owned()).expect("L?; is a valid descriptor")
         });
-    Class::new(ClassId::new(view.id(), class_def_idx), entry.clone(), descriptor)
+    Class::new(
+        ClassId::new(view.id(), class_def_idx),
+        entry.clone(),
+        descriptor,
+    )
 }
 
 #[cfg(feature = "decompile")]
 fn map_metadata(metadata: &droidsaw_dex::analysis::BackendMetadata) -> SourceMetadata {
     let class = ClassMetadata {
         access_flags: metadata.access_flags,
-        super_class: metadata.super_descriptor.as_deref().map(DexText::from_str_lossless),
+        super_class: metadata
+            .super_descriptor
+            .as_deref()
+            .map(DexText::from_str_lossless),
         interfaces: metadata
             .interfaces
             .iter()
             .map(|text| DexText::from_str_lossless(text))
             .collect(),
-        source_file: metadata.source_file.as_deref().map(DexText::from_str_lossless),
-        generic_signature: metadata.generic_signature.as_deref().map(DexText::from_str_lossless),
-        enclosing: metadata.enclosing.as_ref().map(|enclosing| EnclosingRecord {
-            outer_class: enclosing.class.as_deref().map(DexText::from_str_lossless),
-            enclosing_method: enclosing.method.as_deref().map(|text| {
-                // The backend renders `name(proto)ret`; kept verbatim as the
-                // method record — the lossless text is the identity here.
-                (
-                    DexText::from_str_lossless(text),
-                    DexText::from_str_lossless(""),
-                    Prototype::default(),
-                )
+        source_file: metadata
+            .source_file
+            .as_deref()
+            .map(DexText::from_str_lossless),
+        generic_signature: metadata
+            .generic_signature
+            .as_deref()
+            .map(DexText::from_str_lossless),
+        enclosing: metadata
+            .enclosing
+            .as_ref()
+            .map(|enclosing| EnclosingRecord {
+                outer_class: enclosing.class.as_deref().map(DexText::from_str_lossless),
+                enclosing_method: enclosing.method.as_deref().map(|text| {
+                    // The backend renders `name(proto)ret`; kept verbatim as the
+                    // method record — the lossless text is the identity here.
+                    (
+                        DexText::from_str_lossless(text),
+                        DexText::from_str_lossless(""),
+                        Prototype::default(),
+                    )
+                }),
             }),
-        }),
         inner_classes: metadata
             .inner_class
             .as_ref()
@@ -879,16 +1025,16 @@ fn map_metadata(metadata: &droidsaw_dex::analysis::BackendMetadata) -> SourceMet
             initial_value: report.typed_value.as_ref().map(typed_to_encoded),
         })
         .chain(
-        metadata
-        .instance_field_reports
-        .iter()
-        .map(|report| FieldMetadata {
-            name: DexText::from_str_lossless(&report.name),
-            field_type: DexText::from_str_lossless(&report.type_descriptor),
-            access_flags: report.access_flags,
-            generic_signature: None,
-            initial_value: None,
-        })
+            metadata
+                .instance_field_reports
+                .iter()
+                .map(|report| FieldMetadata {
+                    name: DexText::from_str_lossless(&report.name),
+                    field_type: DexText::from_str_lossless(&report.type_descriptor),
+                    access_flags: report.access_flags,
+                    generic_signature: None,
+                    initial_value: None,
+                }),
         )
         .collect();
     let methods = metadata
@@ -905,7 +1051,12 @@ fn map_metadata(metadata: &droidsaw_dex::analysis::BackendMetadata) -> SourceMet
             debug: None,
         })
         .collect();
-    SourceMetadata { class, annotations, fields, methods }
+    SourceMetadata {
+        class,
+        annotations,
+        fields,
+        methods,
+    }
 }
 
 #[cfg(feature = "decompile")]
@@ -942,19 +1093,22 @@ fn typed_to_encoded(value: &droidsaw_dex::analysis::TypedValue) -> crate::model:
             name: DexText::from_str_lossless(name),
         },
         T::Array(items) => M::Array(items.iter().map(typed_to_encoded).collect()),
-        T::Annotation { type_descriptor, elements } => M::Annotation(crate::model::AnnotationRecord {
+        T::Annotation {
+            type_descriptor,
+            elements,
+        } => M::Annotation(crate::model::AnnotationRecord {
             visibility: crate::model::AnnotationVisibility::Runtime,
             type_descriptor: DexText::from_str_lossless(type_descriptor),
             items: elements
                 .iter()
-                .map(|(name, value)| {
-                    (DexText::from_str_lossless(name), typed_to_encoded(value))
-                })
+                .map(|(name, value)| (DexText::from_str_lossless(name), typed_to_encoded(value)))
                 .collect(),
-            rendered: render_annotation_elements(&elements
-                .iter()
-                .map(|(n, v)| (n.clone(), format!("{v:?}")))
-                .collect::<Vec<_>>()),
+            rendered: render_annotation_elements(
+                &elements
+                    .iter()
+                    .map(|(n, v)| (n.clone(), format!("{v:?}")))
+                    .collect::<Vec<_>>(),
+            ),
         }),
         T::MethodType(text) => M::Type(DexText::from_str_lossless(text)),
         // The model has no method-handle variant; the exact u32 index rides
@@ -969,8 +1123,12 @@ fn map_annotation_target(target: droidsaw_dex::analysis::AnnotationTarget) -> An
     use droidsaw_dex::analysis::AnnotationTarget as Backend;
     match target {
         Backend::Class => AnnotationTarget::Class,
-        Backend::Field { field_idx } => AnnotationTarget::Field { index: field_idx as usize },
-        Backend::Method { method_idx } => AnnotationTarget::Method { index: method_idx as usize },
+        Backend::Field { field_idx } => AnnotationTarget::Field {
+            index: field_idx as usize,
+        },
+        Backend::Method { method_idx } => AnnotationTarget::Method {
+            index: method_idx as usize,
+        },
         Backend::Parameter { method_idx, index } => AnnotationTarget::Parameter {
             method_index: method_idx as usize,
             parameter_index: index as usize,
@@ -1048,6 +1206,7 @@ mod tests {
     use crate::query::{self, MatchMode};
     use crate::zip::tests::{build_zip, temp_apk};
     use std::fs;
+    use std::io::{self, Write};
 
     fn no_control() -> OperationControl {
         OperationControl::new()
@@ -1058,7 +1217,11 @@ mod tests {
         let mut growing = std::io::Cursor::new(vec![0u8; 128 * 1024]);
         let error = read_snapshot(&mut growing, 17, &no_control()).unwrap_err();
         assert_eq!(error.kind(), &ErrorKind::ResourceLimit);
-        assert_eq!(growing.position(), 18, "do not read or retain the unbounded tail");
+        assert_eq!(
+            growing.position(),
+            18,
+            "do not read or retain the unbounded tail"
+        );
         let small = read_snapshot(&mut std::io::Cursor::new(b"ok"), 2, &no_control()).unwrap();
         assert_eq!(small, b"ok");
     }
@@ -1066,20 +1229,30 @@ mod tests {
     #[cfg(feature = "decompile")]
     #[test]
     fn backend_control_shares_live_cancellation_and_preserves_causes() {
-        use droidsaw_dex::analysis::BackendError;
         use crate::error::CancelCause;
+        use droidsaw_dex::analysis::BackendError;
         let flag = Arc::new(AtomicBool::new(false));
         let control = OperationControl::new().with_cancel_flag(Arc::clone(&flag));
         let guard = ControlGuard::new(&control);
         assert!(!guard.backend.is_cancelled());
         flag.store(true, Ordering::Release);
         assert!(guard.backend.is_cancelled());
-        assert_eq!(map_backend_error(BackendError::Cancelled).kind(),
-            &ErrorKind::Cancelled { cause: CancelCause::User });
-        assert_eq!(map_backend_error(BackendError::DeadlineExceeded).kind(),
-            &ErrorKind::Cancelled { cause: CancelCause::Deadline });
-        assert_eq!(map_backend_error(BackendError::InputBudget { bytes: 2, cap: 1 }).kind(),
-            &ErrorKind::ResourceLimit);
+        assert_eq!(
+            map_backend_error(BackendError::Cancelled).kind(),
+            &ErrorKind::Cancelled {
+                cause: CancelCause::User
+            }
+        );
+        assert_eq!(
+            map_backend_error(BackendError::DeadlineExceeded).kind(),
+            &ErrorKind::Cancelled {
+                cause: CancelCause::Deadline
+            }
+        );
+        assert_eq!(
+            map_backend_error(BackendError::InputBudget { bytes: 2, cap: 1 }).kind(),
+            &ErrorKind::ResourceLimit
+        );
     }
 
     /// A fresh engine runtime for tests (each call = its own account).
@@ -1097,6 +1270,259 @@ mod tests {
     }
 
     #[test]
+    fn archive_entries_preserve_ordinal_raw_name_and_directory_facts() {
+        let mut zip = build_zip(&[
+            ("dup", b"first".as_slice(), false),
+            ("dup", b"second".as_slice(), false),
+            ("folder/", b"".as_slice(), false),
+        ]);
+        let positions: Vec<usize> = zip
+            .windows(3)
+            .enumerate()
+            .filter_map(|(index, bytes)| (bytes == b"dup").then_some(index))
+            .collect();
+        assert_eq!(
+            positions.len(),
+            4,
+            "both duplicate names occur in local/CD headers"
+        );
+        for position in positions {
+            zip[position..position + 3].copy_from_slice(b"d\xffp");
+        }
+        let engine = Engine::new(EngineOptions::default()).unwrap();
+        let artifact = engine
+            .open_bytes(
+                Arc::from(zip.into_boxed_slice()),
+                InputKind::Apk,
+                &no_control(),
+            )
+            .unwrap();
+        let report = engine
+            .archive_entries(&artifact, &ArchiveEntryQuery::default(), &no_control())
+            .unwrap();
+        assert_eq!(report.stats().result_items, 3);
+        let entries = report.value();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].id().ordinal(), 0);
+        assert_eq!(entries[1].id().ordinal(), 1);
+        assert_ne!(entries[0].id(), entries[1].id());
+        assert_eq!(entries[0].raw_name(), b"d\xffp");
+        assert!(entries[0].display_name().contains("\\xff"));
+        assert!(!entries[0].is_directory());
+        assert!(entries[2].is_directory());
+
+        let other_artifact = engine
+            .open_bytes(
+                Arc::from(
+                    build_zip(&[("other", b"different".as_slice(), false)]).into_boxed_slice(),
+                ),
+                InputKind::Apk,
+                &no_control(),
+            )
+            .unwrap();
+        let other_entries = engine
+            .archive_entries(
+                &other_artifact,
+                &ArchiveEntryQuery::default(),
+                &no_control(),
+            )
+            .unwrap();
+        let mut foreign_output = Vec::new();
+        let error = engine
+            .copy_entry(
+                &artifact,
+                other_entries.value()[0].id(),
+                &mut foreign_output,
+                &no_control(),
+            )
+            .unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::InvalidQuery);
+        assert!(foreign_output.is_empty());
+
+        let error = engine
+            .archive_entries(
+                &artifact,
+                &ArchiveEntryQuery {
+                    max_items: 2,
+                    ..ArchiveEntryQuery::default()
+                },
+                &no_control(),
+            )
+            .unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::ResourceLimit);
+        let error = engine
+            .archive_entries(
+                &artifact,
+                &ArchiveEntryQuery {
+                    max_result_bytes: 1,
+                    ..ArchiveEntryQuery::default()
+                },
+                &no_control(),
+            )
+            .unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::ResourceLimit);
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("test writer failure"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn copy_entry_streams_stored_and_deflate_with_shared_quota() {
+        let first = vec![b'A'; 70 * 1024];
+        let second = vec![b'B'; 70 * 1024];
+        let bytes = Arc::from(
+            build_zip(&[("one.bin", &first, false), ("two.bin", &second, true)]).into_boxed_slice(),
+        );
+        let limits = Limits {
+            // Leave room for the writer-failure attempt after both successful
+            // copies; that attempt must exercise sink rollback.
+            max_total_decoded_bytes: (2 * first.len() + second.len()) as u64,
+            ..Limits::default()
+        };
+        let engine = Engine::new(EngineOptions {
+            limits,
+            ..EngineOptions::default()
+        })
+        .unwrap();
+        let artifact = engine
+            .open_bytes(Arc::clone(&bytes), InputKind::Apk, &no_control())
+            .unwrap();
+        let entries = engine
+            .archive_entries(&artifact, &ArchiveEntryQuery::default(), &no_control())
+            .unwrap();
+        let session = engine
+            .archive_copy_session(&artifact, &no_control())
+            .unwrap();
+        let mut first_out = Vec::new();
+        assert_eq!(
+            session
+                .copy_entry(entries.value()[0].id(), &mut first_out, &no_control())
+                .unwrap(),
+            first.len() as u64
+        );
+        assert_eq!(first_out, first);
+        let mut second_out = Vec::new();
+        assert_eq!(
+            session
+                .copy_entry(entries.value()[1].id(), &mut second_out, &no_control())
+                .unwrap(),
+            second.len() as u64
+        );
+        assert_eq!(second_out, second);
+
+        let expired = OperationControl::new()
+            .with_deadline(std::time::Instant::now() - Duration::from_secs(1));
+        let mut cancelled_out = Vec::new();
+        let error = session
+            .copy_entry(entries.value()[0].id(), &mut cancelled_out, &expired)
+            .unwrap_err();
+        assert_eq!(
+            *error.kind(),
+            ErrorKind::Cancelled {
+                cause: crate::error::CancelCause::Deadline
+            }
+        );
+        assert!(cancelled_out.is_empty());
+
+        let tight_limits = Limits {
+            max_total_decoded_bytes: first.len() as u64,
+            ..Limits::default()
+        };
+        let tight_engine = Engine::new(EngineOptions {
+            limits: tight_limits,
+            ..EngineOptions::default()
+        })
+        .unwrap();
+        let tight_artifact = tight_engine
+            .open_bytes(Arc::clone(&bytes), InputKind::Apk, &no_control())
+            .unwrap();
+        let tight_entries = tight_engine
+            .archive_entries(
+                &tight_artifact,
+                &ArchiveEntryQuery::default(),
+                &no_control(),
+            )
+            .unwrap();
+        let tight_session = tight_engine
+            .archive_copy_session(&tight_artifact, &no_control())
+            .unwrap();
+        let mut tight_first = Vec::new();
+        tight_session
+            .copy_entry(
+                tight_entries.value()[0].id(),
+                &mut tight_first,
+                &no_control(),
+            )
+            .unwrap();
+        let mut over_quota = Vec::new();
+        let error = tight_session
+            .copy_entry(
+                tight_entries.value()[1].id(),
+                &mut over_quota,
+                &no_control(),
+            )
+            .unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::ResourceLimit);
+        assert!(
+            over_quota.is_empty(),
+            "quota failure happens before sink output"
+        );
+
+        let mut failed = FailingWriter;
+        let error = session
+            .copy_entry(entries.value()[0].id(), &mut failed, &no_control())
+            .unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::MalformedInput);
+        assert!(error.to_string().contains("writer failed"));
+    }
+
+    #[test]
+    fn copy_entry_crc_failure_rolls_back_shared_quota_for_reuse() {
+        let first = b"bad crc entry".to_vec();
+        let second = b"still readable".to_vec();
+        let mut zip = build_zip(&[("first", &first, false), ("second", &second, false)]);
+        let central = zip
+            .windows(4)
+            .position(|bytes| bytes == b"PK\x01\x02")
+            .expect("central directory");
+        zip[central + 16..central + 20].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        let engine = Engine::new(EngineOptions::default()).unwrap();
+        let artifact = engine
+            .open_bytes(
+                Arc::from(zip.into_boxed_slice()),
+                InputKind::Apk,
+                &no_control(),
+            )
+            .unwrap();
+        let entries = engine
+            .archive_entries(&artifact, &ArchiveEntryQuery::default(), &no_control())
+            .unwrap();
+        let session = engine
+            .archive_copy_session(&artifact, &no_control())
+            .unwrap();
+        let mut discarded = Vec::new();
+        let error = session
+            .copy_entry(entries.value()[0].id(), &mut discarded, &no_control())
+            .unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::MalformedInput);
+        assert!(error.to_string().contains("CRC-32 mismatch"));
+        let mut second_out = Vec::new();
+        session
+            .copy_entry(entries.value()[1].id(), &mut second_out, &no_control())
+            .unwrap();
+        assert_eq!(second_out, second);
+    }
+
+    #[test]
     fn references_run_end_to_end_on_a_synthetic_apk() {
         let first = const_string_fixture(2);
         let second = const_string_fixture(1);
@@ -1106,15 +1532,19 @@ mod tests {
             ("AndroidManifest.xml", b"<manifest/>".as_slice(), false),
         ]);
         let path = temp_apk("a07-refs", &zip);
-        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
-        let query = query::string_query("Authorization", MatchMode::Literal, &Default::default())
-            .unwrap();
+        let artifact =
+            open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
+        let query =
+            query::string_query("Authorization", MatchMode::Literal, &Default::default()).unwrap();
         let report = references(&artifact, &query, &no_control()).unwrap();
         assert!(!report.value().is_empty(), "fixture strings must hit");
         // central-directory order: every row of classes.dex precedes classes2.dex
         let first_ordinal = report.value()[0].caller().id().dex().entry_ordinal();
-        let all_ordinals: Vec<u32> =
-            report.value().iter().map(|row| row.caller().id().dex().entry_ordinal()).collect();
+        let all_ordinals: Vec<u32> = report
+            .value()
+            .iter()
+            .map(|row| row.caller().id().dex().entry_ordinal())
+            .collect();
         assert!(
             all_ordinals.windows(2).all(|pair| pair[0] <= pair[1]),
             "rows must be merged in entry-ordinal order"
@@ -1122,7 +1552,10 @@ mod tests {
         assert_eq!(first_ordinal, 0);
         // deterministic across runs
         let again = references(&artifact, &query, &no_control()).unwrap();
-        assert_eq!(format!("{:?}", report.value()), format!("{:?}", again.value()));
+        assert_eq!(
+            format!("{:?}", report.value()),
+            format!("{:?}", again.value())
+        );
         fs::remove_file(&path).unwrap();
     }
 
@@ -1130,9 +1563,13 @@ mod tests {
     fn dexless_archives_split_success_and_notfound_by_operation() {
         let zip = build_zip(&[("AndroidManifest.xml", b"<manifest/>".as_slice(), false)]);
         let path = temp_apk("a07-dexless", &zip);
-        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
+        let artifact =
+            open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let dex_rows = dexes(&artifact, &no_control()).unwrap();
-        assert!(dex_rows.value().is_empty(), "dexes on a dex-less APK is an empty catalog");
+        assert!(
+            dex_rows.value().is_empty(),
+            "dexes on a dex-less APK is an empty catalog"
+        );
         let query =
             query::string_query("Authorization", MatchMode::Literal, &Default::default()).unwrap();
         let error = references(&artifact, &query, &no_control()).unwrap_err();
@@ -1149,7 +1586,10 @@ mod tests {
         let zip = build_zip(&[("classes.dex", &dex, true)]);
         let path = temp_apk("a07-g02", &zip);
         // A one-entry query must not charge the selected DEX twice.
-        let limits = Limits { max_total_decoded_bytes: dex.len() as u64, ..Limits::default() };
+        let limits = Limits {
+            max_total_decoded_bytes: dex.len() as u64,
+            ..Limits::default()
+        };
         let artifact = open_path(&path, &limits, &test_runtime(), &no_control()).unwrap();
         let selector = ClassSelector::Descriptor(
             ClassDescriptor::from_normalized("Lexample/Statics;".to_owned()).unwrap(),
@@ -1157,10 +1597,22 @@ mod tests {
         );
         let report = decompile(&artifact, &selector, &no_control()).unwrap();
         let text = report.value().text();
-        assert!(text.contains("FIRST = 11"), "FIRST initializer missing:\n{text}");
-        assert!(text.contains("SECOND = 22"), "SECOND initializer missing:\n{text}");
-        assert!(text.contains("SECOND"), "getSecond must read SECOND:\n{text}");
-        assert_eq!(report.value().class().descriptor().as_str(), "Lexample/Statics;");
+        assert!(
+            text.contains("FIRST = 11"),
+            "FIRST initializer missing:\n{text}"
+        );
+        assert!(
+            text.contains("SECOND = 22"),
+            "SECOND initializer missing:\n{text}"
+        );
+        assert!(
+            text.contains("SECOND"),
+            "getSecond must read SECOND:\n{text}"
+        );
+        assert_eq!(
+            report.value().class().descriptor().as_str(),
+            "Lexample/Statics;"
+        );
         fs::remove_file(&path).unwrap();
     }
 
@@ -1172,16 +1624,19 @@ mod tests {
         dex[8..32].fill(0);
         let zip = build_zip(&[("classes.dex", &dex, true)]);
         let path = temp_apk("a07-g03", &zip);
-        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
+        let artifact =
+            open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let selector = ClassSelector::Descriptor(
             ClassDescriptor::from_normalized("Lexample/Statics;".to_owned()).unwrap(),
             None,
         );
         let report = decompile(&artifact, &selector, &no_control()).unwrap();
-        assert!(report
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code() == DiagnosticCode::DexChecksumMismatch));
+        assert!(
+            report
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code() == DiagnosticCode::DexChecksumMismatch)
+        );
         fs::remove_file(&path).unwrap();
     }
 
@@ -1189,20 +1644,33 @@ mod tests {
     fn classes_lists_all_definitions_and_flags_duplicates() {
         // One descriptor defined in two different DEX entries.
         let first = const_string_fixture(1);
-        let zip = build_zip(&[("classes.dex", &first, true), ("classes2.dex", &first, true)]);
+        let zip = build_zip(&[
+            ("classes.dex", &first, true),
+            ("classes2.dex", &first, true),
+        ]);
         let path = temp_apk("a07-dup-classes", &zip);
-        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
+        let artifact =
+            open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let report = classes(&artifact, &ClassFilter::none(), &no_control()).unwrap();
         assert_eq!(report.value().len(), 2, "both definitions are listed");
-        let ids: Vec<u32> = report.value().iter().map(|class| class.id().class_def_idx()).collect();
-        assert_eq!(ids, [0, 0], "both are class_def 0 of their own DEX");
-        let dexes_of: Vec<u32> =
-            report.value().iter().map(|class| class.id().dex().entry_ordinal()).collect();
-        assert_eq!(dexes_of, [0, 1]);
-        assert!(report
-            .diagnostics()
+        let ids: Vec<u32> = report
+            .value()
             .iter()
-            .any(|diagnostic| diagnostic.code() == DiagnosticCode::DuplicateClassDefinition));
+            .map(|class| class.id().class_def_idx())
+            .collect();
+        assert_eq!(ids, [0, 0], "both are class_def 0 of their own DEX");
+        let dexes_of: Vec<u32> = report
+            .value()
+            .iter()
+            .map(|class| class.id().dex().entry_ordinal())
+            .collect();
+        assert_eq!(dexes_of, [0, 1]);
+        assert!(
+            report
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code() == DiagnosticCode::DuplicateClassDefinition)
+        );
         fs::remove_file(&path).unwrap();
     }
 
@@ -1215,7 +1683,8 @@ mod tests {
             ("classes.dex", &dex, true),
         ]);
         let path = temp_apk("a07-manifest", &zip);
-        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
+        let artifact =
+            open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let report = manifest(&artifact, &no_control()).unwrap();
         let xml = report
             .value()
@@ -1245,7 +1714,11 @@ mod tests {
         };
         assert!(matches!(error.kind(), ErrorKind::InvalidQuery));
         // The owning engine still works.
-        assert!(engine_a.references(&artifact, &query, &no_control()).is_ok());
+        assert!(
+            engine_a
+                .references(&artifact, &query, &no_control())
+                .is_ok()
+        );
         std::fs::remove_file(&apk_path).unwrap();
     }
 
@@ -1270,7 +1743,11 @@ mod tests {
             Ok(_) => panic!("open must fail the engine-owned budget"),
         };
         assert!(matches!(error.kind(), ErrorKind::ResourceLimit));
-        assert_eq!(runtime.active_bytes.load(Ordering::Relaxed), 0, "nothing retained");
+        assert_eq!(
+            runtime.active_bytes.load(Ordering::Relaxed),
+            0,
+            "nothing retained"
+        );
         // A generous budget opens and retains; dropping releases.
         let artifact = open_bytes(
             Arc::from(zip.into_boxed_slice()),
@@ -1285,7 +1762,11 @@ mod tests {
             "retained input bytes are accounted"
         );
         drop(artifact);
-        assert_eq!(runtime.active_bytes.load(Ordering::Relaxed), 0, "drop releases");
+        assert_eq!(
+            runtime.active_bytes.load(Ordering::Relaxed),
+            0,
+            "drop releases"
+        );
     }
 
     #[cfg(feature = "decompile")]
@@ -1294,9 +1775,13 @@ mod tests {
         // Fixture0 lives in both entries; Fixture1 only in classes2.dex.
         let first = const_string_fixture(1);
         let second = const_string_fixture(2);
-        let zip = build_zip(&[("classes.dex", &first, true), ("classes2.dex", &second, true)]);
+        let zip = build_zip(&[
+            ("classes.dex", &first, true),
+            ("classes2.dex", &second, true),
+        ]);
         let path = temp_apk("a07-pin", &zip);
-        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
+        let artifact =
+            open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let catalog = dexes(&artifact, &no_control()).unwrap();
         assert_eq!(catalog.value().len(), 2);
         let pinned = catalog.value()[1].id();
@@ -1352,7 +1837,8 @@ mod tests {
         let good = const_string_fixture(1);
         let zip = build_zip(&[("app.dex", &good, true), ("classes.dex", &good, true)]);
         let path = temp_apk("a07-named", &zip);
-        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
+        let artifact =
+            open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let query =
             query::string_query("Authorization", MatchMode::Literal, &Default::default()).unwrap();
         let report = references(&artifact, &query, &no_control()).unwrap();
@@ -1370,13 +1856,13 @@ mod tests {
             ("classes2.dex", &good, true),
         ]);
         let path = temp_apk("a07-junk", &junk);
-        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
+        let artifact =
+            open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let error = references(&artifact, &query, &no_control()).unwrap_err();
         assert_eq!(*error.kind(), ErrorKind::MalformedInput);
         fs::remove_file(&path).unwrap();
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Public Engine API (interfaces.md §2; A11 adds the pool/permits runtime)
@@ -1423,16 +1909,71 @@ pub struct Engine {
     runtime: Arc<Runtime>,
 }
 
+/// A controlled batch of archive-entry copies. The session holds the
+/// engine's operation admission and one decoded-byte account across every
+/// `copy_entry` call, so switching entries cannot reset the quota.
+pub struct ArchiveCopySession<'engine, 'artifact> {
+    artifact: &'artifact Artifact,
+    _admission: Admission<'engine>,
+    decoded_bytes: AtomicU64,
+}
+
+impl<'engine, 'artifact> ArchiveCopySession<'engine, 'artifact> {
+    /// Copies one catalog entry to `writer`, returning the decoded byte count.
+    /// A failed copy may have written a prefix; callers must discard that
+    /// sink before publishing anything.
+    pub fn copy_entry<W: Write>(
+        &self,
+        entry_id: ArchiveEntryId,
+        writer: &mut W,
+        control: &OperationControl,
+    ) -> Result<u64, Error> {
+        control.check()?;
+        if entry_id.artifact() != self.artifact.id {
+            return Err(Error::invalid_query(
+                "archive entry belongs to a different artifact",
+            ));
+        }
+        let catalog = self.artifact.catalog.as_ref().ok_or_else(|| {
+            Error::new(ErrorKind::UnsupportedFormat)
+                .with_context("raw DEX input has no archive entries")
+        })?;
+        let entry = catalog
+            .entries
+            .iter()
+            .find(|entry| entry.ordinal == entry_id.ordinal())
+            .ok_or_else(|| {
+                Error::invalid_query(format!(
+                    "archive entry ordinal {} does not exist in this artifact",
+                    entry_id.ordinal()
+                ))
+            })?;
+        let guard = ControlGuard::new(control);
+        zip::read_entry_to(
+            &self.artifact.bytes,
+            entry,
+            &self.artifact.limits.input(),
+            &self.decoded_bytes,
+            &guard.probe(),
+            writer,
+        )
+    }
+}
+
 impl Engine {
     pub fn new(options: EngineOptions) -> Result<Engine, Error> {
         let count = options.threads.unwrap_or(1);
         if count == 0 {
-            return Err(Error::invalid_query("worker threads must be greater than zero"));
+            return Err(Error::invalid_query(
+                "worker threads must be greater than zero",
+            ));
         }
-        let pool = Arc::new(rayon::ThreadPoolBuilder::new()
-            .num_threads(count)
-            .build()
-            .map_err(|error| Error::invalid_query(format!("worker pool: {error}")))?);
+        let pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(count)
+                .build()
+                .map_err(|error| Error::invalid_query(format!("worker pool: {error}")))?,
+        );
         let runtime = Arc::new(Runtime {
             admission: Mutex::new(()),
             active_bytes: AtomicU64::new(0),
@@ -1486,9 +2027,7 @@ impl Engine {
     ) -> Result<Artifact, Error> {
         match kind {
             InputKind::Apk => open_bytes(bytes, &self.options.limits, &self.runtime, control),
-            InputKind::Dex => {
-                open_dex_bytes(bytes, &self.options.limits, &self.runtime, control)
-            }
+            InputKind::Dex => open_dex_bytes(bytes, &self.options.limits, &self.runtime, control),
         }
     }
 
@@ -1509,6 +2048,96 @@ impl Engine {
         let _admission = self.admit(control)?;
         self.check_ownership(artifact)?;
         dexes(artifact, control)
+    }
+
+    /// Returns every central-directory entry in stable ordinal order. The
+    /// result is rejected when either projection bound would be exceeded;
+    /// callers never receive a silently truncated catalog.
+    pub fn archive_entries(
+        &self,
+        artifact: &Artifact,
+        query: &ArchiveEntryQuery,
+        control: &OperationControl,
+    ) -> Result<Report<Vec<ArchiveEntryFact>>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        let catalog = artifact.catalog.as_ref().ok_or_else(|| {
+            Error::new(ErrorKind::UnsupportedFormat)
+                .with_context("raw DEX input has no archive entries")
+        })?;
+        let mut facts = Vec::new();
+        let mut result_bytes = 0usize;
+        for entry in &catalog.entries {
+            control.check()?;
+            if facts.len() >= query.max_items {
+                return Err(Error::resource_limit(format!(
+                    "archive directory exceeds the {} entry projection limit",
+                    query.max_items
+                )));
+            }
+            let fact = ArchiveEntryFact::new(
+                ArchiveEntryId::new(artifact.id, entry.ordinal),
+                entry.raw_name.clone(),
+                entry.display(),
+                entry.method,
+                u64::from(entry.compressed_size),
+                u64::from(entry.uncompressed_size),
+                entry.crc32,
+                entry.flags & 0x0001 != 0,
+                entry.directory,
+            );
+            let added = fact.estimated_bytes();
+            result_bytes = result_bytes.checked_add(added).ok_or_else(|| {
+                Error::resource_limit("archive entry projection byte count overflow")
+            })?;
+            if result_bytes > query.max_result_bytes {
+                return Err(Error::resource_limit(format!(
+                    "archive entry projection reaches {result_bytes} bytes, above the {} result limit",
+                    query.max_result_bytes
+                )));
+            }
+            facts.push(fact);
+        }
+        let result_items = facts.len() as u64;
+        Ok(Report::new(
+            facts,
+            artifact.open_diagnostics.clone(),
+            OperationStats {
+                result_items,
+                ..Default::default()
+            },
+        ))
+    }
+
+    /// Starts a batch sharing one decoded-byte quota across entry copies.
+    pub fn archive_copy_session<'engine, 'artifact>(
+        &'engine self,
+        artifact: &'artifact Artifact,
+        control: &OperationControl,
+    ) -> Result<ArchiveCopySession<'engine, 'artifact>, Error> {
+        let admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        if artifact.catalog.is_none() {
+            return Err(Error::new(ErrorKind::UnsupportedFormat)
+                .with_context("raw DEX input has no archive entries"));
+        }
+        Ok(ArchiveCopySession {
+            artifact,
+            _admission: admission,
+            decoded_bytes: AtomicU64::new(0),
+        })
+    }
+
+    /// Copies one archive entry using a fresh single-entry quota account.
+    pub fn copy_entry<W: Write>(
+        &self,
+        artifact: &Artifact,
+        entry_id: ArchiveEntryId,
+        writer: &mut W,
+        control: &OperationControl,
+    ) -> Result<u64, Error> {
+        let session = self.archive_copy_session(artifact, control)?;
+        session.copy_entry(entry_id, writer, control)
     }
 
     pub fn classes(
@@ -1542,7 +2171,9 @@ impl Engine {
     ) -> Result<Report<Source>, Error> {
         let _admission = self.admit(control)?;
         self.check_ownership(artifact)?;
-        self.runtime.pool.install(|| decompile(artifact, selector, control))
+        self.runtime
+            .pool
+            .install(|| decompile(artifact, selector, control))
     }
 
     #[cfg(feature = "manifest")]
@@ -1588,7 +2219,11 @@ fn open_dex_bytes(
     }
     let id = ArtifactId::from_digest(crate::bytes::sha256_controlled(&bytes, control)?);
     reserve_bytes(runtime, len, limits.max_engine_owned_bytes)?;
-    let roots = vec![Root { ordinal: 0, raw_name: b"<memory.dex>".to_vec(), source: RootSource::Raw }];
+    let roots = vec![Root {
+        ordinal: 0,
+        raw_name: b"<memory.dex>".to_vec(),
+        source: RootSource::Raw,
+    }];
     let artifact = Artifact {
         id,
         bytes,

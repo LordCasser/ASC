@@ -15,10 +15,11 @@
 //! `inflate_until`) was removed with its call sites; it never verified CRCs
 //! and carried no resource limits.
 
-use crate::bytes::{read_u16, read_u32, Checkpoints, ControlProbe, CHECKPOINT_SPACING};
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::bytes::{CHECKPOINT_SPACING, Checkpoints, ControlProbe, read_u16, read_u32};
 use crate::error::{Error, ErrorKind};
 use std::collections::BTreeMap;
+use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
 // Target-contract types (IN-02)
@@ -63,6 +64,7 @@ pub(crate) struct ArchiveEntry {
     pub(crate) compressed_size: u32,
     pub(crate) uncompressed_size: u32,
     pub(crate) local_header_offset: u32,
+    pub(crate) directory: bool,
 }
 
 impl ArchiveEntry {
@@ -150,10 +152,7 @@ fn unsupported(message: impl Into<String>) -> Error {
 /// structure returns errors that name the failing offset or entry; it never
 /// returns an empty catalog for a broken archive.
 #[cfg(test)]
-pub(crate) fn parse_catalog(
-    data: &[u8],
-    limits: &InputLimits,
-) -> Result<ArchiveCatalog, Error> {
+pub(crate) fn parse_catalog(data: &[u8], limits: &InputLimits) -> Result<ArchiveCatalog, Error> {
     parse_catalog_controlled(data, limits, &ControlProbe::never())
 }
 
@@ -251,7 +250,9 @@ pub(crate) fn parse_catalog_controlled(
         let comment_len = u16::from_le_bytes([header[32], header[33]]) as usize;
         let name_start = offset.checked_add(46).expect("offset + 46 is small");
         let name_end = name_start.checked_add(name_len).ok_or_else(|| {
-            malformed(format!("name length of entry #{ordinal} at offset {offset} overflows"))
+            malformed(format!(
+                "name length of entry #{ordinal} at offset {offset} overflows"
+            ))
         })?;
         if name_end > cd_end {
             return Err(malformed(format!(
@@ -287,6 +288,8 @@ pub(crate) fn parse_catalog_controlled(
             )));
         }
         let method = u16::from_le_bytes([header[10], header[11]]);
+        let version_made_by = u16::from_le_bytes([header[4], header[5]]);
+        let external_attributes = u32::from_le_bytes(header[38..42].try_into().expect("4 bytes"));
         let crc32 = u32::from_le_bytes(header[16..20].try_into().expect("4 bytes"));
         let compressed_size = u32::from_le_bytes(header[20..24].try_into().expect("4 bytes"));
         let uncompressed_size = u32::from_le_bytes(header[24..28].try_into().expect("4 bytes"));
@@ -302,6 +305,14 @@ pub(crate) fn parse_catalog_controlled(
                  local-header-offset placeholder"
             )));
         }
+        let unix_mode = if version_made_by >> 8 == 3 {
+            external_attributes >> 16
+        } else {
+            0
+        };
+        let directory = data[name_start..name_end].ends_with(b"/")
+            || external_attributes & 0x10 != 0
+            || unix_mode & 0xf000 == 0x4000;
         entries.push(ArchiveEntry {
             ordinal,
             raw_name: data[name_start..name_end].to_vec(),
@@ -311,6 +322,7 @@ pub(crate) fn parse_catalog_controlled(
             compressed_size,
             uncompressed_size,
             local_header_offset,
+            directory,
         });
         // Enforced inside the walk: the EOCD count above only bounds what the
         // archive *declares*, so a small declared count in front of a packed
@@ -342,7 +354,9 @@ pub(crate) fn parse_catalog_controlled(
 }
 
 fn truncated_eocd(eocd: usize) -> Error {
-    malformed(format!("end of central directory at offset {eocd} is truncated"))
+    malformed(format!(
+        "end of central directory at offset {eocd} is truncated"
+    ))
 }
 
 /// Key general-purpose flags that must agree between the local header and the
@@ -352,22 +366,7 @@ const KEY_FLAGS: u16 = 0x20A9;
 /// The optional data-descriptor signature.
 const DESCRIPTOR_SIGNATURE: u32 = 0x0807_4B50;
 
-/// Decodes one entry under the full IN-02 contract.
-///
-/// Checks, in order: local-header presence/signature, name/method/key-flag
-/// agreement with the central directory, encryption/ZIP64 rejection, the
-/// compressed-data range, complete stream consumption with exact declared
-/// sizes (no trailing stream), CRC-32, and — when the descriptor flag is set
-/// — the data descriptor values (with or without the optional signature)
-/// against the actual stream.
-///
-/// `decoded_bytes` accumulates the per-operation total across entries against
-/// `limits.max_total_decoded_bytes`. The full declared size is **reserved
-/// before the decode starts** and rolled back on failure: the exact-size
-/// contract below makes the declared size the authoritative output length, so
-/// concurrent entries can never hold decoded buffers beyond what the account
-/// already covers.
-#[allow(clippy::too_many_lines)]
+/// Decodes one entry under the full IN-02 contract into an owned buffer.
 pub(crate) fn read_entry(
     data: &[u8],
     entry: &ArchiveEntry,
@@ -375,6 +374,25 @@ pub(crate) fn read_entry(
     decoded_bytes: &AtomicU64,
     control: &ControlProbe<'_>,
 ) -> Result<Vec<u8>, Error> {
+    let mut output = Vec::new();
+    read_entry_to(data, entry, limits, decoded_bytes, control, &mut output)?;
+    Ok(output)
+}
+
+/// Decodes one entry into a caller-provided sink under the full IN-02
+/// contract. The sink only receives bytes after the declared size reservation
+/// succeeds; CRC, exact-size, local-header and descriptor checks still run
+/// after the final bytes have been written. Callers must discard their sink on
+/// any error because a writer cannot retract bytes already accepted.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn read_entry_to<W: Write>(
+    data: &[u8],
+    entry: &ArchiveEntry,
+    limits: &InputLimits,
+    decoded_bytes: &AtomicU64,
+    control: &ControlProbe<'_>,
+    writer: &mut W,
+) -> Result<u64, Error> {
     control.check()?;
     let name = entry.display();
     let local_offset = entry.local_header_offset as usize;
@@ -402,9 +420,13 @@ pub(crate) fn read_entry(
         .and_then(|value| value.checked_add(name_len))
         .and_then(|value| value.checked_add(extra_len))
         .ok_or_else(|| malformed(format!("entry {name}: local header lengths overflow")))?;
-    let local_name = data.get(local_offset + 30..data_start - extra_len).ok_or_else(|| {
-        malformed(format!("entry {name}: local header name at offset {local_offset} is truncated"))
-    })?;
+    let local_name = data
+        .get(local_offset + 30..data_start - extra_len)
+        .ok_or_else(|| {
+            malformed(format!(
+                "entry {name}: local header name at offset {local_offset} is truncated"
+            ))
+        })?;
     if local_name != entry.raw_name {
         return Err(malformed(format!(
             "entry {name}: local header name at offset {local_offset} disagrees with the \
@@ -426,7 +448,9 @@ pub(crate) fn read_entry(
         )));
     }
     if local_flags & 0x0001 != 0 {
-        return Err(unsupported(format!("entry {name} is encrypted (flag bit 0)")));
+        return Err(unsupported(format!(
+            "entry {name} is encrypted (flag bit 0)"
+        )));
     }
     if local_version >= 45 {
         return Err(unsupported(format!(
@@ -446,7 +470,9 @@ pub(crate) fn read_entry(
     let declared = declared as usize;
     let compressed_size = entry.compressed_size as usize;
     let data_end = data_start.checked_add(compressed_size).ok_or_else(|| {
-        malformed(format!("entry {name}: compressed-data range at offset {data_start} overflows"))
+        malformed(format!(
+            "entry {name}: compressed-data range at offset {data_start} overflows"
+        ))
     })?;
     if data_end > data.len() {
         return Err(malformed(format!(
@@ -463,43 +489,36 @@ pub(crate) fn read_entry(
     // reservation is exact and an over-cap entry is rejected before its
     // buffer is allocated, not after.
     let declared_u64 = declared as u64;
-    let reserved_now =
-        decoded_bytes.fetch_add(declared_u64, Ordering::Relaxed) + declared_u64;
-    if reserved_now > limits.max_total_decoded_bytes {
-        decoded_bytes.fetch_sub(declared_u64, Ordering::Relaxed);
-        return Err(Error::resource_limit(format!(
-            "decoded bytes reach {reserved_now} across entries, above the {} per-operation limit \
-             (while reading {name})",
-            limits.max_total_decoded_bytes
-        )));
-    }
+    reserve_decoded_bytes(
+        decoded_bytes,
+        declared_u64,
+        limits.max_total_decoded_bytes,
+        &name,
+    )?;
 
-    let decoded = (|| -> Result<Vec<u8>, Error> {
-        let output = match entry.method {
+    let decoded = (|| -> Result<u64, Error> {
+        let mut sink = EntrySink::new(writer, declared_u64, &name);
+        match entry.method {
             STORED => {
                 if compressed_size != declared {
                     return Err(malformed(format!(
                         "entry {name}: stored sizes disagree (compressed {compressed_size}, \
-                         uncompressed {declared})"
+                        uncompressed {declared})"
                     )));
                 }
-                copy_chunked(compressed, control)?
+                copy_chunked_to(compressed, &mut sink, control)?;
             }
-            DEFLATE => inflate_strict(compressed, declared, &name, control)?,
+            DEFLATE => inflate_strict_to(compressed, declared, &name, control, &mut sink)?,
             method => {
                 return Err(unsupported(format!(
                     "entry {name} uses compression method {method} (only Stored (0) and \
                      Deflate (8) are supported)"
                 )));
             }
-        };
-        debug_assert_eq!(
-            output.len(),
-            declared,
-            "the exact-size contract makes the declared size the output length"
-        );
+        }
+        debug_assert_eq!(sink.produced(), declared_u64);
 
-        let crc = crc32_chunked(&output, control)?;
+        let crc = sink.crc32();
         if crc != entry.crc32 {
             return Err(malformed(format!(
                 "entry {name}: CRC-32 mismatch (local header at offset {local_offset}, data at \
@@ -523,12 +542,12 @@ pub(crate) fn read_entry(
         if descriptor {
             verify_descriptor(data, data_end, entry, &name, crc)?;
         }
-        Ok(output)
+        Ok(sink.produced())
     })();
     match decoded {
         Ok(output) => Ok(output),
         Err(error) => {
-            decoded_bytes.fetch_sub(declared_u64, Ordering::Relaxed);
+            release_decoded_bytes(decoded_bytes, declared_u64);
             Err(error)
         }
     }
@@ -575,16 +594,106 @@ fn verify_descriptor(
     Ok(())
 }
 
+fn reserve_decoded_bytes(
+    decoded_bytes: &AtomicU64,
+    declared: u64,
+    max: u64,
+    name: &str,
+) -> Result<(), Error> {
+    let mut current = decoded_bytes.load(Ordering::Relaxed);
+    loop {
+        let Some(next) = current.checked_add(declared) else {
+            return Err(Error::resource_limit(format!(
+                "decoded bytes overflow while reading {name}"
+            )));
+        };
+        if next > max {
+            return Err(Error::resource_limit(format!(
+                "decoded bytes reach {next} across entries, above the {max} per-operation limit \
+                 (while reading {name})"
+            )));
+        }
+        match decoded_bytes.compare_exchange_weak(
+            current,
+            next,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return Ok(()),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn release_decoded_bytes(decoded_bytes: &AtomicU64, declared: u64) {
+    decoded_bytes.fetch_sub(declared, Ordering::Relaxed);
+}
+
+struct EntrySink<'a, W> {
+    writer: &'a mut W,
+    declared: u64,
+    produced: u64,
+    crc: flate2::Crc,
+    name: String,
+}
+
+impl<'a, W: Write> EntrySink<'a, W> {
+    fn new(writer: &'a mut W, declared: u64, name: &str) -> Self {
+        Self {
+            writer,
+            declared,
+            produced: 0,
+            crc: flate2::Crc::new(),
+            name: name.to_owned(),
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8], control: &ControlProbe<'_>) -> Result<(), Error> {
+        control.check()?;
+        let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        let Some(next) = self.produced.checked_add(len) else {
+            return Err(malformed(format!(
+                "entry {}: decoded byte count overflows",
+                self.name
+            )));
+        };
+        if next > self.declared {
+            return Err(malformed(format!(
+                "entry {}: decoded {next} bytes exceed the declared {} (trailing stream)",
+                self.name, self.declared
+            )));
+        }
+        self.writer
+            .write_all(bytes)
+            .map_err(|error| malformed(format!("entry {}: writer failed: {error}", self.name)))?;
+        self.crc.update(bytes);
+        self.produced = next;
+        control.check()?;
+        Ok(())
+    }
+
+    fn produced(&self) -> u64 {
+        self.produced
+    }
+
+    fn crc32(&self) -> u32 {
+        self.crc.sum()
+    }
+}
+
 /// A stored entry's bytes, checkpointed while copying (multi-hundred-MiB
 /// stored DEX entries are normal).
-fn copy_chunked(compressed: &[u8], control: &ControlProbe<'_>) -> Result<Vec<u8>, Error> {
-    let mut out = Vec::with_capacity(compressed.len());
+fn copy_chunked_to<W: Write>(
+    compressed: &[u8],
+    sink: &mut EntrySink<'_, W>,
+    control: &ControlProbe<'_>,
+) -> Result<(), Error> {
     let mut checkpoints = Checkpoints::new();
     for chunk in compressed.chunks(CHECKPOINT_SPACING) {
-        out.extend_from_slice(chunk);
+        sink.push(chunk, control)?;
         checkpoints.tick(control, chunk.len())?;
     }
-    Ok(out)
+    Ok(())
 }
 
 /// Unchecked CRC-32 for test builders (no budget checkpoints).
@@ -595,61 +704,45 @@ pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     crc.sum()
 }
 
-fn crc32_chunked(bytes: &[u8], control: &ControlProbe<'_>) -> Result<u32, Error> {
-    let mut crc = flate2::Crc::new();
-    let mut checkpoints = Checkpoints::new();
-    for chunk in bytes.chunks(CHECKPOINT_SPACING) {
-        crc.update(chunk);
-        checkpoints.tick(control, chunk.len())?;
-    }
-    Ok(crc.sum())
-}
-
 /// Inflates a raw deflate stream under the exact-size contract.
 ///
 /// The stream must consume the whole compressed slice, produce exactly
 /// `declared` bytes, and end cleanly: a stream that ends early (truncated),
 /// leaves compressed bytes after its end (trailing stream) or produces more
 /// than declared is a structural error naming the entry.
-fn inflate_strict(
+fn inflate_strict_to<W: Write>(
     compressed: &[u8],
     declared: usize,
     name: &str,
     control: &ControlProbe<'_>,
-) -> Result<Vec<u8>, Error> {
+    sink: &mut EntrySink<'_, W>,
+) -> Result<(), Error> {
     const CHUNK: usize = 64 * 1024;
-    /// Headroom past the declared size so over-production is detectable
-    /// without trusting the declared size for allocation.
-    const OVER_PROBE: usize = 4096;
 
     let mut decompressor = flate2::Decompress::new(false);
-    let mut output: Vec<u8> = Vec::new();
+    let mut output = vec![0u8; CHUNK];
     let mut checkpoints = Checkpoints::new();
     loop {
-        let base = output.len();
-        let room = CHUNK.min(declared.saturating_sub(base) + OVER_PROBE);
-        output.resize(base + room, 0);
+        control.check()?;
+        let room = CHUNK.min(
+            declared
+                .saturating_sub(sink.produced() as usize)
+                .saturating_add(1),
+        );
         let before_in = decompressor.total_in() as usize;
         let status = decompressor
             .decompress(
                 &compressed[before_in..],
-                &mut output[base..],
+                &mut output[..room],
                 flate2::FlushDecompress::None,
             )
             .map_err(|error| {
                 malformed(format!("entry {name}: invalid deflate stream ({error})"))
             })?;
         let consumed = decompressor.total_in() as usize - before_in;
-        let produced = decompressor.total_out() as usize - base;
-        output.truncate(decompressor.total_out() as usize);
+        let produced = decompressor.total_out() as usize - sink.produced() as usize;
+        sink.push(&output[..produced], control)?;
         checkpoints.tick(control, produced)?;
-        if output.len() > declared {
-            return Err(malformed(format!(
-                "entry {name}: decoded {} bytes exceed the declared {declared} \
-                 (trailing stream)",
-                output.len()
-            )));
-        }
         match status {
             flate2::Status::StreamEnd => {
                 let consumed_total = decompressor.total_in() as usize;
@@ -667,8 +760,8 @@ fn inflate_strict(
                     if decompressor.total_in() as usize == compressed.len() {
                         return Err(malformed(format!(
                             "entry {name}: deflate stream ended after {} of {} declared \
-                             bytes (truncated)",
-                            output.len(),
+                            bytes (truncated)",
+                            sink.produced(),
                             declared
                         )));
                     }
@@ -680,13 +773,13 @@ fn inflate_strict(
             }
         }
     }
-    if output.len() != declared {
+    if sink.produced() as usize != declared {
         return Err(malformed(format!(
             "entry {name}: decoded {} bytes, the central directory declares {declared}",
-            output.len()
+            sink.produced()
         )));
     }
-    Ok(output)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -713,9 +806,8 @@ impl RootSelection<'_> {
     #[allow(dead_code)]
     pub(crate) fn require_selected(&self) -> Result<&[&ArchiveEntry], Error> {
         if self.selected.is_empty() {
-            return Err(Error::new(ErrorKind::NotFound).with_context(
-                "the archive contains no root DEX entry to analyse",
-            ));
+            return Err(Error::new(ErrorKind::NotFound)
+                .with_context("the archive contains no root DEX entry to analyse"));
         }
         Ok(&self.selected)
     }
@@ -738,10 +830,16 @@ fn is_any_dex(name: &[u8]) -> bool {
 /// tier counts as *used* only when it actually produced the selection — an
 /// archive without any DEX entry reports neither a selection nor a fallback.
 pub(crate) fn select_root_dexes(catalog: &ArchiveCatalog) -> RootSelection<'_> {
-    let named: Vec<&ArchiveEntry> =
-        catalog.entries.iter().filter(|entry| is_classes_dex(&entry.raw_name)).collect();
-    let any_dex: Vec<&ArchiveEntry> =
-        catalog.entries.iter().filter(|entry| is_any_dex(&entry.raw_name)).collect();
+    let named: Vec<&ArchiveEntry> = catalog
+        .entries
+        .iter()
+        .filter(|entry| is_classes_dex(&entry.raw_name))
+        .collect();
+    let any_dex: Vec<&ArchiveEntry> = catalog
+        .entries
+        .iter()
+        .filter(|entry| is_any_dex(&entry.raw_name))
+        .collect();
     let (candidates, used_fallback): (Vec<&ArchiveEntry>, bool) = if named.is_empty() {
         let used = !any_dex.is_empty();
         (any_dex, used)
@@ -752,7 +850,10 @@ pub(crate) fn select_root_dexes(catalog: &ArchiveCatalog) -> RootSelection<'_> {
     let mut selected = Vec::new();
     let mut counts: BTreeMap<Vec<u8>, Vec<u32>> = BTreeMap::new();
     for entry in &candidates {
-        counts.entry(entry.raw_name.clone()).or_default().push(entry.ordinal);
+        counts
+            .entry(entry.raw_name.clone())
+            .or_default()
+            .push(entry.ordinal);
         if seen.insert(entry.raw_name.clone()) {
             selected.push(*entry);
         }
@@ -762,7 +863,11 @@ pub(crate) fn select_root_dexes(catalog: &ArchiveCatalog) -> RootSelection<'_> {
         .filter(|(_, ordinals)| ordinals.len() > 1)
         .map(|(name, ordinals)| DuplicateName { name, ordinals })
         .collect();
-    RootSelection { selected, duplicates, used_fallback }
+    RootSelection {
+        selected,
+        duplicates,
+        used_fallback,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -787,8 +892,8 @@ pub(crate) mod tests {
     }
 
     /// Builds a ZIP archive in memory. The third tuple field selects deflate
-    /// (8) over stored (0); CRC fields are left zero because the parser never
-    /// reads them.
+    /// (8) over stored (0); local and central headers carry the real CRC-32
+    /// because the reader validates both the stream and header contract.
     pub(crate) fn build_zip(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
         let mut local = Vec::new();
         let mut central = Vec::new();
@@ -872,8 +977,10 @@ pub(crate) mod tests {
         // Declared count 1 (under the cap) while the directory holds 3.
         zip[eocd + 8..eocd + 10].copy_from_slice(&1u16.to_le_bytes());
         zip[eocd + 10..eocd + 12].copy_from_slice(&1u16.to_le_bytes());
-        let limits =
-            InputLimits { max_archive_entries: 2, ..InputLimits::DEFAULT };
+        let limits = InputLimits {
+            max_archive_entries: 2,
+            ..InputLimits::DEFAULT
+        };
         let error = parse_catalog(&zip, &limits).unwrap_err();
         assert!(
             error.to_string().contains("more than 2 entries"),
@@ -886,7 +993,10 @@ pub(crate) mod tests {
         // A raw ESC inside a valid-UTF-8 name must not reach stderr verbatim.
         let shown = display_name(b"ok\x1b[2Jevil");
         assert!(shown.contains("\\u{1b}"), "escaped form: {shown:?}");
-        assert!(!shown.contains('\u{1b}'), "raw control byte leaked: {shown:?}");
+        assert!(
+            !shown.contains('\u{1b}'),
+            "raw control byte leaked: {shown:?}"
+        );
     }
 
     #[test]
@@ -925,8 +1035,10 @@ pub(crate) mod tests {
 
         // Over-cap declaration: rejected before any decode work.
         let tight = build_zip(&[("classes.dex", &payload, false)]);
-        let tight_limits =
-            InputLimits { max_total_decoded_bytes: 4, ..InputLimits::DEFAULT };
+        let tight_limits = InputLimits {
+            max_total_decoded_bytes: 4,
+            ..InputLimits::DEFAULT
+        };
         let catalog = parse_catalog(&tight, &tight_limits).unwrap();
         let entry = &catalog.entries[0];
         let error = read_entry(&tight, entry, &tight_limits, &decoded, &probe).unwrap_err();

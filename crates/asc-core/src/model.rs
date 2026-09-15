@@ -43,6 +43,131 @@ impl fmt::Debug for ArtifactId {
     }
 }
 
+/// Stable identity of one physical archive entry: the owning artifact and
+/// its zero-based central-directory ordinal. Names are deliberately not part
+/// of the identity, so duplicate and non-UTF-8 names remain addressable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ArchiveEntryId {
+    artifact: ArtifactId,
+    ordinal: u32,
+}
+
+impl ArchiveEntryId {
+    pub(crate) fn new(artifact: ArtifactId, ordinal: u32) -> Self {
+        Self { artifact, ordinal }
+    }
+
+    pub fn artifact(&self) -> ArtifactId {
+        self.artifact
+    }
+
+    pub fn ordinal(&self) -> u32 {
+        self.ordinal
+    }
+}
+
+/// A lossless, immutable projection of one central-directory record.
+/// `raw_name` is the identity-preserving representation; `display_name` is a
+/// safe escaped rendering for humans and logs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArchiveEntry {
+    id: ArchiveEntryId,
+    raw_name: Vec<u8>,
+    display_name: String,
+    method: u16,
+    compressed_size: u64,
+    uncompressed_size: u64,
+    crc32: u32,
+    encrypted: bool,
+    directory: bool,
+}
+
+impl ArchiveEntry {
+    pub(crate) fn new(
+        id: ArchiveEntryId,
+        raw_name: Vec<u8>,
+        display_name: String,
+        method: u16,
+        compressed_size: u64,
+        uncompressed_size: u64,
+        crc32: u32,
+        encrypted: bool,
+        directory: bool,
+    ) -> Self {
+        Self {
+            id,
+            raw_name,
+            display_name,
+            method,
+            compressed_size,
+            uncompressed_size,
+            crc32,
+            encrypted,
+            directory,
+        }
+    }
+
+    pub fn id(&self) -> ArchiveEntryId {
+        self.id
+    }
+
+    pub fn raw_name(&self) -> &[u8] {
+        &self.raw_name
+    }
+
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    pub fn method(&self) -> u16 {
+        self.method
+    }
+
+    pub fn compressed_size(&self) -> u64 {
+        self.compressed_size
+    }
+
+    pub fn uncompressed_size(&self) -> u64 {
+        self.uncompressed_size
+    }
+
+    pub fn crc32(&self) -> u32 {
+        self.crc32
+    }
+
+    pub fn is_encrypted(&self) -> bool {
+        self.encrypted
+    }
+
+    pub fn is_directory(&self) -> bool {
+        self.directory
+    }
+
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        64usize
+            .saturating_add(self.raw_name.len())
+            .saturating_add(self.display_name.len())
+    }
+}
+
+/// Bounds for one archive-directory projection. A query that would exceed a
+/// bound fails with `ResourceLimit`; it never returns a silently truncated
+/// catalog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArchiveEntryQuery {
+    pub max_items: usize,
+    pub max_result_bytes: usize,
+}
+
+impl Default for ArchiveEntryQuery {
+    fn default() -> Self {
+        Self {
+            max_items: 100_000,
+            max_result_bytes: 16 * 1024 * 1024,
+        }
+    }
+}
+
 /// One logical DEX: the physical archive entry it came from plus its ordinal
 /// among that entry's logical members. Raw DEX input uses entry ordinal 0.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -54,7 +179,11 @@ pub struct DexId {
 
 impl DexId {
     pub(crate) fn new(artifact: ArtifactId, entry_ordinal: u32, logical_ordinal: u32) -> Self {
-        Self { artifact, entry_ordinal, logical_ordinal }
+        Self {
+            artifact,
+            entry_ordinal,
+            logical_ordinal,
+        }
     }
 
     pub fn artifact(&self) -> ArtifactId {
@@ -89,7 +218,7 @@ impl ClassId {
         Self { dex, class_def_idx }
     }
 
-#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
+    #[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     #[allow(dead_code)] // A07/A08 wiring surface
     pub fn dex(&self) -> DexId {
         self.dex
@@ -166,7 +295,11 @@ pub struct TargetId {
 
 impl TargetId {
     pub(crate) fn new(dex: DexId, kind: TargetKind, table_index: u32) -> Self {
-        Self { dex, kind, table_index }
+        Self {
+            dex,
+            kind,
+            table_index,
+        }
     }
 
     #[allow(dead_code)] // A07/A08 wiring surface
@@ -187,7 +320,13 @@ impl TargetId {
 
 impl fmt::Debug for TargetId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "TargetId({:?} {} #{})", self.dex, self.kind.as_str(), self.table_index)
+        write!(
+            f,
+            "TargetId({:?} {} #{})",
+            self.dex,
+            self.kind.as_str(),
+            self.table_index
+        )
     }
 }
 
@@ -208,7 +347,9 @@ impl DexText {
     }
 
     pub(crate) fn from_str_lossless(text: &str) -> Self {
-        Self { units: text.encode_utf16().collect() }
+        Self {
+            units: text.encode_utf16().collect(),
+        }
     }
 
     pub fn utf16_units(&self) -> &[u16] {
@@ -222,12 +363,12 @@ impl DexText {
         String::from_utf16(&self.units).ok()
     }
 
-#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
+    #[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub fn is_empty(&self) -> bool {
         self.units.is_empty()
     }
 
-#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
+    #[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub fn unit_len(&self) -> usize {
         self.units.len()
     }
@@ -257,7 +398,7 @@ impl ClassDescriptor {
         Ok(Self { descriptor })
     }
 
-#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
+    #[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     #[allow(dead_code)] // A07/A08 wiring surface
     pub fn as_str(&self) -> &str {
         &self.descriptor
@@ -356,14 +497,21 @@ impl DexEntry {
         version: DexVersion,
         header_offset: u64,
     ) -> Self {
-        Self { id, raw_entry_name, display_name, logical_name, version, header_offset }
+        Self {
+            id,
+            raw_entry_name,
+            display_name,
+            logical_name,
+            version,
+            header_offset,
+        }
     }
 
     pub fn id(&self) -> DexId {
         self.id
     }
 
-#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
+    #[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub fn raw_entry_name(&self) -> &[u8] {
         &self.raw_entry_name
     }
@@ -372,12 +520,12 @@ impl DexEntry {
         &self.display_name
     }
 
-#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
+    #[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub fn logical_name(&self) -> &DexText {
         &self.logical_name
     }
 
-#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
+    #[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub fn version(&self) -> DexVersion {
         self.version
     }
@@ -396,7 +544,10 @@ pub struct Prototype {
 
 impl Prototype {
     pub(crate) fn new(parameters: Vec<DexText>, return_type: DexText) -> Self {
-        Self { parameters, return_type }
+        Self {
+            parameters,
+            return_type,
+        }
     }
 
     pub fn parameters(&self) -> &[DexText] {
@@ -427,14 +578,20 @@ impl MethodIdentity {
         name: DexText,
         prototype: Prototype,
     ) -> Self {
-        Self { id, dex, owner, name, prototype }
+        Self {
+            id,
+            dex,
+            owner,
+            name,
+            prototype,
+        }
     }
 
     pub fn id(&self) -> MethodId {
         self.id
     }
 
-#[allow(dead_code)] // A07/A08 wiring surface
+    #[allow(dead_code)] // A07/A08 wiring surface
     #[allow(dead_code)] // A07/A08 wiring surface
     pub fn dex(&self) -> &DexEntry {
         &self.dex
@@ -506,7 +663,7 @@ impl Class {
         &self.package
     }
 
-#[allow(dead_code)] // A07/A08 wiring surface
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn simple_name(&self) -> &DexText {
         &self.simple_name
     }
@@ -522,8 +679,16 @@ impl Class {
 pub enum TargetValue {
     String(DexText),
     Type(DexText),
-    Field { owner: DexText, name: DexText, field_type: DexText },
-    Method { owner: DexText, name: DexText, prototype: Prototype },
+    Field {
+        owner: DexText,
+        name: DexText,
+        field_type: DexText,
+    },
+    Method {
+        owner: DexText,
+        name: DexText,
+        prototype: Prototype,
+    },
 }
 
 /// One matched target of a reference query: identity, value and the ascending
@@ -539,7 +704,11 @@ impl TargetMatch {
     pub(crate) fn new(id: TargetId, value: TargetValue, mut code_unit_offsets: Vec<u32>) -> Self {
         code_unit_offsets.sort_unstable();
         code_unit_offsets.dedup();
-        Self { id, value, code_unit_offsets }
+        Self {
+            id,
+            value,
+            code_unit_offsets,
+        }
     }
 
     pub fn id(&self) -> TargetId {
@@ -621,8 +790,14 @@ pub enum MatchOutcome {
 /// their original source text.
 #[derive(Clone)]
 pub enum Pattern {
-    Literal { source: String, units: Vec<u16> },
-    Regex { source: String, regex: fancy_regex::Regex },
+    Literal {
+        source: String,
+        units: Vec<u16>,
+    },
+    Regex {
+        source: String,
+        regex: fancy_regex::Regex,
+    },
 }
 
 impl Pattern {
@@ -630,7 +805,10 @@ impl Pattern {
     pub fn literal(text: &str, limits: &PatternLimits) -> Result<Self, Error> {
         reject_blank_pattern(text)?;
         check_pattern_bytes(text, limits)?;
-        Ok(Pattern::Literal { source: text.to_owned(), units: text.encode_utf16().collect() })
+        Ok(Pattern::Literal {
+            source: text.to_owned(),
+            units: text.encode_utf16().collect(),
+        })
     }
 
     /// Regex pattern compiled with the given budgets; unsupported syntax is
@@ -644,7 +822,10 @@ impl Pattern {
             .delegate_dfa_size_limit(limits.regex_compile_bytes)
             .build()
             .map_err(|error| Error::invalid_query(format!("invalid regex {pattern:?}: {error}")))?;
-        Ok(Pattern::Regex { source: pattern.to_owned(), regex })
+        Ok(Pattern::Regex {
+            source: pattern.to_owned(),
+            regex,
+        })
     }
 
     /// The original pattern text as supplied by the caller.
@@ -660,20 +841,24 @@ impl Pattern {
     /// `Unsupported`. A runtime budget exhaustion is a `ResourceLimit` error.
     pub fn matches_utf16(&self, units: &[u16]) -> Result<MatchOutcome, Error> {
         match self {
-            Pattern::Literal { units: needle, .. } => {
-                Ok(if contains_units(units, needle) {
-                    MatchOutcome::Match
-                } else {
-                    MatchOutcome::NoMatch
-                })
-            }
+            Pattern::Literal { units: needle, .. } => Ok(if contains_units(units, needle) {
+                MatchOutcome::Match
+            } else {
+                MatchOutcome::NoMatch
+            }),
             Pattern::Regex { regex, .. } => {
                 let Some(text) = String::from_utf16(units).ok() else {
                     return Ok(MatchOutcome::Unsupported);
                 };
                 regex
                     .is_match(&text)
-                    .map(|hit| if hit { MatchOutcome::Match } else { MatchOutcome::NoMatch })
+                    .map(|hit| {
+                        if hit {
+                            MatchOutcome::Match
+                        } else {
+                            MatchOutcome::NoMatch
+                        }
+                    })
                     .map_err(|error| {
                         Error::resource_limit(format!("regex execution over limit: {error}"))
                     })
@@ -682,7 +867,7 @@ impl Pattern {
     }
 
     /// Convenience for callers that already hold valid Unicode text.
-#[allow(dead_code)] // A07/A08 wiring surface
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn matches_str(&self, text: &str) -> Result<MatchOutcome, Error> {
         match self {
             Pattern::Literal { .. } => {
@@ -691,7 +876,13 @@ impl Pattern {
             }
             Pattern::Regex { regex, .. } => regex
                 .is_match(text)
-                .map(|hit| if hit { MatchOutcome::Match } else { MatchOutcome::NoMatch })
+                .map(|hit| {
+                    if hit {
+                        MatchOutcome::Match
+                    } else {
+                        MatchOutcome::NoMatch
+                    }
+                })
                 .map_err(|error| {
                     Error::resource_limit(format!("regex execution over limit: {error}"))
                 }),
@@ -768,7 +959,10 @@ impl MemberQuery {
                 "member query needs at least a name pattern or a class constraint",
             ));
         }
-        Ok(Self { name, declaring_class })
+        Ok(Self {
+            name,
+            declaring_class,
+        })
     }
 
     pub fn name(&self) -> Option<&Pattern> {
@@ -798,7 +992,7 @@ pub struct ClassFilter {
 }
 
 impl ClassFilter {
-#[allow(dead_code)] // A07/A08 wiring surface
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn none() -> Self {
         Self { units: Vec::new() }
     }
@@ -807,10 +1001,12 @@ impl ClassFilter {
     /// the input cannot be lowered and are kept as-is.
     pub fn new(filter: &str) -> Self {
         #[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
-        Self { units: lowercase_units(&filter.encode_utf16().collect::<Vec<_>>()) }
+        Self {
+            units: lowercase_units(&filter.encode_utf16().collect::<Vec<_>>()),
+        }
     }
 
-#[allow(dead_code)] // A07/A08 wiring surface
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn is_empty(&self) -> bool {
         self.units.is_empty()
     }
@@ -872,7 +1068,7 @@ fn decode_surrogate_pair(units: &[u16], index: usize) -> Option<char> {
 #[derive(Clone, Debug)]
 pub enum ClassSelector {
     Descriptor(ClassDescriptor, Option<DexId>),
-#[allow(dead_code)] // A07/A08 wiring surface
+    #[allow(dead_code)] // A07/A08 wiring surface
     Id(ClassId),
 }
 
@@ -1061,7 +1257,11 @@ pub struct Report<T> {
 
 impl<T> Report<T> {
     pub(crate) fn new(value: T, diagnostics: Vec<Diagnostic>, stats: OperationStats) -> Self {
-        Self { value, diagnostics, stats }
+        Self {
+            value,
+            diagnostics,
+            stats,
+        }
     }
 
     pub fn value(&self) -> &T {
@@ -1105,9 +1305,20 @@ pub enum EncodedValue {
     Double(u64),
     String(DexText),
     Type(DexText),
-    Field { owner: DexText, name: DexText, field_type: DexText },
-    Method { owner: DexText, name: DexText, prototype: Prototype },
-    Enum { owner: DexText, name: DexText },
+    Field {
+        owner: DexText,
+        name: DexText,
+        field_type: DexText,
+    },
+    Method {
+        owner: DexText,
+        name: DexText,
+        prototype: Prototype,
+    },
+    Enum {
+        owner: DexText,
+        name: DexText,
+    },
     Array(Vec<EncodedValue>),
     Annotation(AnnotationRecord),
 }
@@ -1139,7 +1350,12 @@ impl AnnotationRecord {
         items: Vec<(DexText, EncodedValue)>,
         rendered: String,
     ) -> Self {
-        Self { visibility, type_descriptor, items, rendered }
+        Self {
+            visibility,
+            type_descriptor,
+            items,
+            rendered,
+        }
     }
 
     #[allow(dead_code)] // A08 projection surface
@@ -1168,9 +1384,16 @@ impl AnnotationRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AnnotationTarget {
     Class,
-    Field { index: usize },
-    Method { index: usize },
-    Parameter { method_index: usize, parameter_index: usize },
+    Field {
+        index: usize,
+    },
+    Method {
+        index: usize,
+    },
+    Parameter {
+        method_index: usize,
+        parameter_index: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1272,7 +1495,11 @@ pub struct Source {
 
 impl Source {
     pub(crate) fn new(class: Class, text: Arc<str>, metadata: SourceMetadata) -> Self {
-        Self { class, text, metadata }
+        Self {
+            class,
+            text,
+            metadata,
+        }
     }
 
     #[allow(dead_code)] // A08 projection surface
@@ -1321,14 +1548,19 @@ pub mod dto {
     }
 
     impl Default for Writer {
-    fn default() -> Self {
-        Self::new()
+        fn default() -> Self {
+            Self::new()
+        }
     }
-}
 
-impl Writer {
+    impl Writer {
         pub fn new() -> Self {
-            Self { out: String::new(), need_comma: vec![false], budget: usize::MAX, over: false }
+            Self {
+                out: String::new(),
+                need_comma: vec![false],
+                budget: usize::MAX,
+                over: false,
+            }
         }
 
         pub fn raw(value: &str) -> String {
@@ -1600,7 +1832,11 @@ impl Writer {
     pub fn write_target_value(w: &mut Writer, value: &TargetValue) {
         match value {
             TargetValue::String(text) | TargetValue::Type(text) => write_dex_text(w, text),
-            TargetValue::Field { owner, name, field_type } => {
+            TargetValue::Field {
+                owner,
+                name,
+                field_type,
+            } => {
                 w.begin_object();
                 w.key("owner");
                 write_dex_text(w, owner);
@@ -1610,7 +1846,11 @@ impl Writer {
                 write_dex_text(w, field_type);
                 w.end_object();
             }
-            TargetValue::Method { owner, name, prototype } => {
+            TargetValue::Method {
+                owner,
+                name,
+                prototype,
+            } => {
                 w.begin_object();
                 w.key("owner");
                 write_dex_text(w, owner);
@@ -1901,7 +2141,10 @@ impl Writer {
                 w.key("index");
                 w.number(*index as u64);
             }
-            AnnotationTarget::Parameter { method_index, parameter_index } => {
+            AnnotationTarget::Parameter {
+                method_index,
+                parameter_index,
+            } => {
                 w.key("target");
                 w.string("parameter");
                 w.key("method_index");
@@ -2001,7 +2244,11 @@ impl Writer {
                 w.key("value");
                 write_dex_text(w, inner);
             }
-            EncodedValue::Field { owner, name, field_type } => {
+            EncodedValue::Field {
+                owner,
+                name,
+                field_type,
+            } => {
                 w.string("field");
                 w.key("value");
                 w.begin_object();
@@ -2013,7 +2260,11 @@ impl Writer {
                 write_dex_text(w, field_type);
                 w.end_object();
             }
-            EncodedValue::Method { owner, name, prototype } => {
+            EncodedValue::Method {
+                owner,
+                name,
+                prototype,
+            } => {
                 w.string("method");
                 w.key("value");
                 w.begin_object();

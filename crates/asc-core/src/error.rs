@@ -79,7 +79,12 @@ pub struct Error {
 
 impl Error {
     pub(crate) fn new(kind: ErrorKind) -> Self {
-        Self { kind, context: Vec::new(), diagnostics: Vec::new(), partial_source: None }
+        Self {
+            kind,
+            context: Vec::new(),
+            diagnostics: Vec::new(),
+            partial_source: None,
+        }
     }
 
     pub(crate) fn with_context(mut self, context: impl Into<String>) -> Self {
@@ -99,7 +104,7 @@ impl Error {
         self
     }
 
-#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
+    #[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     #[allow(dead_code)] // A07/A08 wiring surface
     pub fn kind(&self) -> &ErrorKind {
         &self.kind

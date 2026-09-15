@@ -38,7 +38,7 @@ impl Targets {
         self.indices.contains(&index)
     }
 
-#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
+    #[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub(super) fn new(indices: impl IntoIterator<Item = u32>) -> Self {
         Self::with_prefilter(indices, true)
     }

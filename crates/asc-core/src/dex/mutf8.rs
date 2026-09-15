@@ -229,14 +229,26 @@ mod tests {
                 Ok(vec![0xd83d, 0xde00]),
             ),
             // Errors: overlong / wrong-tag bytes.
-            (&[0xc0, 0x81][..], Err(DecodeError::IllegalContinuation(0x81))),
+            (
+                &[0xc0, 0x81][..],
+                Err(DecodeError::IllegalContinuation(0x81)),
+            ),
             (&[0xc1, 0x80][..], Err(DecodeError::IllegalLead(0xc1))),
             (&[0x80][..], Err(DecodeError::IllegalLead(0x80))),
             (&[0xbf][..], Err(DecodeError::IllegalLead(0xbf))),
-            (&[0xf0, 0x90, 0x80, 0x80][..], Err(DecodeError::IllegalLead(0xf0))),
+            (
+                &[0xf0, 0x90, 0x80, 0x80][..],
+                Err(DecodeError::IllegalLead(0xf0)),
+            ),
             (&[0xff][..], Err(DecodeError::IllegalLead(0xff))),
-            (&[0xe0, 0x41, 0x80][..], Err(DecodeError::IllegalContinuation(0x41))),
-            (&[0xc2, 0x00][..], Err(DecodeError::IllegalContinuation(0x00))),
+            (
+                &[0xe0, 0x41, 0x80][..],
+                Err(DecodeError::IllegalContinuation(0x41)),
+            ),
+            (
+                &[0xc2, 0x00][..],
+                Err(DecodeError::IllegalContinuation(0x00)),
+            ),
             // Truncated sequences.
             (&[0xc2][..], Err(DecodeError::Truncated)),
             (&[0xe0][..], Err(DecodeError::Truncated)),
@@ -281,7 +293,10 @@ mod tests {
             Err(DecodeError::Terminator)
         );
         // A payload cut short by the end of the data.
-        assert_eq!(decode_units(b"ca", 3, &mut scratch), Err(DecodeError::Truncated));
+        assert_eq!(
+            decode_units(b"ca", 3, &mut scratch),
+            Err(DecodeError::Truncated)
+        );
         // Multi-byte units count one unit per sequence.
         assert_eq!(
             decode_units(&[0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80, 0x00], 2, &mut scratch).unwrap(),
@@ -295,7 +310,11 @@ mod tests {
         for text in ["A\0Z", "é😀ok", "tok(en|x)", "\u{0001}\u{007f}"] {
             let encoded = encode_mutf8(text);
             let units = decode(&encoded).unwrap_or_else(|error| panic!("{text:?}: {error:?}"));
-            assert_eq!(&units, &text.encode_utf16().collect::<Vec<u16>>(), "{text:?}");
+            assert_eq!(
+                &units,
+                &text.encode_utf16().collect::<Vec<u16>>(),
+                "{text:?}"
+            );
             assert_eq!(decode_lossy_string(&encoded), text);
         }
         // A stray NUL inside the payload is data, not a terminator: callers

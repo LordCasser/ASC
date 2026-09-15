@@ -25,7 +25,7 @@ use crate::bytes::{ControlProbe, read_u16, read_u32};
 use crate::error::Error;
 use crate::model::{
     Class, ClassConstraint, ClassDescriptor, ClassId, DexEntry, DexText, MatchOutcome,
-    MemberQuery as ContractMemberQuery, MethodIdentity, MethodId, Pattern, Prototype, Reference,
+    MemberQuery as ContractMemberQuery, MethodId, MethodIdentity, Pattern, Prototype, Reference,
     ReferenceQuery, TargetId, TargetKind, TargetMatch, TargetValue,
 };
 use filter::Targets;
@@ -234,13 +234,17 @@ impl<'a> ScanDex<'a> {
         let base = view.entry.header_offset() as usize;
         let data = view.bytes;
         let Some(header_end) = base.checked_add(0x70) else {
-            return Err(Error::malformed_input("DEX header offset overflows the entry"));
+            return Err(Error::malformed_input(
+                "DEX header offset overflows the entry",
+            ));
         };
         if data.len() < header_end {
             return Err(Error::malformed_input("DEX header outside the entry bytes"));
         }
         if data.get(base..base + 4) != Some(b"dex\n") {
-            return Err(Error::malformed_input("missing DEX magic at the header offset"));
+            return Err(Error::malformed_input(
+                "missing DEX magic at the header offset",
+            ));
         }
         let read = |offset: usize| -> Result<u32, Error> {
             read_u32(data, base + offset)
@@ -274,13 +278,15 @@ impl<'a> ScanDex<'a> {
     }
 
     fn u32(&self, offset: usize) -> Result<u32, Error> {
-        read_u32(self.data, offset)
-            .map_err(|_| Error::malformed_input(format!("u32 read at 0x{offset:x} outside the DEX")))
+        read_u32(self.data, offset).map_err(|_| {
+            Error::malformed_input(format!("u32 read at 0x{offset:x} outside the DEX"))
+        })
     }
 
     fn u16(&self, offset: usize) -> Result<u16, Error> {
-        read_u16(self.data, offset)
-            .map_err(|_| Error::malformed_input(format!("u16 read at 0x{offset:x} outside the DEX")))
+        read_u16(self.data, offset).map_err(|_| {
+            Error::malformed_input(format!("u16 read at 0x{offset:x} outside the DEX"))
+        })
     }
 
     fn uleb(&self, cursor: &mut usize) -> Result<u32, Error> {
@@ -312,10 +318,9 @@ impl<'a> ScanDex<'a> {
                 limits.max_string_units
             )));
         }
-        let tail = self
-            .data
-            .get(cursor..)
-            .ok_or_else(|| Error::malformed_input(format!("string #{index} data offset outside the DEX")))?;
+        let tail = self.data.get(cursor..).ok_or_else(|| {
+            Error::malformed_input(format!("string #{index} data offset outside the DEX"))
+        })?;
         Ok((declared, tail))
     }
 
@@ -331,9 +336,10 @@ impl<'a> ScanDex<'a> {
         limits: &ScanLimits,
     ) -> Result<(), Error> {
         let (declared, payload) = self.string_payload(index, limits)?;
-        let consumed = mutf8::decode_units(payload, declared as usize, scratch).map_err(|error| {
-            Error::malformed_input(format!("string #{index}: {}", error.describe()))
-        })?;
+        let consumed =
+            mutf8::decode_units(payload, declared as usize, scratch).map_err(|error| {
+                Error::malformed_input(format!("string #{index}: {}", error.describe()))
+            })?;
         match payload.get(consumed) {
             Some(0) => Ok(()),
             Some(_) | None => Err(Error::malformed_input(format!(
@@ -399,10 +405,7 @@ impl<'a> ScanDex<'a> {
             }
             for position in 0..size {
                 parameters.push(
-                    self.type_text(
-                        self.u16(parameters_off + 4 + position * 2)? as u32,
-                        limits,
-                    )?,
+                    self.type_text(self.u16(parameters_off + 4 + position * 2)? as u32, limits)?,
                 );
             }
         }
@@ -422,7 +425,11 @@ impl<'a> ScanDex<'a> {
             )));
         }
         let offset = base + index as usize * 8;
-        Ok((self.u16(offset)?, self.u16(offset + 2)?, self.u32(offset + 4)?))
+        Ok((
+            self.u16(offset)?,
+            self.u16(offset + 2)?,
+            self.u32(offset + 4)?,
+        ))
     }
 
     fn method_identity(
@@ -487,7 +494,10 @@ impl<'a> ScanDex<'a> {
             self.decode_string_into(index, &mut scratch, limits)?;
             match pattern.matches_utf16(&scratch)? {
                 MatchOutcome::Match => {
-                    values.insert(index, TargetValue::String(DexText::from_utf16_units(scratch.clone())));
+                    values.insert(
+                        index,
+                        TargetValue::String(DexText::from_utf16_units(scratch.clone())),
+                    );
                 }
                 MatchOutcome::NoMatch => {}
                 MatchOutcome::Unsupported => {
@@ -514,7 +524,10 @@ impl<'a> ScanDex<'a> {
             self.decode_string_into(string_idx, &mut scratch, limits)?;
             match pattern.matches_utf16(&scratch)? {
                 MatchOutcome::Match => {
-                    values.insert(index, TargetValue::Type(DexText::from_utf16_units(scratch.clone())));
+                    values.insert(
+                        index,
+                        TargetValue::Type(DexText::from_utf16_units(scratch.clone())),
+                    );
                 }
                 MatchOutcome::NoMatch => {}
                 MatchOutcome::Unsupported => {
@@ -536,7 +549,11 @@ impl<'a> ScanDex<'a> {
         limits: &ScanLimits,
         control: Option<&ControlProbe<'_>>,
     ) -> Result<BTreeMap<u32, TargetValue>, Error> {
-        let size = if methods { self.header.methods_size } else { self.header.fields_size };
+        let size = if methods {
+            self.header.methods_size
+        } else {
+            self.header.fields_size
+        };
         let what = if methods { "method" } else { "field" };
         let exact_units = match member.declaring_class() {
             Some(ClassConstraint::Exact(descriptor)) => {
@@ -564,7 +581,11 @@ impl<'a> ScanDex<'a> {
                     MatchOutcome::Match => {}
                     MatchOutcome::NoMatch => continue,
                     MatchOutcome::Unsupported => {
-                        return Err(unsupported_candidate(&format!("{what} name"), index, &scratch));
+                        return Err(unsupported_candidate(
+                            &format!("{what} name"),
+                            index,
+                            &scratch,
+                        ));
                     }
                 }
             }
@@ -587,10 +608,18 @@ impl<'a> ScanDex<'a> {
             let name = self.string_text(name_idx, limits)?;
             let value = if methods {
                 let prototype = self.prototype(u32::from(proto_or_type_idx), limits)?;
-                TargetValue::Method { owner, name, prototype }
+                TargetValue::Method {
+                    owner,
+                    name,
+                    prototype,
+                }
             } else {
                 let field_type = self.type_text(u32::from(proto_or_type_idx), limits)?;
-                TargetValue::Field { owner, name, field_type }
+                TargetValue::Field {
+                    owner,
+                    name,
+                    field_type,
+                }
             };
             values.insert(index, value);
         }
@@ -638,9 +667,9 @@ impl<'a> ScanDex<'a> {
         for count in [direct_methods, virtual_methods] {
             let mut method_idx = 0u32;
             for _ in 0..count {
-                method_idx = method_idx.checked_add(self.uleb(&mut cursor)?).ok_or_else(|| {
-                    Error::malformed_input("method index overflow in class data")
-                })?;
+                method_idx = method_idx
+                    .checked_add(self.uleb(&mut cursor)?)
+                    .ok_or_else(|| Error::malformed_input("method index overflow in class data"))?;
                 self.uleb(&mut cursor)?; // access flags
                 let code_off = self.uleb(&mut cursor)? as usize;
                 if code_off != 0 {
@@ -672,7 +701,8 @@ impl<'a> ScanDex<'a> {
         control: Option<&ControlProbe<'_>>,
     ) -> Result<(), Error> {
         check_control(control)?;
-        let malformed = |message: String| Error::malformed_input(format!("method #{method_idx}: {message}"));
+        let malformed =
+            |message: String| Error::malformed_input(format!("method #{method_idx}: {message}"));
         let insns_size = self.u32(code_off + 12)? as usize;
         let Some(start) = code_off.checked_add(16) else {
             return Err(malformed("code item offset overflow".to_owned()));
@@ -682,7 +712,9 @@ impl<'a> ScanDex<'a> {
                 .checked_mul(2)
                 .ok_or_else(|| malformed("code size overflow".to_owned()))?,
         ) else {
-            return Err(malformed(format!("code range of {insns_size} units overflows")));
+            return Err(malformed(format!(
+                "code range of {insns_size} units overflows"
+            )));
         };
         let Some(code) = self.data.get(start..end) else {
             return Err(malformed(format!(
@@ -711,7 +743,8 @@ impl<'a> ScanDex<'a> {
                 )));
             }
             if match_operands && opcodes::OPCODE_KINDS[opcode as usize] & kind_bit != 0 {
-                let operand_error = || malformed(format!("code unit {pc}: operand outside the code item"));
+                let operand_error =
+                    || malformed(format!("code unit {pc}: operand outside the code item"));
                 // 0x1b (const-string/jumbo) is the only reference
                 // instruction with a 32-bit index.
                 let index = if opcode == 0x1b {
@@ -722,8 +755,7 @@ impl<'a> ScanDex<'a> {
                 if targets.contains(index) {
                     // `pc` walks bytes; the reported offsets are 16-bit code
                     // units from the start of the insns array.
-                    hits
-                        .entry(method_idx)
+                    hits.entry(method_idx)
                         .or_default()
                         .entry(index)
                         .or_default()
@@ -879,11 +911,7 @@ pub(crate) mod tests {
     /// A DexView over raw fixture bytes with a fixed identity.
     fn structured_view<'a>(data: &'a [u8]) -> DexView<'a> {
         let entry = crate::model::DexEntry::new(
-            crate::model::DexId::new(
-                crate::model::ArtifactId::from_digest([0u8; 32]),
-                0,
-                0,
-            ),
+            crate::model::DexId::new(crate::model::ArtifactId::from_digest([0u8; 32]), 0, 0),
             b"classes.dex".to_vec(),
             crate::model::DexText::from_str_lossless("classes.dex"),
             crate::model::DexText::from_str_lossless("classes.dex"),
@@ -1096,8 +1124,16 @@ pub(crate) mod tests {
             (0x0005, class_count as u32, method_ids_off as u32 + base),
             (0x0006, class_count as u32, class_defs_off as u32 + base),
             (0x1000, 1, map_off as u32),
-            (0x2000, class_count as u32, data_off as u32 + class_data_offsets[0] as u32 + base),
-            (0x2001, class_count as u32, data_off as u32 + code_offset_first + base),
+            (
+                0x2000,
+                class_count as u32,
+                data_off as u32 + class_data_offsets[0] as u32 + base,
+            ),
+            (
+                0x2001,
+                class_count as u32,
+                data_off as u32 + code_offset_first + base,
+            ),
             (0x2002, n_strings as u32, data_off as u32 + base),
         ];
         write_u32(&mut out, map_off, map_items.len() as u32);
@@ -1131,9 +1167,16 @@ pub(crate) mod tests {
         let references = scan_references(&view, &query, &options).unwrap();
         assert_eq!(references.len(), 3, "one row per method");
         let first = &references[0];
-        assert_eq!(first.caller().id().method_idx(), 0, "method 0 scans normally");
+        assert_eq!(
+            first.caller().id().method_idx(),
+            0,
+            "method 0 scans normally"
+        );
         assert_eq!(first.caller().dex().id().entry_ordinal(), 0);
-        assert_eq!(first.caller().owner().as_str().as_deref(), Some("LFixture0;"));
+        assert_eq!(
+            first.caller().owner().as_str().as_deref(),
+            Some("LFixture0;")
+        );
         assert_eq!(first.caller().name().as_str().as_deref(), Some("m0"));
         assert_eq!(
             first.caller().prototype().return_type().as_str().as_deref(),
@@ -1156,14 +1199,22 @@ pub(crate) mod tests {
             Pattern::literal("Auth", &PatternLimits::default()).expect("pattern"),
         );
         let cancelled = AtomicBool::new(true);
-        let probe = ControlProbe { cancelled: &cancelled, deadline: None };
+        let probe = ControlProbe {
+            cancelled: &cancelled,
+            deadline: None,
+        };
         let options = ScanOptions {
             limits: ScanLimits::DEFAULT,
             control: Some(&probe),
             prefilter: true,
         };
         let error = scan_references(&view, &query, &options).unwrap_err();
-        assert!(matches!(error.kind(), ErrorKind::Cancelled { cause: crate::error::CancelCause::User }));
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::Cancelled {
+                cause: crate::error::CancelCause::User
+            }
+        ));
 
         let live = AtomicBool::new(false);
         let probe = ControlProbe {
@@ -1176,7 +1227,12 @@ pub(crate) mod tests {
             prefilter: true,
         };
         let error = scan_references(&view, &query, &options).unwrap_err();
-        assert!(matches!(error.kind(), ErrorKind::Cancelled { cause: crate::error::CancelCause::Deadline }));
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::Cancelled {
+                cause: crate::error::CancelCause::Deadline
+            }
+        ));
     }
 
     #[test]
@@ -1187,7 +1243,10 @@ pub(crate) mod tests {
             Pattern::literal("Auth", &PatternLimits::default()).expect("pattern"),
         );
         let options = ScanOptions {
-            limits: ScanLimits { max_string_units: 4, ..ScanLimits::DEFAULT },
+            limits: ScanLimits {
+                max_string_units: 4,
+                ..ScanLimits::DEFAULT
+            },
             control: None,
             prefilter: true,
         };

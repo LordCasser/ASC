@@ -24,7 +24,7 @@ pub mod manifest;
 pub(crate) mod zip;
 
 pub use bytes::OperationControl;
-pub use model::dto;
-pub use engine::{Engine, EngineOptions, InputKind};
+pub use engine::{ArchiveCopySession, Engine, EngineOptions, InputKind};
 pub use error::Error;
-pub use model::{ArtifactId, Report};
+pub use model::dto;
+pub use model::{ArchiveEntry, ArchiveEntryId, ArchiveEntryQuery, ArtifactId, Report};

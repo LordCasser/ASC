@@ -15,7 +15,7 @@
 //! The pre-A02 lazy iterator bridge (`logical_dexes`) was removed with its
 //! call sites; the validated-view layer above is the only reader.
 
-use crate::bytes::{sha1, Checkpoints, ControlProbe, CHECKPOINT_SPACING};
+use crate::bytes::{CHECKPOINT_SPACING, Checkpoints, ControlProbe, sha1};
 use crate::error::{Error, ErrorKind};
 use crate::model::{
     ArtifactId, DexEntry, DexId, DexText, DexVersion, Diagnostic, DiagnosticCode, Severity, Stage,
@@ -191,7 +191,11 @@ pub(crate) fn validate_dex_entry<'a>(
         });
     }
     Ok((
-        DexEntryViews { views, raw_entry_name: raw_entry_name.to_vec(), entry_display_name },
+        DexEntryViews {
+            views,
+            raw_entry_name: raw_entry_name.to_vec(),
+            entry_display_name,
+        },
         diagnostics,
     ))
 }
@@ -331,9 +335,7 @@ fn validate_041_chain(
         }
         let declared_container = read(data, position + 0x70).expect("bounds checked above");
         let declared_header = read(data, position + 0x74).expect("bounds checked above");
-        if declared_header as usize == position
-            && declared_container as usize == container_size
-        {
+        if declared_header as usize == position && declared_container as usize == container_size {
             let swallowed_by = spans
                 .iter()
                 .find(|(base, end)| *base < position && position < *end)
@@ -631,8 +633,8 @@ fn normalize_041(container: &[u8], header_offset: usize) -> Vec<u8> {
     view[0x24..0x28].copy_from_slice(&(HEADER_SIZE_STD as u32).to_le_bytes());
     let file_size = view.len() as u32;
     view[0x20..0x24].copy_from_slice(&file_size.to_le_bytes());
-    let checksum = adler32_span(&view[12..], &ControlProbe::never())
-        .expect("the never probe cannot cancel");
+    let checksum =
+        adler32_span(&view[12..], &ControlProbe::never()).expect("the never probe cannot cancel");
     view[0x08..0x0C].copy_from_slice(&checksum.to_le_bytes());
     view
 }
@@ -674,8 +676,7 @@ mod tests {
         write_u32(&mut data, 0x20, 0x78);
         write_u32(&mut data, 0x70, 0x78);
         write_u32(&mut data, 0x74, 4);
-        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe())
-            .unwrap_err();
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
         assert_eq!(*error.kind(), ErrorKind::MalformedInput, "{error}");
     }
 
@@ -696,10 +697,11 @@ mod tests {
         // ...while member 2's swallowed header stays fully self-consistent.
         write_u32(&mut data, member_size + 0x70, total);
         write_u32(&mut data, member_size + 0x74, member_size as u32);
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
         assert!(
-            error.to_string().contains("swallowed by the member at offset 0"),
+            error
+                .to_string()
+                .contains("swallowed by the member at offset 0"),
             "unexpected error: {error}"
         );
     }
@@ -787,18 +789,26 @@ mod tests {
                 "consistent integrity fields must not warn: {diagnostics:?}"
             );
         }
-        for magic in [&b"dex\n036\0"[..], &b"dex\n099\0"[..], &b"cdex038\0"[..], &b"dey036\0"[..]] {
+        for magic in [
+            &b"dex\n036\0"[..],
+            &b"dex\n099\0"[..],
+            &b"cdex038\0"[..],
+            &b"dey036\0"[..],
+        ] {
             let mut data = valid_skeleton(b"035\0", 0, HEADER_SIZE_STD);
             // The `dey` spelling is a 7-byte literal (3-byte prefix); splice
             // exactly the literal so byte 7 keeps the skeleton's zero.
             data[..magic.len()].copy_from_slice(magic);
             let error =
                 validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
-            assert_eq!(*error.kind(), ErrorKind::UnsupportedFormat, "{magic:?}: {error}");
+            assert_eq!(
+                *error.kind(),
+                ErrorKind::UnsupportedFormat,
+                "{magic:?}: {error}"
+            );
         }
         let junk = b"JUNKJUNKJUNK".to_vec();
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &junk, &probe()).unwrap_err();
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &junk, &probe()).unwrap_err();
         assert_eq!(*error.kind(), ErrorKind::MalformedInput);
     }
 
@@ -807,29 +817,25 @@ mod tests {
         // Declared file size disagrees with the bytes.
         let mut data = valid_skeleton(b"035\0", 0, HEADER_SIZE_STD);
         write_u32(&mut data, 0x20, 0x50);
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
         assert!(error.to_string().contains("file_size"), "{error}");
 
         // Wrong header_size for the version.
         let mut data = valid_skeleton(b"035\0", 0, HEADER_SIZE_STD);
         write_u32(&mut data, 0x24, 0x78);
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
         assert!(error.to_string().contains("header_size"), "{error}");
 
         // Wrong endian tag.
         let mut data = valid_skeleton(b"035\0", 0, HEADER_SIZE_STD);
         write_u32(&mut data, 0x28, 0xdead_beef);
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
         assert!(error.to_string().contains("endian"), "{error}");
 
         // Table reaching past the file.
         let mut data = valid_skeleton(b"035\0", 0, HEADER_SIZE_STD);
         write_u32(&mut data, 0x3c, 0x1000);
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
         assert!(error.to_string().contains("string_ids"), "{error}");
 
         // Map item contradicting the header.
@@ -839,18 +845,23 @@ mod tests {
             HEADER_SIZE_STD + 8 + SKELETON_MAP_STRING_IDS_OFFSET,
             0x7c,
         );
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
-        assert!(error.to_string().contains("map_list item string_ids"), "{error}");
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        assert!(
+            error.to_string().contains("map_list item string_ids"),
+            "{error}"
+        );
 
         // Map missing the string_ids item the header declares: the map's
         // second item masquerades as an unchecked kind.
         let mut data = valid_skeleton(b"035\0", 0, HEADER_SIZE_STD);
-        data[HEADER_SIZE_STD + 8 + SKELETON_MAP_ITEM_KIND..HEADER_SIZE_STD + 8 + SKELETON_MAP_ITEM_KIND + 2]
+        data[HEADER_SIZE_STD + 8 + SKELETON_MAP_ITEM_KIND
+            ..HEADER_SIZE_STD + 8 + SKELETON_MAP_ITEM_KIND + 2]
             .copy_from_slice(&0x2003u16.to_le_bytes());
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
-        assert!(error.to_string().contains("missing the string_ids item"), "{error}");
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        assert!(
+            error.to_string().contains("missing the string_ids item"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -858,36 +869,31 @@ mod tests {
         // Overshoot: first member claims more than the container holds.
         let mut data = legacy_041_container(&[0x78, 0x78]);
         write_u32(&mut data, 0x20, 0x100);
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
         assert_eq!(*error.kind(), ErrorKind::MalformedInput, "{error}");
 
         // Zero-length member.
         let mut data = legacy_041_container(&[0x78]);
         write_u32(&mut data, 0x20, 0x20);
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
         assert_eq!(*error.kind(), ErrorKind::MalformedInput, "{error}");
 
         // Undershot member leaves unaccounted bytes.
         let mut data = legacy_041_container(&[0x78, 0x78]);
         write_u32(&mut data, 0x78 + 0x20, 0x70);
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
         assert_eq!(*error.kind(), ErrorKind::MalformedInput, "{error}");
 
         // Contradictory self offset.
         let mut data = legacy_041_container(&[0x78]);
         write_u32(&mut data, 0x74, 4);
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
         assert_eq!(*error.kind(), ErrorKind::MalformedInput, "{error}");
 
         // Container size contradicting the entry length.
         let mut data = legacy_041_container(&[0x78]);
         write_u32(&mut data, 0x70, 0x100);
-        let error =
-            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
         assert_eq!(*error.kind(), ErrorKind::MalformedInput, "{error}");
     }
 
@@ -939,10 +945,16 @@ mod tests {
         let scratch = backend_scratch(second, &[]).expect("041 needs scratch");
         assert_eq!(scratch.source_header_offset, member_size);
         assert_eq!(read_u32(&scratch.bytes, 0x74).unwrap(), member_size as u32);
-        assert_eq!(read_u32(&scratch.bytes, 0x24).unwrap(), HEADER_SIZE_STD as u32);
+        assert_eq!(
+            read_u32(&scratch.bytes, 0x24).unwrap(),
+            HEADER_SIZE_STD as u32
+        );
         let checksum = read_u32(&scratch.bytes, 0x08).unwrap();
         let computed = adler32_span(&scratch.bytes[12..], &probe()).unwrap();
-        assert_eq!(checksum, computed, "scratch checksum must match its own bytes");
+        assert_eq!(
+            checksum, computed,
+            "scratch checksum must match its own bytes"
+        );
         assert_eq!(data, original, "scratch must not modify the container");
         // Standard versions get no scratch at all.
         let plain = valid_skeleton(b"035\0", 0, HEADER_SIZE_STD);

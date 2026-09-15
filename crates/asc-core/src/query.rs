@@ -27,8 +27,14 @@ pub enum MatchMode {
 /// dots and slashes belong to the searched text.
 // Contract layer, wired into the CLI by A07/A08 (tests use it now).
 #[allow(dead_code)]
-pub fn string_query(pattern: &str, mode: MatchMode, limits: &PatternLimits) -> Result<ReferenceQuery, Error> {
-    Ok(ReferenceQuery::String(build_pattern(pattern, mode, limits)?))
+pub fn string_query(
+    pattern: &str,
+    mode: MatchMode,
+    limits: &PatternLimits,
+) -> Result<ReferenceQuery, Error> {
+    Ok(ReferenceQuery::String(build_pattern(
+        pattern, mode, limits,
+    )?))
 }
 
 /// Builds a `findrefs` type query. A *literal* pattern gets the Java
@@ -37,12 +43,18 @@ pub fn string_query(pattern: &str, mode: MatchMode, limits: &PatternLimits) -> R
 /// as written and are never rewritten.
 // Contract layer, wired into the CLI by A07/A08 (tests use it now).
 #[allow(dead_code)]
-pub fn type_query(pattern: &str, mode: MatchMode, limits: &PatternLimits) -> Result<ReferenceQuery, Error> {
+pub fn type_query(
+    pattern: &str,
+    mode: MatchMode,
+    limits: &PatternLimits,
+) -> Result<ReferenceQuery, Error> {
     let effective = match mode {
         MatchMode::Literal => java_dotted_to_descriptor_form(pattern),
         MatchMode::Regex => pattern.to_owned(),
     };
-    Ok(ReferenceQuery::Type(build_pattern(&effective, mode, limits)?))
+    Ok(ReferenceQuery::Type(build_pattern(
+        &effective, mode, limits,
+    )?))
 }
 
 /// A member (field/method) query's inputs before construction.
@@ -91,12 +103,18 @@ pub fn member_query(
                 MatchMode::Literal => java_dotted_to_descriptor_form(input),
                 MatchMode::Regex => input.to_owned(),
             };
-            Some(ClassConstraint::Fuzzy(build_pattern(&effective, spec.mode, limits)?))
+            Some(ClassConstraint::Fuzzy(build_pattern(
+                &effective, spec.mode, limits,
+            )?))
         }
         None => None,
     };
     let query = ContractMemberQuery::new(name, class)?;
-    Ok(if field { ReferenceQuery::Field(query) } else { ReferenceQuery::Method(query) })
+    Ok(if field {
+        ReferenceQuery::Field(query)
+    } else {
+        ReferenceQuery::Method(query)
+    })
 }
 
 /// Normalizes a class argument to a validated `Lpkg/Name;` descriptor.
@@ -121,7 +139,9 @@ pub fn exact_descriptor(input: &str) -> Result<ClassDescriptor, Error> {
         input.replace('.', "/")
     };
     if body.is_empty() {
-        return Err(Error::invalid_query(format!("class name {input:?} is empty")));
+        return Err(Error::invalid_query(format!(
+            "class name {input:?} is empty"
+        )));
     }
     ClassDescriptor::from_normalized(format!("L{body};"))
 }

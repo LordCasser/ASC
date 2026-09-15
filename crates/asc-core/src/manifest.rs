@@ -15,7 +15,7 @@
 //! silent replacements; output length is bounded.
 
 use crate::error::{Error, ErrorKind};
-use crate::model::{Diagnostic, DiagnosticCode, DexText, Report, Severity, Stage};
+use crate::model::{DexText, Diagnostic, DiagnosticCode, Report, Severity, Stage};
 
 const ANDROID_RES_URI: &str = "http://schemas.android.com/apk/res/android";
 const CANONICAL_ANDROID_PREFIX: &str = "android";
@@ -56,7 +56,10 @@ pub struct XmlRenderOptions {
 
 impl Default for XmlRenderOptions {
     fn default() -> Self {
-        Self { max_output_bytes: 128 * 1024 * 1024, max_depth: 256 }
+        Self {
+            max_output_bytes: 128 * 1024 * 1024,
+            max_depth: 256,
+        }
     }
 }
 
@@ -186,8 +189,12 @@ impl TypedValue {
         let data = self.data;
         let package = if data >> 24 == 1 { "android:" } else { "" };
         // AXML integers are signed; the reference sign-extends from bit 31.
-        let signed =
-            i64::from(data & 0x7fff_ffff) - if data > 0x7fff_ffff { i64::from(0x8000_0000u32) } else { 0 };
+        let signed = i64::from(data & 0x7fff_ffff)
+            - if data > 0x7fff_ffff {
+                i64::from(0x8000_0000u32)
+            } else {
+                0
+            };
         let complex = f64::from(data & 0xffff_ff00) * RADIX_MULTS[((data >> 4) & 3) as usize];
         let unit = (data & 0x0f) as usize;
 
@@ -236,7 +243,10 @@ pub struct StringStyle {
 /// Where the manifest document came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ManifestSource {
-    BinaryAxml { utf8_pool: bool, string_count: usize },
+    BinaryAxml {
+        utf8_pool: bool,
+        string_count: usize,
+    },
     PlainXml,
 }
 
@@ -370,7 +380,11 @@ impl Manifest {
     /// Serializes the document to canonical XML: declaration, four-space
     /// indentation, LF. Mixed-text elements stay inline; illegal characters
     /// or names are errors; output length and depth are bounded.
-    pub fn to_xml(&self, options: &XmlRenderOptions, control: &OperationControl) -> Result<String, Error> {
+    pub fn to_xml(
+        &self,
+        options: &XmlRenderOptions,
+        control: &OperationControl,
+    ) -> Result<String, Error> {
         control.check()?;
         let mut writer = BoundedWriter::new(options.max_output_bytes, control);
         // Join semantics: the declaration line, every layout item (comments,
@@ -409,10 +423,12 @@ pub fn decode_manifest_entry(
 ) -> Result<Report<Manifest>, Error> {
     control.check()?;
     if let Some(utf16_bom) = utf16_bom(bytes) {
-        return Err(Error::new(ErrorKind::UnsupportedFormat).with_context(format!(
-            "plain XML with a UTF-16 BOM ({utf16_bom}) is outside the supported matrix; \
+        return Err(
+            Error::new(ErrorKind::UnsupportedFormat).with_context(format!(
+                "plain XML with a UTF-16 BOM ({utf16_bom}) is outside the supported matrix; \
              only UTF-8 is accepted"
-        )));
+            )),
+        );
     }
     if let Ok(text) = std::str::from_utf8(bytes) {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -496,8 +512,8 @@ fn decode_axml(
             None => axmldecoder::Cancel::none(),
         },
     };
-    let document =
-        axmldecoder::parse_document_with(bytes, &vendor_limits, cancel).map_err(|error| match error {
+    let document = axmldecoder::parse_document_with(bytes, &vendor_limits, cancel).map_err(
+        |error| match error {
             axmldecoder::ParseError::Malformed(message) => malformed(message),
             axmldecoder::ParseError::Limit(message) => resource_limit(message),
             axmldecoder::ParseError::Cancelled => {
@@ -512,13 +528,24 @@ fn decode_axml(
                 Error::new(ErrorKind::Cancelled { cause })
                     .with_context("manifest decode cancelled at a checkpoint")
             }
-        })?;
+        },
+    )?;
     control.check()?;
 
-    let mut converter = AxmlConverter { diagnostics: Vec::new(), inferred_namespace: false };
+    let mut converter = AxmlConverter {
+        diagnostics: Vec::new(),
+        inferred_namespace: false,
+    };
     let mut scopes: Vec<Binding> = Vec::new();
     let mut node_count: usize = 0;
-    let root = convert_element(&document.root, &mut scopes, &mut converter, limits, &mut node_count, control)?;
+    let root = convert_element(
+        &document.root,
+        &mut scopes,
+        &mut converter,
+        limits,
+        &mut node_count,
+        control,
+    )?;
 
     let metadata = ManifestMetadata {
         source: Some(ManifestSource::BinaryAxml {
@@ -544,7 +571,14 @@ fn decode_axml(
         resource_map: document.resource_map.clone(),
     };
     Ok(Report::new(
-        Manifest { declaration: None, prolog: Vec::new(), root, epilog: Vec::new(), metadata, raw_bytes: None },
+        Manifest {
+            declaration: None,
+            prolog: Vec::new(),
+            root,
+            epilog: Vec::new(),
+            metadata,
+            raw_bytes: None,
+        },
         converter.diagnostics,
         crate::model::OperationStats::default(),
     ))
@@ -583,8 +617,14 @@ fn convert_element(
     for event in &element.namespace_events {
         match event {
             axmldecoder::NamespaceEvent::Start { prefix, uri } => {
-                scopes.push(Binding { prefix: prefix.clone(), uri: uri.clone() });
-                events.push(NamespaceEvent::Start { prefix: prefix.clone(), uri: uri.clone() });
+                scopes.push(Binding {
+                    prefix: prefix.clone(),
+                    uri: uri.clone(),
+                });
+                events.push(NamespaceEvent::Start {
+                    prefix: prefix.clone(),
+                    uri: uri.clone(),
+                });
                 // The binding becomes an explicit xmlns attribute; the empty
                 // prefix is the default namespace (`xmlns="..."`).
                 let (attr_prefix, attr_local) = if prefix.is_empty() {
@@ -600,7 +640,10 @@ fn convert_element(
                 });
             }
             axmldecoder::NamespaceEvent::End { prefix, uri } => {
-                events.push(NamespaceEvent::End { prefix: prefix.clone(), uri: uri.clone() });
+                events.push(NamespaceEvent::End {
+                    prefix: prefix.clone(),
+                    uri: uri.clone(),
+                });
                 let position = scopes
                     .iter()
                     .rposition(|binding| &binding.prefix == prefix && &binding.uri == uri)
@@ -685,7 +728,7 @@ fn convert_element(
                             "attribute {} is in namespace {uri} which is only bound as the \
                              default namespace; attributes need an explicit prefix",
                             attribute.name
-                        )))
+                        )));
                     }
                 }
             }
@@ -694,7 +737,10 @@ fn convert_element(
         let value = ManifestValue::Typed(TypedValue {
             type_byte: attribute.value.type_byte,
             data: attribute.value.data,
-            raw_string: attribute.raw_value.as_deref().map(DexText::from_str_lossless),
+            raw_string: attribute
+                .raw_value
+                .as_deref()
+                .map(DexText::from_str_lossless),
         });
         attributes.push(XmlAttribute {
             namespace: attribute.namespace.clone(),
@@ -721,7 +767,9 @@ fn convert_element(
                     )));
                 }
                 control.check()?;
-                children.push(XmlNode::Cdata { data: DexText::from_str_lossless(&cdata.data) });
+                children.push(XmlNode::Cdata {
+                    data: DexText::from_str_lossless(&cdata.data),
+                });
             }
         }
     }
@@ -817,8 +865,13 @@ fn decode_plain_xml(
         }
         match event {
             Event::Decl(decl) => {
-                if builder.declaration.is_some() || !builder.stack.is_empty() || builder.root.is_some() {
-                    return Err(malformed("XML declaration appears after the document start"));
+                if builder.declaration.is_some()
+                    || !builder.stack.is_empty()
+                    || builder.root.is_some()
+                {
+                    return Err(malformed(
+                        "XML declaration appears after the document start",
+                    ));
                 }
                 let version = decl
                     .version()
@@ -840,19 +893,26 @@ fn decode_plain_xml(
                         Some(encoding.to_string())
                     }
                     Some(Err(error)) => {
-                        return Err(malformed(format!("unreadable encoding declaration: {error}")))
+                        return Err(malformed(format!(
+                            "unreadable encoding declaration: {error}"
+                        )));
                     }
                     None => None,
                 };
                 let standalone = match decl.standalone() {
                     Some(Ok(standalone)) => Some(standalone.to_string()),
                     Some(Err(error)) => {
-                        return Err(malformed(format!("unreadable standalone declaration: {error}")))
+                        return Err(malformed(format!(
+                            "unreadable standalone declaration: {error}"
+                        )));
                     }
                     None => None,
                 };
-                builder.declaration =
-                    Some(XmlDeclaration { version, encoding, standalone });
+                builder.declaration = Some(XmlDeclaration {
+                    version,
+                    encoding,
+                    standalone,
+                });
             }
             Event::DocType(_) => {
                 return Err(unsupported_format(
@@ -872,7 +932,9 @@ fn decode_plain_xml(
                     return Err(malformed("reserved processing-instruction target 'xml'"));
                 }
                 if !is_valid_xml_name(&target) {
-                    return Err(malformed(format!("invalid processing-instruction target {target:?}")));
+                    return Err(malformed(format!(
+                        "invalid processing-instruction target {target:?}"
+                    )));
                 }
                 builder.node_count += 1;
                 check_node_limit(builder.node_count, limits)?;
@@ -882,7 +944,9 @@ fn decode_plain_xml(
             Event::Comment(comment) => {
                 let text = comment.as_ref().to_owned();
                 if text.contains("--") || text.ends_with('-') {
-                    return Err(malformed("comment content contains a forbidden '--' sequence"));
+                    return Err(malformed(
+                        "comment content contains a forbidden '--' sequence",
+                    ));
                 }
                 builder.node_count += 1;
                 check_node_limit(builder.node_count, limits)?;
@@ -901,12 +965,11 @@ fn decode_plain_xml(
                 builder.node_count += 1;
                 check_node_limit(builder.node_count, limits)?;
                 if let Some(open) = builder.stack.last_mut() {
-                    open.children
-                        .push(XmlNode::Cdata { data: DexText::from_str_lossless(cdata.as_ref()) });
+                    open.children.push(XmlNode::Cdata {
+                        data: DexText::from_str_lossless(cdata.as_ref()),
+                    });
                 } else {
-                    return Err(malformed(
-                        "CDATA is not allowed outside the root element",
-                    ));
+                    return Err(malformed("CDATA is not allowed outside the root element"));
                 }
             }
             Event::Start(start) => {
@@ -950,7 +1013,10 @@ fn decode_plain_xml(
     if !builder.stack.is_empty() {
         return Err(malformed("unclosed element at the end of the document"));
     }
-    let root = builder.root.take().ok_or_else(|| malformed("plain XML has no root element"))?;
+    let root = builder
+        .root
+        .take()
+        .ok_or_else(|| malformed("plain XML has no root element"))?;
     control.check()?;
     Ok(Report::new(
         Manifest {
@@ -984,15 +1050,24 @@ fn check_node_limit(count: usize, limits: &XmlDecodeLimits) -> Result<(), Error>
 /// numeric character references are legal without a DTD.
 fn flush_text(pending: &mut String) -> Result<DexText, Error> {
     let text = quick_xml::escape::unescape(pending)
-        .map_err(|error| malformed(format!("undefined entity or bad character reference: {error}")))?
+        .map_err(|error| {
+            malformed(format!(
+                "undefined entity or bad character reference: {error}"
+            ))
+        })?
         .into_owned();
     pending.clear();
     Ok(DexText::from_str_lossless(&text))
 }
 
-fn push_plain_text(builder: &mut PlainXmlBuilder, text: DexText, max_nodes: usize) -> Result<(), Error> {
-    let is_whitespace =
-        text.as_str().is_some_and(|text| text.chars().all(char::is_whitespace));
+fn push_plain_text(
+    builder: &mut PlainXmlBuilder,
+    text: DexText,
+    max_nodes: usize,
+) -> Result<(), Error> {
+    let is_whitespace = text
+        .as_str()
+        .is_some_and(|text| text.chars().all(char::is_whitespace));
     if builder.stack.last().is_some() && is_whitespace {
         // Layout whitespace between an element's tags is ignorable: the AXML
         // twin never carries it, so the domain model does not either. (Text
@@ -1078,8 +1153,14 @@ fn open_plain_element(
             return Err(malformed(format!("duplicate attribute {key:?}")));
         }
         if key == "xmlns" {
-            new_bindings.push(Binding { prefix: String::new(), uri: value.clone() });
-            open.events.push(NamespaceEvent::Start { prefix: String::new(), uri: value.clone() });
+            new_bindings.push(Binding {
+                prefix: String::new(),
+                uri: value.clone(),
+            });
+            open.events.push(NamespaceEvent::Start {
+                prefix: String::new(),
+                uri: value.clone(),
+            });
             open.attributes.push(XmlAttribute {
                 namespace: None,
                 prefix: None,
@@ -1090,9 +1171,14 @@ fn open_plain_element(
             if !is_valid_xml_name(bound_prefix) {
                 return Err(malformed(format!("invalid namespace prefix in {key:?}")));
             }
-            new_bindings.push(Binding { prefix: bound_prefix.to_owned(), uri: value.clone() });
-            open.events
-                .push(NamespaceEvent::Start { prefix: bound_prefix.to_owned(), uri: value.clone() });
+            new_bindings.push(Binding {
+                prefix: bound_prefix.to_owned(),
+                uri: value.clone(),
+            });
+            open.events.push(NamespaceEvent::Start {
+                prefix: bound_prefix.to_owned(),
+                uri: value.clone(),
+            });
             open.attributes.push(XmlAttribute {
                 namespace: None,
                 prefix: Some("xmlns".to_owned()),
@@ -1124,10 +1210,9 @@ fn open_plain_element(
             )));
         }
     }
-    open.namespace = open
-        .prefix
-        .as_deref()
-        .and_then(|prefix| find_uri(&builder.scopes, prefix).or_else(|| find_uri(&new_bindings, prefix)));
+    open.namespace = open.prefix.as_deref().and_then(|prefix| {
+        find_uri(&builder.scopes, prefix).or_else(|| find_uri(&new_bindings, prefix))
+    });
     builder.scopes.append(&mut new_bindings);
     // All of this element's xmlns declarations apply to its own prefixed
     // names too, wherever in the tag they appeared; resolve them now that
@@ -1216,7 +1301,12 @@ const CONTROL_CHECK_INTERVAL: usize = 64 * 1024;
 
 impl BoundedWriter<'_> {
     fn new(max: usize, control: &OperationControl) -> BoundedWriter<'_> {
-        BoundedWriter { out: String::new(), max, since_check: 0, control }
+        BoundedWriter {
+            out: String::new(),
+            max,
+            since_check: 0,
+            control,
+        }
     }
 
     fn push_str(&mut self, chunk: &str) -> Result<(), Error> {
@@ -1278,7 +1368,9 @@ fn render_misc(
             }
             writer.indent(depth)?;
             if !is_valid_xml_name(target) || target.eq_ignore_ascii_case("xml") {
-                return Err(malformed(format!("invalid processing-instruction target {target:?}")));
+                return Err(malformed(format!(
+                    "invalid processing-instruction target {target:?}"
+                )));
             }
             writer.push_str("<?")?;
             write_verbatim(target, writer)?;
@@ -1294,7 +1386,9 @@ fn render_misc(
 /// have no entities and escaping would change their content).
 fn write_comment(text: &str, writer: &mut BoundedWriter<'_>) -> Result<(), Error> {
     if text.contains("--") || text.ends_with('-') {
-        return Err(malformed("comment content contains a forbidden '--' sequence"));
+        return Err(malformed(
+            "comment content contains a forbidden '--' sequence",
+        ));
     }
     writer.push_str("<!--")?;
     write_verbatim(text, writer)?;
@@ -1441,7 +1535,11 @@ fn render_child_inline(
     Ok(())
 }
 
-fn write_qualified_name(prefix: Option<&str>, local: &str, writer: &mut BoundedWriter<'_>) -> Result<(), Error> {
+fn write_qualified_name(
+    prefix: Option<&str>,
+    local: &str,
+    writer: &mut BoundedWriter<'_>,
+) -> Result<(), Error> {
     // Prefix and local part are each validated as XML `Name`s; the combined
     // `prefix:local` form is exactly one colon apart, which the Name
     // production itself forbids but a qualified name requires.
@@ -1808,7 +1906,10 @@ fn write_document_metadata_dto(w: &mut crate::model::dto::Writer, metadata: &Man
     w.begin_object();
     w.key("source");
     match metadata.source {
-        Some(ManifestSource::BinaryAxml { utf8_pool, string_count }) => {
+        Some(ManifestSource::BinaryAxml {
+            utf8_pool,
+            string_count,
+        }) => {
             w.begin_object();
             w.key("kind");
             w.string("binary-axml");

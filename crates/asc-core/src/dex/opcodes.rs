@@ -272,36 +272,66 @@ mod tests {
     fn reference_families_carry_kinds_and_widths() {
         let width = |opcode: u8| instruction_units(&[opcode, 0, 0, 0, 0, 0], 0).unwrap();
         for opcode in [0x1a, 0x1b] {
-            assert_eq!(OPCODE_KINDS[opcode as usize], RefKind::String.bit(), "{opcode:#04x}");
+            assert_eq!(
+                OPCODE_KINDS[opcode as usize],
+                RefKind::String.bit(),
+                "{opcode:#04x}"
+            );
         }
         assert_eq!(width(0x1a), 2);
         assert_eq!(width(0x1b), 3);
 
-        for (opcode, units) in
-            [(0x1c, 2), (0x1f, 2), (0x20, 2), (0x22, 2), (0x23, 2), (0x24, 3), (0x25, 3)]
-        {
-            assert_eq!(OPCODE_KINDS[opcode as usize], RefKind::Type.bit(), "{opcode:#04x}");
+        for (opcode, units) in [
+            (0x1c, 2),
+            (0x1f, 2),
+            (0x20, 2),
+            (0x22, 2),
+            (0x23, 2),
+            (0x24, 3),
+            (0x25, 3),
+        ] {
+            assert_eq!(
+                OPCODE_KINDS[opcode as usize],
+                RefKind::Type.bit(),
+                "{opcode:#04x}"
+            );
             assert_eq!(width(opcode), units, "{opcode:#04x}");
         }
 
         // iget*/iput*/sget*/sput*, including the wide/object two-register forms.
         for opcode in 0x52..=0x6d {
-            assert_eq!(OPCODE_KINDS[opcode as usize], RefKind::Field.bit(), "{opcode:#04x}");
+            assert_eq!(
+                OPCODE_KINDS[opcode as usize],
+                RefKind::Field.bit(),
+                "{opcode:#04x}"
+            );
             assert_eq!(width(opcode), 2, "{opcode:#04x}");
         }
 
         for opcode in 0x6e..=0x72 {
-            assert_eq!(OPCODE_KINDS[opcode as usize], RefKind::Method.bit(), "{opcode:#04x}");
+            assert_eq!(
+                OPCODE_KINDS[opcode as usize],
+                RefKind::Method.bit(),
+                "{opcode:#04x}"
+            );
             assert_eq!(width(opcode), 3, "{opcode:#04x}");
         }
         for opcode in 0x74..=0x78 {
-            assert_eq!(OPCODE_KINDS[opcode as usize], RefKind::Method.bit(), "{opcode:#04x}");
+            assert_eq!(
+                OPCODE_KINDS[opcode as usize],
+                RefKind::Method.bit(),
+                "{opcode:#04x}"
+            );
             assert_eq!(width(opcode), 3, "{opcode:#04x}");
         }
         // Polymorphic invokes: the method index participates (first 16-bit
         // operand), the proto operand that follows does not widen the target.
         for opcode in [0xfa, 0xfb] {
-            assert_eq!(OPCODE_KINDS[opcode as usize], RefKind::Method.bit(), "{opcode:#04x}");
+            assert_eq!(
+                OPCODE_KINDS[opcode as usize],
+                RefKind::Method.bit(),
+                "{opcode:#04x}"
+            );
             assert_eq!(width(opcode), 4, "{opcode:#04x}");
         }
 
