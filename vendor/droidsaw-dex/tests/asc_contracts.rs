@@ -23,7 +23,7 @@ use std::process::Command;
 
 use droidsaw_dex::analysis::{
     parse_for_analysis, BackendError, Completeness, Control, DiagnosticCode, EmitOptions,
-    IncompleteReason, InitializerDropReason, MethodStatus, ParseOptions, ParseScope,
+    IncompleteReason, MethodStatus, ParseOptions, ParseScope,
 };
 use droidsaw_dex::analysis::decompile_checked;
 use droidsaw_dex::DexFile;
@@ -53,7 +53,7 @@ fn main() {
     let mut failures: Vec<&'static str> = Vec::new();
     for (name, result) in [
         ("env_switches_are_inert", env_switches_are_inert()),
-        ("g02_static_initializer_drop_is_reported", g02_report()),
+        ("g02_static_initializers_emitted", g02_report()),
         ("declaration_only_outcome", declaration_only_outcome()),
         ("failed_method_outcome", failed_method_outcome()),
         ("cancel_and_deadline", cancel_and_deadline()),
@@ -242,6 +242,9 @@ struct MethodEntryPatch {
     code_off: u32,
     flags_off: usize,
     flags_len: usize,
+    /// Reserved for the static_values_off relocation the truncated-array
+    /// fixtures may need; currently the patcher edits values in place.
+    #[allow(dead_code)]
     code_off_off: usize,
     code_off_len: usize,
 }
@@ -349,48 +352,23 @@ fn corrupt_first_insn_opcode(data: &[u8]) -> Vec<u8> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// G02 structured defect report (A04: defect-as-data for A05)
+// G02 fixed behaviour (DX-P04, A05): encoded initial values emitted
 // ─────────────────────────────────────────────────────────────────────
 
 fn g02_report() -> TestResult {
     let report = decompile_g02(G02.to_vec());
 
-    // Current defect state (DX-P04, fix lands in A05): the encoded
-    // values 11/22 exist but are dropped because the fields are not
-    // final. The structured report must say so without the caller
-    // scanning the source.
-    let mut dropped: Vec<&str> = Vec::new();
-    if let Completeness::Incomplete { reasons } = &report.completeness {
-        for reason in reasons {
-            if let IncompleteReason::StaticInitializerDropped { field_idx } = reason {
-                let field = report
-                    .metadata
-                    .static_fields
-                    .iter()
-                    .find(|f| f.field_idx == *field_idx)
-                    .ok_or("dropped reason without matching field report")?;
-                dropped.push(&field.name);
-            }
-        }
-        let extra: Vec<String> = reasons
-            .iter()
-            .filter(|r| {
-                !matches!(r, IncompleteReason::StaticInitializerDropped { .. })
-            })
-            .map(|r| format!("{r:?}"))
-            .collect();
-        if !extra.is_empty() {
-            return Err(format!(
-                "G02 incompleteness must be exactly the two initializer drops (A05 fix \
-                 target); unexpected extra reasons: {extra:?}"
-            ));
-        }
-    } else {
-        return Err("G02 must currently be Incomplete (static initializers dropped)".into());
-    }
-    dropped.sort_unstable();
-    if dropped != ["FIRST", "SECOND"] {
-        return Err(format!("expected drops for FIRST and SECOND, got {dropped:?}"));
+    // PATCHED (asc, DX-P04, A05): the G02 defect is fixed. FIRST/SECOND
+    // are non-final static fields with encoded_array values 11/22; the
+    // declaration now carries the initializers and the report is
+    // Complete. (A04's intermediate "defect-as-data" state —
+    // Incomplete + NonFinalStatic drops + bare declarations — is pinned
+    // by git history; this test is the A05 acceptance target.)
+    if !matches!(&report.completeness, Completeness::Complete) {
+        return Err(format!(
+            "G02 must be Complete after the DX-P04 fix, got {:?}",
+            report.completeness
+        ));
     }
 
     for (name, value) in [("FIRST", "11"), ("SECOND", "22")] {
@@ -406,24 +384,26 @@ fn g02_report() -> TestResult {
                 field.encoded_value_java
             ));
         }
-        if field.initializer_emitted {
-            return Err(format!("{name}: initializer must not be reported as emitted"));
-        }
-        if field.drop_reason != Some(InitializerDropReason::NonFinalStatic) {
+        if !field.initializer_emitted {
             return Err(format!(
-                "{name}: drop reason must be NonFinalStatic, got {:?}",
+                "{name}: the encoded initializer must be emitted in the declaration"
+            ));
+        }
+        if field.drop_reason.is_some() {
+            return Err(format!(
+                "{name}: no drop reason may remain after the fix, got {:?}",
                 field.drop_reason
             ));
         }
-        if report.source.contains(&format!("{name} = {value}")) {
+        let expected_decl = format!("{name} = {value}");
+        if !report.source.contains(&expected_decl) {
             return Err(format!(
-                "{name}: current emitter must NOT render the initializer; \
-                 the defect is reported, not silently fixed in A04"
+                "source must contain the emitted initializer `{expected_decl}`"
             ));
         }
     }
 
-    // Methods: <init>, <clinit>, getSecond all have bodies and emit.
+    // Methods: getSecond has a body and emits.
     let emitted: Vec<&str> = report
         .method_outcomes
         .iter()

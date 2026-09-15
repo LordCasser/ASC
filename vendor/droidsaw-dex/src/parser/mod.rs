@@ -1245,14 +1245,18 @@ impl DexFile {
     /// `parse_inner` so the checked path bypasses [`Self::parse`]'s
     /// `droidsaw-common` diag wrapper (`DefaultHasher` +
     /// `with_input_hash` + `stage_dump`) — the wrapper is what makes
-    /// the plain parse read `DROIDSAW_DUMP` env vars. Behaviour of
-    /// `parse_inner` itself is unchanged.
-    pub(crate) fn parse_view(
-        data: &[u8],
-        emit_support: bool,
-        target: Option<&str>,
-    ) -> Result<Self> {
-        Self::parse_inner(data, emit_support, target)
+    /// the plain parse read `DROIDSAW_DUMP` env vars.
+    ///
+    /// PATCHED (asc, DX-P05b): the checked path now also decodes the
+    /// map-driven `method_handle_item` / `call_site_id` sections
+    /// (DX-P01 registered them as emit-only skips; but the DECOMPILE
+    /// path does consume them — `emit::emit_invoke_custom` resolves
+    /// call sites through the bootstrap method handle — so invoke-custom
+    /// bodies silently degraded to "unresolved call_site" comments).
+    /// The whole-input SHA-1 canonicality gauge and the section-walk
+    /// error side channel stay skipped (re-emission-only concerns).
+    pub(crate) fn parse_view(data: &[u8], include_call_sites: bool, target: Option<&str>) -> Result<Self> {
+        Self::parse_inner(data, false, include_call_sites, target)
     }
 
     /// Parse a DEX file from a byte slice, optionally charging an explicit
@@ -1283,7 +1287,7 @@ impl DexFile {
         data.hash(&mut h);
         let hash = format!("{:016x}", h.finish());
         droidsaw_common::diag::with_input_hash(&hash, || {
-            let parsed = Self::parse_inner(data, true, None)?;
+            let parsed = Self::parse_inner(data, true, true, None)?;
             droidsaw_common::diag::stage_dump("parser", &ParserSnapshot::from(&parsed));
             Ok(parsed)
         })
@@ -1302,7 +1306,7 @@ impl DexFile {
     /// PATCHED (asc, DX-P03): legacy entry, not ASC-reachable. The ASC
     /// core uses [`crate::analysis::parse_for_analysis`].
     pub fn parse_for_decompilation(data: &[u8]) -> Result<Self> {
-        Self::parse_inner(data, false, None)
+        Self::parse_inner(data, false, false, None)
     }
 
     /// PATCHED (rasc): parse only what is needed to decompile `descriptor`.
@@ -1316,7 +1320,7 @@ impl DexFile {
     /// options, budget, control, structured scope reporting and the
     /// controlled-mode side-effect guarantees).
     pub fn parse_for_class(data: &[u8], descriptor: &str) -> Result<Self> {
-        let scoped = Self::parse_inner(data, false, Some(descriptor))?;
+        let scoped = Self::parse_inner(data, false, false, Some(descriptor))?;
         // Safety net: a descriptor that matches no class would leave every
         // class body unparsed. Fall back to the full parse instead of handing
         // back a DEX whose classes have no code.
@@ -1327,10 +1331,18 @@ impl DexFile {
                 .map(String::as_str)
                 == Some(descriptor)
         });
-        if matched { Ok(scoped) } else { Self::parse_inner(data, false, None) }
+        if matched { Ok(scoped) } else { Self::parse_inner(data, false, false, None) }
     }
 
-    fn parse_inner(data: &[u8], emit_support: bool, target: Option<&str>) -> Result<Self> {
+    fn parse_inner(
+        data: &[u8],
+        emit_support: bool,
+        // PATCHED (asc, DX-P05b): decode map-driven method handles /
+        // call-site ids even on the decompile shape (invoke-custom
+        // resolution needs them; see `parse_view`).
+        include_call_sites: bool,
+        target: Option<&str>,
+    ) -> Result<Self> {
         let header = DexHeader::parse(data)?;
         header.verify_checksum(data)?;
         // Structural pre-condition: the six id-sections must not alias each
@@ -1633,7 +1645,10 @@ impl DexFile {
         // DEXes simply lack these sections so the vectors stay empty.
         // Malformed entries are silently skipped so a corrupt bootstrap
         // encoded_array doesn't abort the whole parse.
-        let (method_handles, call_site_ids) = if emit_support {
+        // PATCHED (asc, DX-P05b): also decoded when `include_call_sites`
+        // is set — the decompile path resolves invoke-custom call sites
+        // through these tables (see `parse_view`).
+        let (method_handles, call_site_ids) = if emit_support || include_call_sites {
             Self::parse_map_driven_sections(data, &header)
         } else {
             (Vec::new(), Vec::new())

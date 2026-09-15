@@ -3,6 +3,7 @@
 #![allow(clippy::let_underscore_must_use, reason = "every `let _ = writeln!(out, ...)` in classes code writes to an in-memory `String` whose `Display`/`Write` impl is infallible. The unit-Result is structurally dead.")]
 // as_conversions: file-level bulk allow removed; per-site PROOF applied below.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
@@ -428,6 +429,9 @@ pub(crate) fn decompile_class_impl(
     // `interface` (narrower).
     let is_interface = class_def.access_flags & 0x0200 != 0;
     let is_enum = !is_interface && class_def.access_flags & 0x4000 != 0;
+    // PATCHED (asc, DX-P05a): RUNTIME-visibility annotations rendered
+    // into source at their targets; BUILD/SYSTEM stay in metadata.
+    let runtime_anns = collect_runtime_annotation_lines(dex, class_def.annotations_off);
     if !is_kt_facade {
         let modifier_mask: u32 = if is_interface {
             // Drop ACC_ABSTRACT (0x0400) + keep other flags in 0x7FF.
@@ -454,6 +458,10 @@ pub(crate) fn decompile_class_impl(
         } else {
             "class"
         };
+        // PATCHED (asc, DX-P05a): class-level RUNTIME annotations.
+        for line in &runtime_anns.class {
+            let _ = writeln!(out, "{line}");
+        }
         let _ = write!(out, "{access} {type_kw} {class_name}");
 
         // Superclass emission. Three cases:
@@ -620,6 +628,7 @@ pub(crate) fn decompile_class_impl(
                 &clinit_assigned_fields,
                 &non_clinit_assigned_static_fields,
                 &enum_ctx,
+                &runtime_anns.fields,
                 &mut sink,
             );
             emit_fields(
@@ -627,10 +636,11 @@ pub(crate) fn decompile_class_impl(
                 dex,
                 &cd.instance_fields,
                 false,
-                &[],
+                &StaticValues::empty(),
                 &clinit_assigned_fields,
                 &non_clinit_assigned_static_fields,
                 &enum_ctx,
+                &runtime_anns.fields,
                 &mut None,
             );
         }
@@ -648,6 +658,7 @@ pub(crate) fn decompile_class_impl(
             is_kt_facade,
             ctx,
             r8_census,
+            &runtime_anns.methods,
             &mut sink,
             true,
         );
@@ -663,6 +674,7 @@ pub(crate) fn decompile_class_impl(
             is_kt_facade,
             ctx,
             r8_census,
+            &runtime_anns.methods,
             &mut sink,
             false,
         );
@@ -785,28 +797,62 @@ fn patch_throws_throwable_on_method_signatures(src: &str) -> String {
     out
 }
 
-/// Parse the encoded_array_item at `static_values_off` to get initial values
-/// for static fields (one per field in declaration order, may be shorter than
-/// the field count — remaining fields have default zero/null values).
+/// PATCHED (asc, DX-P04): the class_def's `static_values` encoded_array
+/// with an honesty record of how much of it decoded. Per DEX spec the
+/// array may be **shorter** than the static-field list (legal trailing
+/// elision — remaining fields take their type's default value), but an
+/// array whose size prefix **declares** an entry that cannot be decoded
+/// is malformed: the value is unknown, not elided, and must never be
+/// zero-filled (DECL-01 "截断失败，不能填零隐藏未知值").
+#[derive(Debug, Clone)]
+pub(crate) struct StaticValues {
+    /// Decoded prefix of the encoded_array, in class_data field order.
+    values: Vec<EncodedValue>,
+    /// Entry count the array's size prefix declared. `None` when the
+    /// size prefix itself was unreadable — every position is then
+    /// unknown (nothing about the array can be trusted). A decoded
+    /// `declared` shorter than `values.len()`'s complement (i.e.
+    /// `values.len() < declared`) marks truncation; `values.len() ==
+    /// declared` means the whole array decoded.
+    declared: Option<usize>,
+}
+
+impl StaticValues {
+    /// Empty, fully-elided set (instance-field call site / no
+    /// static_values_off).
+    pub(crate) fn empty() -> Self {
+        Self {
+            values: Vec::new(),
+            declared: Some(0),
+        }
+    }
+}
+
+/// Parse the encoded_array_item at `static_values_off`. Best-effort per
+/// the tolerant-parse discipline: a malformed array yields a
+/// [`StaticValues`] whose `truncated()` is true instead of an error, so
+/// the decompile proceeds while reporting the defect structurally.
 #[allow(clippy::arithmetic_side_effects, reason = "encoded-value walk over parser-bounded slice; usize pos increments bounded by data.len() with explicit bound checks.")]
-fn parse_static_values(data: &[u8], off: u32) -> Vec<EncodedValue> {
+fn parse_static_values(data: &[u8], off: u32) -> StaticValues {
     if off == 0 {
-        return vec![];
+        return StaticValues::empty();
     }
     #[allow(clippy::as_conversions, reason = "PROOF: widen u32→usize; off is a DEX file offset bounded by data.len() by caller (static_values_off != 0 guard above); lossless on 32+-bit platforms.")]
     let pos = off as usize;
     let Ok((size, len)) = crate::mutf8::read_uleb128(data, pos) else {
-        return vec![];
+        return StaticValues {
+            values: Vec::new(),
+            declared: None,
+        };
     };
     // Amplification defense: each encoded_value is at minimum 1 byte on
-    // disk (header). This fn's contract is "best-effort, malformed input
-    // → empty/short vec" — so rather than routing through Result, clamp
-    // with_capacity against the physical remainder.
+    // disk (header). Clamp the *reported* declared count against the
+    // physical remainder; decoding stops at the first failure either way.
     #[allow(clippy::as_conversions, reason = "PROOF: widen u32→usize; size is a uleb128-decoded value bounded against data.len() by the .min() guard on the same line.")]
-    let count = (size as usize).min(data.len().saturating_sub(pos));
-    let mut values = Vec::with_capacity(count);
+    let declared_usize = (size as usize).min(data.len().saturating_sub(pos));
+    let mut values = Vec::with_capacity(declared_usize);
     let mut cur = pos + len;
-    for _ in 0..count {
+    for _ in 0..declared_usize {
         match annotation::parse_encoded_value(data, cur) {
             Ok((v, vlen)) => {
                 // parse_encoded_value returns total bytes consumed
@@ -814,13 +860,37 @@ fn parse_static_values(data: &[u8], off: u32) -> Vec<EncodedValue> {
                 cur += vlen;
                 values.push(v);
             }
-            Err(_) => break,
+            Err(_) => {
+                // PATCHED (asc, DX-P04): the array declared this entry
+                // but its bytes are malformed. Everything from here on
+                // is unknown; report truncation (values.len() <
+                // declared) instead of silently returning a short vec
+                // (which elision would excuse).
+                break;
+            }
         }
     }
-    values
+    StaticValues {
+        values,
+        declared: Some(declared_usize),
+    }
 }
 
 /// Render an EncodedValue as a Java literal.
+///
+/// PATCHED (asc, DX-P04): previously only primitives / String / Null
+/// rendered — `Type` / `Field` / `Enum` / `Array` encoded values on
+/// static fields were silently zero-filled (a hidden unknown, which
+/// DECL-01 forbids). Those reference shapes now render:
+///
+/// - `Type` → class literal (`String.class`, `int.class`)
+/// - `Enum` → enum constant (`MyEnum.NAME`)
+/// - `Field` → constant-field reference (`Owner.NAME`)
+/// - `Array` → Java array initializer (`{ a, b, c }`)
+///
+/// `Method` / `MethodType` / `MethodHandle` / `Annotation` stay
+/// unrenderable at source level — see [`encoded_value_metadata_text`]
+/// for the lossless metadata rendering used instead.
 pub(crate) fn encoded_value_to_java(dex: &DexFile, v: &EncodedValue) -> Option<String> {
     match v {
         EncodedValue::Int(n) => Some(format!("{n}")),
@@ -836,8 +906,139 @@ pub(crate) fn encoded_value_to_java(dex: &DexFile, v: &EncodedValue) -> Option<S
             Some(format!("\"{}\"", crate::emit::escape_java_string(s)))
         }
         EncodedValue::Null => Some("null".to_string()),
+        // PATCHED (asc, DX-P04): class literal — the DEX shape for a
+        // `Class`-typed constant. Primitive descriptors render as
+        // `int.class` etc. (valid Java).
+        EncodedValue::Type(tidx) => dex
+            .get_type_descriptor(*tidx)
+            .ok()
+            .map(|desc| format!("{}.class", pretty_class(desc))),
+        // PATCHED (asc, DX-P04): enum constant reference.
+        EncodedValue::Enum(fidx) => field_ref_name(dex, *fidx)
+            .map(|(owner, name)| format!("{owner}.{name}")),
+        // PATCHED (asc, DX-P04): constant-field reference (`Owner.NAME`).
+        EncodedValue::Field(fidx) => field_ref_name(dex, *fidx)
+            .map(|(owner, name)| format!("{owner}.{name}")),
+        // PATCHED (asc, DX-P04): array initializer. Element renderability
+        // propagates: an unrenderable element makes the whole array
+        // unrenderable (the caller reports the drop rather than
+        // rendering a partial literal).
+        EncodedValue::Array(items) => {
+            let rendered = items
+                .iter()
+                .map(|item| encoded_value_to_java(dex, item))
+                .collect::<Option<Vec<_>>>()?;
+            Some(format!(
+                "{{ {} }}",
+                rendered.join(", ")
+            ))
+        }
         _ => None,
     }
+}
+
+/// PATCHED (asc, DX-P04): lossless **metadata-grade** rendering of an
+/// encoded value. Unlike [`encoded_value_to_java`] this never fails —
+/// shapes Java source cannot express as literals render as typed
+/// references (`method@3`, `proto (I)V#2`, `handle@1`) or nested
+/// `@Type(...)` annotation text, so structured metadata preserves every
+/// value exactly (DECL-02 "不可表达信息在 metadata 保留").
+pub(crate) fn encoded_value_metadata_text(dex: &DexFile, v: &EncodedValue) -> String {
+    match v {
+        EncodedValue::Method(midx) => {
+            #[allow(clippy::as_conversions, reason = "PROOF: widen u32→usize; midx.0 is a method_ids pool index produced by the parser, bounded < dex.methods.len() by pool validation; lossless on 32+-bit platforms.")]
+            let resolved = dex
+                .methods
+                .get(midx.0 as usize)
+                .and_then(|m| {
+                    let class = dex.get_type_descriptor(m.class_idx).ok()?;
+                    let name = dex.get_string(m.name_idx).ok()?;
+                    Some(format!("method@{} ({}#{})", midx.0, pretty_class(class), name))
+                })
+                .unwrap_or_else(|| format!("method@{}", midx.0));
+            resolved
+        }
+        EncodedValue::MethodType(pidx) => {
+            #[allow(clippy::as_conversions, reason = "PROOF: widen u32→usize; pidx.0 is a proto_ids pool index produced by the parser, bounded < dex.protos.len() by pool validation; lossless on 32+-bit platforms.")]
+            let resolved = dex
+                .protos
+                .get(pidx.0 as usize)
+                .and_then(|p| {
+                    let ret = dex.get_type_descriptor(p.return_type_idx).ok()?;
+                    let params: Vec<String> = if p.parameters_off == 0 {
+                        Vec::new()
+                    } else {
+                        dex.type_lists
+                            .get(&p.parameters_off)
+                            .map(|list| {
+                                list.iter()
+                                    .filter_map(|t| dex.get_type_descriptor(*t).ok())
+                                    .map(str::to_string)
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    };
+                    Some(format!(
+                        "method_type@{} ({} -> {})",
+                        pidx.0,
+                        proto_params_text(&params),
+                        ret
+                    ))
+                })
+                .unwrap_or_else(|| format!("method_type@{}", pidx.0));
+            resolved
+        }
+        EncodedValue::MethodHandle(hidx) => format!("method_handle@{}", hidx.0),
+        EncodedValue::Annotation(a) => {
+            let ty = dex
+                .get_type_descriptor(a.type_idx)
+                .map(pretty_class)
+                .unwrap_or_else(|_| "?".to_string());
+            let elements = a
+                .elements
+                .iter()
+                .map(|(name_idx, value)| {
+                    let name = dex.get_string(*name_idx).unwrap_or("?");
+                    format!("{name} = {}", encoded_value_metadata_text(dex, value))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("@{ty}({elements})")
+        }
+        EncodedValue::Array(items) => {
+            let rendered = items
+                .iter()
+                .map(|item| encoded_value_metadata_text(dex, item))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ {rendered} }}")
+        }
+        // All remaining variants (primitives / String / Null / Type /
+        // Field / Enum / Array) render through the source-grade path;
+        // this arm is a deterministic last resort, not a panic.
+        other => encoded_value_to_java(dex, other)
+            .unwrap_or_else(|| format!("{other:?}")),
+    }
+}
+
+/// `java.lang.String, int` — comma-joined parameter list used by the
+/// metadata-grade method_type rendering.
+fn proto_params_text(params: &[String]) -> String {
+    let dotted: Vec<String> = params.iter().map(|p| pretty_class(p)).collect();
+    format!("({})", dotted.join(", "))
+}
+
+/// PATCHED (asc, DX-P04): resolve a field reference to
+/// `(pretty owner, field name)` for enum/field encoded values.
+fn field_ref_name(dex: &DexFile, fidx: crate::ids::FieldIdx) -> Option<(String, String)> {
+    #[allow(clippy::as_conversions, reason = "PROOF: widen u32→usize; fidx.0 is a field_ids pool index produced by the parser, bounded < dex.fields.len() by pool validation; lossless on 32+-bit platforms.")]
+    let field = dex.fields.get(fidx.0 as usize)?;
+    let owner = dex
+        .get_type_descriptor(field.class_idx)
+        .ok()
+        .map(pretty_class)?;
+    let name = dex.get_string(field.name_idx).ok()?.to_string();
+    Some((owner, name))
 }
 
 /// Render an f32 as a Java source-level literal. Handles IEEE-754 edge
@@ -1028,141 +1229,225 @@ fn emit_fields(
     dex: &DexFile,
     fields: &[decode::EncodedField],
     is_static: bool,
-    static_values: &[EncodedValue],
+    // PATCHED (asc, DX-P04): positional slice replaced by the
+    // truncation-aware `StaticValues` record.
+    static_values: &StaticValues,
     clinit_assigned: &BTreeSet<u32>,
     non_clinit_assigned: &BTreeSet<u32>,
     enum_ctx: &EnumCtx,
+    // PATCHED (asc, DX-P05a): RUNTIME annotation lines per field_idx.
+    field_annotations: &BTreeMap<u32, Vec<String>>,
     // PATCHED (asc, DX-P03): static-field report sink. `None` on the
-    // legacy path (and for the instance-field call). Records
-    // per-field encoded-value presence, whether the declaration
-    // carried an initializer, and — when an encoded value exists but
-    // was not reflected — the drop reason. This is the G02
-    // defect-as-data surface; the emitted text is unchanged.
+    // legacy path (and for the instance-field call). Records per-field
+    // encoded-value presence, whether the declaration carried an
+    // initializer, and — when an encoded value exists but was not
+    // reflected — the drop reason.
     report: &mut Option<&mut crate::analysis::ClassOutcome>,
 ) {
+    use crate::analysis::DiagnosticCode;
+    use crate::analysis::InitializerDropReason;
+    // PATCHED (asc, DX-P04): the class-level StaticValuesTruncated
+    // diagnostic fires once per class, not once per affected field.
+    let mut truncation_diagnosed = false;
     for (i, ef) in fields.iter().enumerate() {
         // Row 1 (v2 matrix): suppress `$VALUES` on enum classes.
         if enum_suppress::is_suppressed_field(enum_ctx, dex, ef) {
             continue;
         }
         #[allow(clippy::as_conversions, reason = "PROOF: widen u32→usize; field_idx.0 bounded < dex.fields.len() by parser validation of field_ids pool.")]
-        if let Some(field) = dex.fields.get(ef.field_idx.0 as usize) {
-            // R8-inlined-<clinit> handling: when a `static final` field
-            // is written by a non-`<clinit>` method body, javac will
-            // reject the surrounding decompile output ("cannot assign
-            // a value to final variable"). The runtime invariant
-            // (single assignment before any read, preserved by R8's
-            // inlining proof) still holds; only the Java source-level
-            // keyword has to drop. Strip ACC_FINAL from the rendered
-            // access flags in that case.
-            let final_inlined = is_static
-                && (ef.access_flags & 0x0010 != 0)
-                && non_clinit_assigned.contains(&ef.field_idx.0);
-            let render_flags = if final_inlined {
-                ef.access_flags & !0x0010
-            } else {
-                ef.access_flags
-            };
-            let access = emit::emit_access_flags(render_flags);
-            let ty = dex
-                .get_type_descriptor(field.type_idx)
-                .map(DexType::from_descriptor)
-                .unwrap_or(DexType::Top);
-            let name = crate::emit::sanitize_id(dex.get_string(field.name_idx).unwrap_or("?"));
-            // Emit initializer for STATIC final fields with encoded values.
-            // DEX spec §VII.3.1 lets `encoded_array_item` be shorter than
-            // the static-field count — trailing entries are elided and
-            // implicitly default to the type's zero value. For
-            // `static final` that's a compile error (field must be
-            // initialized at declaration), so fall back to the
-            // type-appropriate zero literal when the slot is missing or
-            // when `encoded_value_to_java` can't render the value.
-            //
-            // INSTANCE final fields MUST stay uninitialized at declaration
-            // — their initial value is assigned in the constructor (via
-            // `this.name = v0;`). Emitting `private final String name =
-            // null;` would make javac reject the constructor's assign
-            // with "cannot assign a value to final variable". The
-            // default-literal fallback is STATIC-only; instance final
-            // fields bypass this code entirely.
-            let is_final = ef.access_flags & 0x0010 != 0;
-            // Skip the decl-init fallback when ACC_FINAL was stripped
-            // for the R8-inlined-<clinit> case: the field will be
-            // assigned by the inlining method body at runtime, and the
-            // plain-decl shape ("static TYPE NAME;") leaves the slot
-            // open for that assignment.
-            //
-            // PATCHED (asc, DX-P03): capture the explicit encoded value
-            // once so the report below can distinguish "encoded value
-            // exists but unrenderable" from "slot elided", mirroring
-            // exactly what this emitter branch consults.
-            let encoded_entry = if is_static { static_values.get(i) } else { None };
-            let explicit_init = encoded_entry.and_then(|ev| encoded_value_to_java(dex, ev));
-            let mut initializer_emitted = false;
-            if is_final && is_static && !final_inlined {
-                // A field assigned by <clinit> must NOT carry a
-                // declaration initializer — javac rejects the double-
-                // assign on `final`. If such a field lacks an explicit
-                // encoded_array entry AND is <clinit>-assigned, skip
-                // the zero-elision default-init fallback entirely.
-                let is_clinit_assigned = clinit_assigned.contains(&ef.field_idx.0);
-                // When `<clinit>` assigns the field, suppress BOTH the
-                // explicit encoded_array entry AND the type-default
-                // fallback. The DEX spec permits `encoded_array_item` to
-                // carry the type's zero value (e.g., `null` for a Ref
-                // field) even when `<clinit>` reassigns the real value;
-                // emitting `static final X = null; static { X = ...; }`
-                // makes javac reject the double-assign on the `final`
-                // qualifier. The `<clinit>` body is the source of truth
-                // for the runtime value.
-                let lit = if is_clinit_assigned {
-                    None
-                } else {
-                    explicit_init.clone().or_else(|| type_default_literal(&ty))
-                };
-                if let Some(lit) = lit {
-                    let _ = writeln!(out, "    {access} {ty} {name} = {lit};");
-                    initializer_emitted = true;
-                    if let Some(rep) = &mut *report {
-                        let rep = &mut rep.static_fields;
-                        push_static_field_report(
-                            rep,
-                            dex,
-                            ef,
-                            field,
-                            explicit_init.clone(),
-                            initializer_emitted,
-                            drop_reason_for(
-                                is_final,
-                                final_inlined,
-                                is_clinit_assigned,
-                                encoded_entry,
-                                &explicit_init,
-                            ),
-                        );
-                    }
-                    continue;
+        let Some(field) = dex.fields.get(ef.field_idx.0 as usize) else {
+            continue;
+        };
+        // R8-inlined-<clinit> handling: when a `static final` field
+        // is written by a non-`<clinit>` method body, javac will
+        // reject the surrounding decompile output ("cannot assign
+        // a value to final variable"). The runtime invariant
+        // (single assignment before any read, preserved by R8's
+        // inlining proof) still holds; only the Java source-level
+        // keyword has to drop. Strip ACC_FINAL from the rendered
+        // access flags in that case.
+        let is_final = ef.access_flags & 0x0010 != 0;
+        let final_inlined = is_static && is_final && non_clinit_assigned.contains(&ef.field_idx.0);
+        let is_clinit_assigned = clinit_assigned.contains(&ef.field_idx.0);
+
+        // INSTANCE final fields MUST stay uninitialized at declaration
+        // — their initial value is assigned in the constructor (via
+        // `this.name = v0;`). Emitting `private final String name =
+        // null;` would make javac reject the constructor's assign
+        // with "cannot assign a value to final variable". The whole
+        // initializer machinery below is STATIC-only; instance fields
+        // always take the `Slot::Elided` path.
+        //
+        // PATCHED (asc, DX-P04): slot classification. Per DECL-01 every
+        // declared-and-decoded encoded value is emitted — including on
+        // non-final fields (G02) and on fields `<clinit>` rewrites
+        // (clinit-before-overwrite reads must observe the encoded
+        // value). Only slots the array *declares but cannot deliver*
+        // are reported, never zero-filled.
+        enum Slot<'a> {
+            /// No encoded entry for this position: legal elision, the
+            /// field takes its type's default value at class-init time.
+            Elided,
+            /// The array declares and delivered an encoded value.
+            Present(&'a EncodedValue),
+            /// The array declares this position but the bytes failed to
+            /// decode — the value is unknown, NOT elided.
+            Truncated,
+            /// The array's size prefix itself was unreadable: every
+            /// position is unknown.
+            ArrayUnreadable,
+        }
+        let slot = if !is_static {
+            Slot::Elided
+        } else {
+            match static_values.declared {
+                None => Slot::ArrayUnreadable,
+                Some(declared) if i >= declared => Slot::Elided,
+                Some(_) => match static_values.values.get(i) {
+                    Some(v) => Slot::Present(v),
+                    None => Slot::Truncated,
+                },
+            }
+        };
+
+        let ty = dex
+            .get_type_descriptor(field.type_idx)
+            .map(DexType::from_descriptor)
+            .unwrap_or(DexType::Top);
+        let name = crate::emit::sanitize_id(dex.get_string(field.name_idx).unwrap_or("?"));
+
+        let mut initializer: Option<String> = None;
+        let mut drop_reason: Option<InitializerDropReason> = None;
+        let mut field_diagnostics: Vec<crate::analysis::BackendDiagnostic> = Vec::new();
+        match slot {
+            Slot::Elided => {
+                // Legal trailing elision (DEX §VII.3.1). A `static
+                // final` field still needs a declaration initializer for
+                // javac (field must be initialized at declaration), so
+                // fall back to the type-appropriate zero literal — but
+                // NOT when `<clinit>` assigns the field (javac rejects
+                // the double-assign on `final`; the `<clinit>` body is
+                // the source of truth for the runtime value).
+                if is_final && is_static && !final_inlined && !is_clinit_assigned {
+                    initializer = type_default_literal(&ty);
                 }
             }
-            let _ = writeln!(out, "    {access} {ty} {name};");
-            if let Some(rep) = &mut *report {
-                let rep = &mut rep.static_fields;
-                push_static_field_report(
-                    rep,
-                    dex,
-                    ef,
-                    field,
-                    explicit_init.clone(),
-                    initializer_emitted,
-                    drop_reason_for(
-                        is_final,
-                        final_inlined,
-                        clinit_assigned.contains(&ef.field_idx.0),
-                        encoded_entry,
-                        &explicit_init,
-                    ),
-                );
+            Slot::Truncated | Slot::ArrayUnreadable => {
+                // The array declared this entry but its bytes are
+                // malformed. DECL-01: never zero-fill an unknown value —
+                // report the drop structurally instead.
+                drop_reason = Some(InitializerDropReason::TruncatedStaticValues);
+                if !truncation_diagnosed {
+                    truncation_diagnosed = true;
+                    field_diagnostics.push(crate::analysis::BackendDiagnostic {
+                        code: DiagnosticCode::StaticValuesTruncated,
+                        message: format!(
+                            "static_values encoded_array is malformed: entries beyond the \
+                             decodable prefix are unknown and were NOT zero-filled \
+                             (declared prefix: {} of {} field slot(s); first affected: {name})",
+                            static_values.values.len(),
+                            fields.len(),
+                        ),
+                        method_idx: None,
+                        field_idx: Some(ef.field_idx.0),
+                    });
+                }
             }
+            Slot::Present(v) => {
+                if !encoded_value_matches_type(dex, &ty, v) {
+                    // DECL-01 type-conflict row: fail loud instead of
+                    // rendering a value of the wrong type.
+                    drop_reason = Some(InitializerDropReason::TypeConflict);
+                    field_diagnostics.push(crate::analysis::BackendDiagnostic {
+                        code: DiagnosticCode::StaticInitializerDropped,
+                        message: format!(
+                            "static initializer for {name} is an encoded value whose \
+                             tag conflicts with the declared field type {ty:?}; value not \
+                             rendered, not zero-filled"
+                        ),
+                        method_idx: None,
+                        field_idx: Some(ef.field_idx.0),
+                    });
+                } else if let Some(lit) = encoded_value_to_java(dex, v) {
+                    initializer = Some(lit);
+                } else {
+                    // Present but source-unrenderable (Method /
+                    // MethodType / MethodHandle / Annotation values): the
+                    // value is preserved in metadata
+                    // (`StaticFieldReport::encoded_value_java` carries the
+                    // metadata-grade text), the declaration stays bare,
+                    // and the drop is reported.
+                    drop_reason = Some(InitializerDropReason::UnrenderableValue);
+                }
+            }
+        }
+
+        // `final` + `<clinit>` reassignment + encoded value: javac
+        // rejects `static final X = v;` followed by `<clinit>` writing
+        // X. Per design §4 the target behaviour (all encoded values
+        // emitted, clinit-before-overwrite reads preserved) outranks the
+        // source-level access flag: lower `final` in the rendered flags
+        // and keep the raw flags in the metadata report.
+        let final_lowered =
+            initializer.is_some() && is_final && is_clinit_assigned && !final_inlined;
+        let render_flags = if final_inlined || final_lowered {
+            ef.access_flags & !0x0010
+        } else {
+            ef.access_flags
+        };
+        if final_lowered {
+            field_diagnostics.push(crate::analysis::BackendDiagnostic {
+                code: DiagnosticCode::FinalFlagLowered,
+                message: format!(
+                    "final lowered on {name}: the encoded initializer and the <clinit> \
+                     reassignment cannot coexist on a final field; raw access flags \
+                     preserved in metadata"
+                ),
+                method_idx: None,
+                field_idx: Some(ef.field_idx.0),
+            });
+        }
+        let access = emit::emit_access_flags(render_flags);
+        let initializer_emitted = initializer.is_some();
+        // PATCHED (asc, DX-P05a): RUNTIME annotation lines above the
+        // field declaration.
+        if let Some(lines) = field_annotations.get(&ef.field_idx.0) {
+            for line in lines {
+                let _ = writeln!(out, "    {line}");
+            }
+        }
+        match &initializer {
+            Some(lit) => {
+                let _ = writeln!(out, "    {access} {ty} {name} = {lit};");
+            }
+            None => {
+                let _ = writeln!(out, "    {access} {ty} {name};");
+            }
+        }
+        if let Some(rep) = &mut *report {
+            // PATCHED (asc, DX-P04): the report row carries the
+            // source-grade literal when one exists, and separately the
+            // lossless metadata-grade text so a dropped value is never
+            // silently gone.
+            let encoded_value_java = match &slot {
+                Slot::Present(v) => encoded_value_to_java(dex, v),
+                _ => None,
+            };
+            let encoded_value_metadata = match &slot {
+                Slot::Present(v) => Some(encoded_value_metadata_text(dex, v)),
+                _ => None,
+            };
+            push_static_field_report(
+                &mut rep.static_fields,
+                dex,
+                ef,
+                field,
+                initializer_emitted,
+                drop_reason,
+                encoded_value_java,
+                encoded_value_metadata,
+            );
+            rep.diagnostics.extend(field_diagnostics);
         }
     }
     if !fields.is_empty() {
@@ -1170,34 +1455,49 @@ fn emit_fields(
     }
 }
 
-/// PATCHED (asc, DX-P03): classify why an existing encoded value was
-/// not reflected in the declaration, mirroring the emitter's own
-/// branch order. `None` means the value was used (or no encoded value
-/// exists). Kept as a helper so the recorded reason cannot drift from
-/// the emit logic above.
-fn drop_reason_for(
-    is_final: bool,
-    final_inlined: bool,
-    is_clinit_assigned: bool,
-    encoded_entry: Option<&EncodedValue>,
-    explicit_init: &Option<String>,
-) -> Option<crate::analysis::InitializerDropReason> {
-    use crate::analysis::InitializerDropReason;
-    // No encoded entry → nothing was dropped.
-    encoded_entry?;
-    if !is_final {
-        return Some(InitializerDropReason::NonFinalStatic);
+/// PATCHED (asc, DX-P04): whether an encoded value's tag matches the
+/// declared static-field type. `DexType::Top` (unresolvable descriptor)
+/// matches everything — the UnresolvedType path already covers it and a
+/// double-report would add noise, not information.
+fn encoded_value_matches_type(dex: &DexFile, ty: &DexType, v: &EncodedValue) -> bool {
+    let is_ref = |ty: &DexType| matches!(ty, DexType::Ref(_) | DexType::ArrayRef(_));
+    match v {
+        EncodedValue::Boolean(_) => matches!(ty, DexType::Boolean),
+        EncodedValue::Byte(_) => matches!(ty, DexType::Byte),
+        EncodedValue::Short(_) => matches!(ty, DexType::Short),
+        EncodedValue::Char(_) => matches!(ty, DexType::Char),
+        EncodedValue::Int(_) => matches!(ty, DexType::Int),
+        EncodedValue::Long(_) => matches!(ty, DexType::Long),
+        EncodedValue::Float(_) => matches!(ty, DexType::Float),
+        EncodedValue::Double(_) => matches!(ty, DexType::Double),
+        EncodedValue::String(_) => matches!(ty, DexType::Ref(r) if &**r == "Ljava/lang/String;"),
+        EncodedValue::Null => is_ref(ty) || matches!(ty, DexType::Null),
+        // Class literal: javac puts these on `java.lang.Class` fields.
+        EncodedValue::Type(_) => matches!(ty, DexType::Ref(r) if &**r == "Ljava/lang/Class;"),
+        // Enum constant: the referenced field's owner must be the field's
+        // declared enum type.
+        EncodedValue::Enum(fidx) => match (ty, field_ref_name(dex, *fidx)) {
+            (DexType::Ref(r), Some((owner, _name))) => {
+                // `field_ref_name` returns the pretty (dotted) owner;
+                // compare against the pretty form of the declared type.
+                &**r != "Ljava/lang/String;" && pretty_class(r) == owner
+            }
+            _ => false,
+        },
+        // Constant-field reference onto a reference-typed field.
+        EncodedValue::Field(_) => is_ref(ty),
+        // These render only at metadata grade; for the source path they
+        // are "present but unrenderable". Type-check loosely: any
+        // reference slot can carry them.
+        EncodedValue::Method(_) | EncodedValue::MethodType(_) | EncodedValue::MethodHandle(_)
+        | EncodedValue::Annotation(_) => is_ref(ty),
+        EncodedValue::Array(items) => match ty {
+            DexType::ArrayRef(inner) => {
+                items.iter().all(|item| encoded_value_matches_type(dex, inner, item))
+            }
+            _ => false,
+        },
     }
-    if final_inlined {
-        return Some(InitializerDropReason::R8InlinedAssignment);
-    }
-    if is_clinit_assigned {
-        return Some(InitializerDropReason::AssignedInClinit);
-    }
-    if explicit_init.is_none() {
-        return Some(InitializerDropReason::UnrenderableValue);
-    }
-    None
 }
 
 /// PATCHED (asc, DX-P03): append one `StaticFieldReport`. Positional
@@ -1210,9 +1510,10 @@ fn push_static_field_report(
     dex: &DexFile,
     ef: &decode::EncodedField,
     field: &crate::ids::FieldIdItem,
-    encoded_value_java: Option<String>,
     initializer_emitted: bool,
     drop_reason: Option<crate::analysis::InitializerDropReason>,
+    encoded_value_java: Option<String>,
+    encoded_value_metadata: Option<String>,
 ) {
     let type_descriptor = dex
         .get_type_descriptor(field.type_idx)
@@ -1225,9 +1526,97 @@ fn push_static_field_report(
         type_descriptor,
         access_flags: ef.access_flags,
         encoded_value_java,
+        encoded_value_metadata,
         initializer_emitted,
         drop_reason,
     });
+}
+
+/// PATCHED (asc, DX-P05a): RUNTIME-visibility annotations rendered as
+/// Java source lines, per target. Collected once per class; BUILD and
+/// SYSTEM visibility annotations stay metadata-only
+/// (`BackendMetadata::annotations`).
+#[derive(Default)]
+pub(crate) struct RuntimeAnnotationLines {
+    /// Lines written directly above the class header.
+    pub class: Vec<String>,
+    /// `field_idx` → lines above the field declaration.
+    pub fields: BTreeMap<u32, Vec<String>>,
+    /// `method_idx` → lines above the method signature.
+    pub methods: BTreeMap<u32, Vec<String>>,
+}
+
+/// Collect RUNTIME-visibility annotation source lines for a class.
+/// Malformed annotation subtrees are skipped (tolerant-parse
+/// discipline; the metadata path still reports what parsed).
+pub(crate) fn collect_runtime_annotation_lines(
+    dex: &DexFile,
+    annotations_off: u32,
+) -> RuntimeAnnotationLines {
+    let mut out = RuntimeAnnotationLines::default();
+    if annotations_off == 0 {
+        return out;
+    }
+    let Some(dir) = dex.annotations.get(&annotations_off) else {
+        return out;
+    };
+    let render_item = |item: &crate::annotation::AnnotationItem| -> Option<String> {
+        if item.visibility != 1 {
+            return None; // RUNTIME only for source
+        }
+        let ty = dex
+            .get_type_descriptor(item.annotation.type_idx)
+            .ok()
+            .map(pretty_class)?;
+        let elements = item
+            .annotation
+            .elements
+            .iter()
+            .map(|(name_idx, value)| {
+                let name = dex.get_string(*name_idx).unwrap_or("?");
+                let text = encoded_value_to_java(dex, value)
+                    .unwrap_or_else(|| encoded_value_metadata_text(dex, value));
+                format!("{name} = {text}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!("@{ty}({elements})"))
+    };
+    let push_set = |set_off: u32, sink: &mut Vec<String>| {
+        if set_off == 0 {
+            return;
+        }
+        let Some(entries) = dex.annotation_sets.get(&set_off) else {
+            return;
+        };
+        for item_off in entries {
+            if let Some(item) = dex.annotation_items.get(item_off) {
+                if let Some(line) = render_item(item) {
+                    sink.push(line);
+                }
+            }
+        }
+    };
+    push_set(dir.class_annotations_off, &mut out.class);
+    for f in &dir.fields {
+        if f.annotations_off != 0 {
+            let mut lines = Vec::new();
+            push_set(f.annotations_off, &mut lines);
+            if !lines.is_empty() {
+                out.fields.insert(f.field_idx.0, lines);
+            }
+        }
+    }
+    for m in &dir.methods {
+        if m.annotations_off != 0 {
+            let mut lines = Vec::new();
+            push_set(m.annotations_off, &mut lines);
+            if !lines.is_empty() {
+                out.methods.insert(m.method_idx.0, lines);
+            }
+        }
+    }
+    out
 }
 
 /// Type-zero Java literal for use as the default initializer on a
@@ -1265,6 +1654,8 @@ fn emit_methods(
     is_kt_facade: bool,
     ctx: &RunCtx,
     r8_census: &r8_inversion::TrampolineCensus,
+    // PATCHED (asc, DX-P05a): RUNTIME annotation lines per method_idx.
+    method_annotations: &BTreeMap<u32, Vec<String>>,
     // PATCHED (asc, DX-P03): per-class outcome sink; `None` on the
     // legacy path. Records one MethodOutcome per method, classified
     // at the exact branch that decides its fate — never by inspecting
@@ -1380,6 +1771,7 @@ fn emit_methods(
             is_kt_facade,
             ctx,
             r8_census,
+            method_annotations.get(&em.method_idx.0).map(Vec::as_slice).unwrap_or(&[]),
             if sink.is_some() { Some(&mut rec) } else { None },
         ) {
             Ok(source) => {
@@ -1702,6 +2094,9 @@ fn decompile_method(
     // panic-on-err). The legacy boundaries fill this from env once.
     rctx: &RunCtx,
     r8_census: &r8_inversion::TrampolineCensus,
+    // PATCHED (asc, DX-P05a): pre-rendered RUNTIME annotation lines
+    // for this method (empty on the enum-subclass inline path).
+    method_ann_lines: &[String],
     // PATCHED (asc, DX-P03): per-method record for the checked entry
     // (unrecognized regions + name/type fallback diagnostics).
     mut rec: Option<&mut crate::analysis::MethodRecord>,
@@ -2086,6 +2481,7 @@ fn decompile_method(
             None
         },
         throws: &throws_types,
+        annotations: method_ann_lines,
         is_facade_method: is_kt_facade,
     };
     let out = emit::emit_method(&mut stmt, &env, dex, &info, &mut ctx, &code.payloads);
@@ -3735,6 +4131,7 @@ fn extract_subclass_inline(
             false,
             rctx,
             &empty_census,
+            &[],
             None,
         ) {
             Ok(source) => method_bodies.push(source),

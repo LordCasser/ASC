@@ -1118,8 +1118,18 @@ fn emit_invoke(insn: &SsaInsn, dex: &DexFile, kind: InvokeKind, ctx: &EmitCtx) -
                     // Check if receiver is `this` → this is a super() or this() delegation
                     let is_this = ctx.this_var.as_ref() == insn.uses.first();
                     if is_this {
-                        // Constructor delegation: super(args)
-                        format!("super({})", args.join(", "))
+                        // PATCHED (asc, DX-P05b): delegate to this(...) when
+                        // the target <init> belongs to the class being
+                        // decompiled, super(...) for any other class (the
+                        // previous code rendered every delegation as
+                        // super(...), turning this(5) into super(5)).
+                        let is_own_init =
+                            ctx.own_class_desc.as_deref() == Some(target_class_desc);
+                        if is_own_init {
+                            format!("this({})", args.join(", "))
+                        } else {
+                            format!("super({})", args.join(", "))
+                        }
                     } else {
                         // Object allocation: new ClassName(args)
                         format!("new {class}({})", args.join(", "))
@@ -4452,6 +4462,14 @@ pub struct MethodInfo<'a> {
     /// Renders as ` throws T1, T2` after the parameter list, before
     /// the opening brace.
     pub throws: &'a [crate::ids::TypeIdx],
+    /// PATCHED (asc, DX-P05a): pre-rendered RUNTIME-visibility
+    /// annotation lines for this method (`@com.example.Foo(x = 1)`),
+    /// written one per line directly above the signature. Empty when
+    /// the method carries no runtime annotations (the common case).
+    /// BUILD/SYSTEM-visibility annotations are preserved in
+    /// `BackendMetadata::annotations` instead (they are not
+    /// source-expressible constructs).
+    pub annotations: &'a [String],
     /// When true, render the method as a Kotlin top-level `fun` —
     /// `fun name(p: T): R { ... }` rather than the Java
     /// `<flags> R name(T p) { ... }` shape. Set by `decompile_class`
@@ -5348,6 +5366,11 @@ pub fn emit_method(
     ctx.return_type = Some(info.return_type.clone());
 
     let mut out = String::new();
+    // PATCHED (asc, DX-P05a): RUNTIME annotation lines above the
+    // signature, standard Java placement.
+    for line in info.annotations {
+        let _ = writeln!(out, "{line}");
+    }
 
     let method_name = info.name;
     let params = info.params;

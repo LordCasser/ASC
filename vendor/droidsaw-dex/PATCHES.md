@@ -150,7 +150,7 @@ Field key (per `maintain-patched-analysis-backends` design §2):
   entry covering the same guarantees; or the ASC core stops vendoring this
   crate.
 
-## DX-P04 — G02: static initial values dropped for non-final fields (registered; fix lands in A05)
+## DX-P04 — G02: static initial values dropped for non-final fields (LANDED in A05)
 
 - **问题输入**: `tests/fixtures/contracts/inputs/g02-static-initializers.dex`
   (sha256 `5686e4a4…f20fe`): `Lexample/Statics;` with encoded-array values
@@ -176,7 +176,7 @@ Field key (per `maintain-patched-analysis-backends` design §2):
 - **移除条件**: fix merged and the DECL-01 matrix passes; ledger entry stays as
   historical record.
 
-## DX-P05 — metadata / control-flow semantic fixes (umbrella; A05)
+## DX-P05 — metadata / control-flow semantic fixes (umbrella; partially landed in A05, see status)
 
 - **问题输入**: the DECL-02/DECL-03 fixture matrix (annotations, generic
   signatures, throws, inner/enclosing, debug info, V01 use-before-declare
@@ -208,3 +208,44 @@ ledger rewrite. `tests/self_contained.rs` in the root crate scans `src/` only
 `vendor/`), so the subprocess-based env matrix test in this crate's
 `tests/asc_contracts.rs` does not violate the no-process-spawn rule for
 production code.
+
+
+---
+
+## A05 落地状态（2026-09-15，集成 owner 记录）
+
+**已落地并有回归测试**（tests/asc_semantics.rs，13 项全绿；asc_contracts 8 项）：
+
+- DX-P04：`StaticValues` 诚实解码（elision 尾项=类型默认值、截断=malformed 上报、
+  非法类型冲突上报），emit_fields 不再以 `is_final` 门控 encoded 初值，
+  clinit 先读后写次序保留，final 标志在 clinit 再写场景降级并出诊断。
+  测试：`dxp04_all_static_initial_values_emitted`、`dxp04_clinit_before_overwrite_read_sees_encoded_value`、
+  `dxp04_truncated_static_values_reported_not_zero_filled`、`dxp04_type_conflict_reported_not_silently_rendered`、
+  `dxp04_final_lowered_for_clinit_rewritten_value`。
+- DX-P05a：RUNTIME 注解进源码、BUILD/SYSTEM 进 `BackendMetadata`；方法
+  prototype/access；debug 参数与局部变量名；无 debug info 仍 Complete。
+  测试：`dxp05a_annotations_metadata_lossless_and_runtime_in_source`、
+  `dxp05a_member_reports_prototype_and_access`、
+  `dxp05a_debug_param_and_local_names_in_source`、`dxp05a_no_debug_info_still_complete`。
+- DX-P05b（部分）：构造器 this(...) 委托识别（own-class `<init>` 渲染
+  `this(...)` 而非 `super(...)`）；DECL-03 语义矩阵 fixture
+  （`decl03_control_flow_constructors_and_payloads`：分支极性、packed/sparse
+  switch payload、宽类型字面量、try/catch 两处理器、native/abstract、长方法）。
+- IN-03 后端侧：035/037/038/039/040/041 header 变体经 parse_for_analysis
+  解析；cdex/odex/未知版本拒绝。测试：`in03_*` 三项。
+
+**已知未修复缺陷**（如实登记，阻断 DECL-03 全绿；均为上游既有、经
+干净 A04 基线对照确认非本轮回归）：
+
+1. 循环结构恢复：`for` 形态（sum/i 局部变量 + if_ge 回边）退化为
+   `if (…) {} else { do {} while (v0); }` 且 v0 未声明——SSA 对该形态
+   的 phi 恢复失败后回退渲染。方法仍标记 Emitted（DECL-04 关注点）。
+2. fill-array-data 初始化 sugar 渲染错误（`new int{ v6 }`），数组内容
+   未从 payload 展开。
+3. 上游 lib 单元测试因 `exclude=/tests` 缺 fixture 自 A04 起不可编译
+   （pre-existing；ASC 验证口径为 asc_contracts + asc_semantics 两个
+   显式 target）。
+
+测试基建修复（tests/support，非上游语义）：type_list 4 字节对齐
+（androguard 仲裁确认违反规范）、if-lt/if-ge/if-lez 操作码勘误、
+switch/fill payload 32 位偏移的第二个占位字、若干 clippy 项。

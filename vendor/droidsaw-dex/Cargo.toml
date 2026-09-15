@@ -55,6 +55,13 @@ name = "asc_contracts"
 path = "tests/asc_contracts.rs"
 harness = false
 
+# PATCHED (asc, DX-P04/DX-P05): A05 semantics-matrix tests. Default
+# harness (libtest) — plain in-process fixture tests built by
+# tests/support/mod.rs (self-contained mini DEX builder).
+[[test]]
+name = "asc_semantics"
+path = "tests/asc_semantics.rs"
+
 [[example]]
 name = "emit_audit"
 path = "examples/emit_audit.rs"

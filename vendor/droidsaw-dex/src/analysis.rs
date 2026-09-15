@@ -306,6 +306,16 @@ pub enum DiagnosticCode {
     ScopedFallbackToFull,
     /// A scoped parse cannot produce cross-class R8-origin comments.
     R8OriginCommentsDropped,
+    /// PATCHED (asc, DX-P04): the class_def's `static_values`
+    /// encoded_array is truncated/malformed — entries beyond the
+    /// decodable prefix are unknown and were NOT zero-filled.
+    StaticValuesTruncated,
+    /// PATCHED (asc, DX-P04): a `final` field's access flag was lowered
+    /// in the emitted source so the declaration initializer (encoded
+    /// value) and the `<clinit>` reassignment can coexist. The raw
+    /// flags stay in `StaticFieldReport::access_flags`. Rendering
+    /// decision only — does not affect completeness.
+    FinalFlagLowered,
     /// The DEX carries tolerant-parse failure records
     /// (`DexFile::parse_errors`).
     ParseErrorsPresent,
@@ -345,7 +355,18 @@ pub enum InitializerDropReason {
     /// The encoded value exists but `encoded_value_to_java` cannot
     /// render it; the emitter may substitute a type-default literal,
     /// hiding the unknown value (DECL-01 forbids that silently).
+    /// PATCHED (asc, DX-P04): since DX-P04 the emitter no longer
+    /// zero-fills a present-but-unrenderable value — it reports this
+    /// reason (an incompleteness) and leaves the declaration bare.
     UnrenderableValue,
+    /// PATCHED (asc, DX-P04): the encoded_array declared an entry for
+    /// this field position but the bytes were truncated/malformed, so
+    /// the value is unknown. Never zero-filled (DECL-01).
+    TruncatedStaticValues,
+    /// PATCHED (asc, DX-P04): the encoded value's tag conflicts with
+    /// the field's declared type (e.g. String value on an `int`
+    /// field). Reported instead of rendered; DECL-01 type-conflict row.
+    TypeConflict,
 }
 
 /// Per-static-field record for [`BackendMetadata`]. This is the G02
@@ -364,6 +385,13 @@ pub struct StaticFieldReport {
     /// exists **and** it renders; `None` when the slot is elided or the
     /// value is unrenderable (distinguish via [`Self::drop_reason`]).
     pub encoded_value_java: Option<String>,
+    /// PATCHED (asc, DX-P04): lossless metadata-grade rendering of the
+    /// encoded-array entry whenever one exists at this slot (including
+    /// shapes Java source cannot express — Method / MethodType /
+    /// MethodHandle / Annotation values render as typed reference
+    /// text). `None` only when the slot is elided/truncated/unreadable,
+    /// so a present-but-dropped value is never silently gone.
+    pub encoded_value_metadata: Option<String>,
     /// Whether the emitted declaration carries an `= <literal>` part.
     pub initializer_emitted: bool,
     /// Why an existing encoded value was not reflected, when applicable.
@@ -531,6 +559,131 @@ pub struct BackendMetadata {
     pub instance_field_count: usize,
     /// Direct + virtual method count from `class_data`.
     pub method_count: usize,
+    /// PATCHED (asc, DX-P05a): every annotation carried by the class's
+    /// annotation directory, on every target (class / field / method /
+    /// parameter) and in every visibility (BUILD / RUNTIME / SYSTEM),
+    /// with lossless element rendering. RUNTIME-visibility annotations
+    /// are additionally rendered into the source; BUILD/SYSTEM shapes
+    /// live only here.
+    pub annotations: Vec<AnnotationReport>,
+    /// PATCHED (asc, DX-P05a): raw `dalvik.annotation.Signature`
+    /// string, joined in encoded order. Java generics are not
+    /// reconstructed into source (a wrong generic header is worse than
+    /// an honest metadata record); the signature is preserved verbatim.
+    pub generic_signature: Option<String>,
+    /// PATCHED (asc, DX-P05a): `dalvik.annotation.InnerClass` facts for
+    /// this class (raw access flags + simple name when present).
+    pub inner_class: Option<InnerClassReport>,
+    /// PATCHED (asc, DX-P05a): `dalvik.annotation.EnclosingClass` /
+    /// `dalvik.annotation.EnclosingMethod` facts for this class.
+    pub enclosing: Option<EnclosingReport>,
+    /// PATCHED (asc, DX-P05a): per-instance-field raw metadata (the
+    /// source render already carries these; this is the lossless
+    /// structured copy keyed by `field_idx`).
+    pub instance_field_reports: Vec<FieldMetaReport>,
+    /// PATCHED (asc, DX-P05a): per-method raw metadata including the
+    /// prototype descriptor (identity is `method_idx`).
+    pub method_reports: Vec<MethodMetaReport>,
+}
+
+/// PATCHED (asc, DX-P05a): annotation visibility (the annotation_item
+/// visibility byte).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationVisibility {
+    /// 0 — not visible at runtime (build-time only).
+    Build,
+    /// 1 — visible reflectively at runtime.
+    Runtime,
+    /// 2 — system (dalvik language-mapping) annotations.
+    System,
+}
+
+/// PATCHED (asc, DX-P05a): what an annotation is attached to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationTarget {
+    /// The class itself.
+    Class,
+    /// A field, by `field_ids` index.
+    Field {
+        /// Which field.
+        field_idx: u32,
+    },
+    /// A method, by `method_ids` index.
+    Method {
+        /// Which method.
+        method_idx: u32,
+    },
+    /// One method parameter (annotation_set_ref_list entry).
+    Parameter {
+        /// Which method.
+        method_idx: u32,
+        /// Zero-based parameter position.
+        index: u32,
+    },
+}
+
+/// PATCHED (asc, DX-P05a): one structured annotation with lossless
+/// element rendering (values render through the metadata-grade
+/// encoded-value text, so Method / MethodType / MethodHandle /
+/// nested-Annotation values are preserved too).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnnotationReport {
+    /// What the annotation is attached to.
+    pub target: AnnotationTarget,
+    /// Visibility byte interpretation.
+    pub visibility: AnnotationVisibility,
+    /// Annotation type descriptor (`Lcom/example/Foo;`).
+    pub type_descriptor: String,
+    /// Elements in encoded order: (name, metadata-grade value text).
+    pub elements: Vec<(String, String)>,
+}
+
+/// PATCHED (asc, DX-P05a): `dalvik.annotation.InnerClass` facts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InnerClassReport {
+    /// Raw `accessFlags` element.
+    pub access_flags: u32,
+    /// Simple name element, when present (anonymous classes omit it).
+    pub name: Option<String>,
+}
+
+/// PATCHED (asc, DX-P05a): enclosing-class / enclosing-method facts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnclosingReport {
+    /// Enclosing class descriptor (EnclosingClass.value or
+    /// EnclosingMethod.class).
+    pub class: Option<String>,
+    /// Enclosing method name, when EnclosingMethod.method is a real
+    /// method reference (absent for constructors/initializers).
+    pub method: Option<String>,
+}
+
+/// PATCHED (asc, DX-P05a): raw instance-field metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldMetaReport {
+    /// `field_ids` index (identity).
+    pub field_idx: u32,
+    /// Field name.
+    pub name: String,
+    /// Field type descriptor.
+    pub type_descriptor: String,
+    /// Raw access flags from `class_data`.
+    pub access_flags: u32,
+}
+
+/// PATCHED (asc, DX-P05a): raw method metadata with prototype.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MethodMetaReport {
+    /// `method_ids` index (identity).
+    pub method_idx: u32,
+    /// Method name.
+    pub name: String,
+    /// Raw access flags from `class_data`.
+    pub access_flags: u32,
+    /// Prototype rendered as `(param,param)ret` from type descriptors.
+    pub prototype: String,
+    /// Direct (true) vs virtual (false) list membership.
+    pub is_direct: bool,
 }
 
 /// The result of [`decompile_checked`].
@@ -663,9 +816,9 @@ pub fn parse_for_analysis<'a>(
     }
     abort_check(control, budget)?;
     let (dex, fell_back) = match &options.scope {
-        ParseScope::Full => (DexFile::parse_view(view, false, None)?, false),
+        ParseScope::Full => (DexFile::parse_view(view, true, None)?, false),
         ParseScope::ScopedToDescriptor { descriptor } => {
-            let scoped = DexFile::parse_view(view, false, Some(descriptor.as_str()))?;
+            let scoped = DexFile::parse_view(view, true, Some(descriptor.as_str()))?;
             let matched = scoped.class_defs.iter().any(|cd| {
                 scoped
                     .type_descriptors
@@ -677,7 +830,7 @@ pub fn parse_for_analysis<'a>(
                 (scoped, false)
             } else {
                 abort_check(control, budget)?;
-                (DexFile::parse_view(view, false, None)?, true)
+                (DexFile::parse_view(view, true, None)?, true)
             }
         }
     };
@@ -872,6 +1025,175 @@ fn build_metadata(
         }
     };
 
+    // PATCHED (asc, DX-P05a): lossless metadata — annotations on every
+    // target and visibility, generic signature, inner/enclosing facts,
+    // per-member raw reports.
+    let annotations = collect_annotation_reports(dex, class_def);
+    let generic_signature = annotations
+        .iter()
+        .find(|a| {
+            a.visibility == AnnotationVisibility::System
+                && a.type_descriptor == "Ldalvik/annotation/Signature;"
+        })
+        .and_then(|a| {
+            // The Signature `value` element renders as `{ "L..", "\n", .. }`
+            // via the metadata-grade text; extract the quoted strings and
+            // join them verbatim for an honest raw signature.
+            let joined = a
+                .elements
+                .iter()
+                .find(|(name, _)| name == "value")
+                .map(|(_, text)| text.clone())?;
+            let parts: Vec<String> = quoted_parts(&joined);
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.concat())
+            }
+        });
+    let inner_class = annotations.iter().find_map(|a| {
+        if a.type_descriptor != "Ldalvik/annotation/InnerClass;" {
+            return None;
+        }
+        let access_flags = a
+            .elements
+            .iter()
+            .find(|(name, _)| name == "accessFlags")
+            .and_then(|(_, text)| text.parse::<u32>().ok())
+            .unwrap_or(0);
+        let name = a
+            .elements
+            .iter()
+            .find(|(name, _)| name == "name")
+            .and_then(|(_, text)| unquote(text));
+        Some(InnerClassReport { access_flags, name })
+    });
+    // EnclosingClass / EnclosingMethod facts are read from the raw
+    // annotation items (not the rendered reports) so the class stays a
+    // real `L…;` descriptor.
+    let enclosing = {
+        let find_item = |desc: &str| {
+            let dir = dex.annotations.get(&class_def.annotations_off)?;
+            if dir.class_annotations_off == 0 {
+                return None;
+            }
+            let entries = dex.annotation_sets.get(&dir.class_annotations_off)?;
+            for item_off in entries {
+                let Some(item) = dex.annotation_items.get(item_off) else {
+                    continue;
+                };
+                if dex.get_type_descriptor(item.annotation.type_idx).ok() == Some(desc) {
+                    return Some(item.clone());
+                }
+            }
+            None
+        };
+        if let Some(item) = find_item("Ldalvik/annotation/EnclosingClass;") {
+            item.annotation.elements.iter().find_map(|(name_idx, v)| {
+                let name = dex.get_string(*name_idx).ok()?;
+                if name != "value" {
+                    return None;
+                }
+                match v {
+                    crate::annotation::EncodedValue::Type(t) => Some(EnclosingReport {
+                        class: dex.get_type_descriptor(*t).ok().map(str::to_string),
+                        method: None,
+                    }),
+                    _ => None,
+                }
+            })
+        } else if let Some(item) = find_item("Ldalvik/annotation/EnclosingMethod;") {
+            let mut class = None;
+            let mut method = None;
+            for (name_idx, v) in &item.annotation.elements {
+                let Ok(name) = dex.get_string(*name_idx) else {
+                    continue;
+                };
+                // (compared as strings: DexString == &str)
+                if name == "class" {
+                    if let crate::annotation::EncodedValue::Type(t) = v {
+                        class = dex.get_type_descriptor(*t).ok().map(str::to_string);
+                    }
+                } else if name == "method" {
+                    if let crate::annotation::EncodedValue::Method(m) = v {
+                        #[allow(clippy::as_conversions, reason = "PROOF: widen u32→usize; m.0 bounded < dex.methods.len() by parser validation; lossless on 32+-bit platforms.")]
+                        if let Some(mitem) = dex.methods.get(m.0 as usize) {
+                            method = dex.get_string(mitem.name_idx).ok().map(str::to_string);
+                        }
+                    }
+                }
+            }
+            Some(EnclosingReport { class, method })
+        } else {
+            None
+        }
+    };
+
+    // Per-member raw reports from class_data (declared order).
+    let mut instance_field_reports = Vec::new();
+    let mut method_reports = Vec::new();
+    if class_def.class_data_off != 0 {
+        if let Ok(cd) = crate::decode::parse_class_data(parsed.data, class_def.class_data_off) {
+            for ef in &cd.instance_fields {
+                #[allow(clippy::as_conversions, reason = "PROOF: widen u32→usize; field_idx.0 bounded < dex.fields.len() by parser validation of field_ids pool; lossless on 32+-bit platforms.")]
+                if let Some(field) = dex.fields.get(ef.field_idx.0 as usize) {
+                    instance_field_reports.push(FieldMetaReport {
+                        field_idx: ef.field_idx.0,
+                        name: dex.get_string(field.name_idx).unwrap_or("?").to_string(),
+                        type_descriptor: dex
+                            .get_type_descriptor(field.type_idx)
+                            .unwrap_or("?")
+                            .to_string(),
+                        access_flags: ef.access_flags,
+                    });
+                }
+            }
+            for (is_direct, list) in [
+                (true, &cd.direct_methods),
+                (false, &cd.virtual_methods),
+            ] {
+                for em in list {
+                    #[allow(clippy::as_conversions, reason = "PROOF: widen u32→usize; method_idx.0 bounded < dex.methods.len() and proto_idx.0 < dex.protos.len() by parser validation; lossless on 32+-bit platforms.")]
+                    if let Some(m) = dex.methods.get(em.method_idx.0 as usize) {
+                        let name = dex.get_string(m.name_idx).unwrap_or("?").to_string();
+                        let prototype = dex
+                            .protos
+                            .get(m.proto_idx.0 as usize)
+                            .map(|p| {
+                                let ret = dex
+                                    .get_type_descriptor(p.return_type_idx)
+                                    .unwrap_or("?");
+                                let params: Vec<String> = if p.parameters_off == 0 {
+                                    Vec::new()
+                                } else {
+                                    dex.type_lists
+                                        .get(&p.parameters_off)
+                                        .map(|list| {
+                                            list.iter()
+                                                .filter_map(|t| {
+                                                    dex.get_type_descriptor(*t).ok()
+                                                })
+                                                .map(str::to_string)
+                                                .collect()
+                                        })
+                                        .unwrap_or_default()
+                                };
+                                format!("({}){}", params.concat(), ret)
+                            })
+                            .unwrap_or_else(|| "?".to_string());
+                        method_reports.push(MethodMetaReport {
+                            method_idx: em.method_idx.0,
+                            name,
+                            access_flags: em.access_flags,
+                            prototype,
+                            is_direct,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     BackendMetadata {
         class_def_idx,
         descriptor,
@@ -882,7 +1204,133 @@ fn build_metadata(
         static_fields: outcome.static_fields.clone(),
         instance_field_count,
         method_count,
+        annotations,
+        generic_signature,
+        inner_class,
+        enclosing,
+        instance_field_reports,
+        method_reports,
     }
+}
+
+/// PATCHED (asc, DX-P05a): collect every annotation in the class's
+/// annotation directory, all targets and visibilities, with lossless
+/// element rendering.
+fn collect_annotation_reports(
+    dex: &crate::parser::DexFile,
+    class_def: &crate::ids::ClassDefItem,
+) -> Vec<AnnotationReport> {
+    let mut out = Vec::new();
+    let Some(dir) = dex.annotations.get(&class_def.annotations_off) else {
+        return out;
+    };
+    let push_set = |set_off: u32, target: AnnotationTarget, out: &mut Vec<AnnotationReport>| {
+        let Some(entries) = dex.annotation_sets.get(&set_off) else {
+            return;
+        };
+        for item_off in entries {
+            let Some(item) = dex.annotation_items.get(item_off) else {
+                continue;
+            };
+            let visibility = match item.visibility {
+                0 => AnnotationVisibility::Build,
+                1 => AnnotationVisibility::Runtime,
+                _ => AnnotationVisibility::System,
+            };
+            let type_descriptor = dex
+                .get_type_descriptor(item.annotation.type_idx)
+                .unwrap_or("?")
+                .to_string();
+            let elements = item
+                .annotation
+                .elements
+                .iter()
+                .map(|(name_idx, value)| {
+                    (
+                        dex.get_string(*name_idx).unwrap_or("?").to_string(),
+                        crate::classes::encoded_value_metadata_text(dex, value),
+                    )
+                })
+                .collect();
+            out.push(AnnotationReport {
+                target,
+                visibility,
+                type_descriptor,
+                elements,
+            });
+        }
+    };
+    if dir.class_annotations_off != 0 {
+        push_set(
+            dir.class_annotations_off,
+            AnnotationTarget::Class,
+            &mut out,
+        );
+    }
+    for f in &dir.fields {
+        if f.annotations_off != 0 {
+            push_set(
+                f.annotations_off,
+                AnnotationTarget::Field {
+                    field_idx: f.field_idx.0,
+                },
+                &mut out,
+            );
+        }
+    }
+    for m in &dir.methods {
+        if m.annotations_off != 0 {
+            push_set(
+                m.annotations_off,
+                AnnotationTarget::Method {
+                    method_idx: m.method_idx.0,
+                },
+                &mut out,
+            );
+        }
+    }
+    for p in &dir.parameters {
+        if p.annotations_off == 0 {
+            continue;
+        }
+        let Some(refs) = dex.annotation_set_ref_lists.get(&p.annotations_off) else {
+            continue;
+        };
+        for (index, set_off) in refs.iter().enumerate() {
+            if *set_off != 0 {
+                push_set(
+                    *set_off,
+                    AnnotationTarget::Parameter {
+                        method_idx: p.method_idx.0,
+                        #[allow(clippy::cast_possible_truncation, clippy::as_conversions, reason = "PROOF: index is an annotation_set_ref_list position (< 256 in practice, bounded by the decoded list length); u32 widening is exact for any DEX-representable list.")]
+                        index: index as u32,
+                    },
+                    &mut out,
+                );
+            }
+        }
+    }
+    out
+}
+
+/// Extract the quoted string parts of a metadata-grade array text
+/// (`{ "Lfoo;", "…" }`) — used to reassemble the raw dalvik Signature.
+/// Odd-indexed fragments of a quote-split are the quoted contents;
+/// no string slicing needed (the renderer's own text is well-formed).
+fn quoted_parts(text: &str) -> Vec<String> {
+    text.split('"')
+        .enumerate()
+        .filter(|(i, _)| i % 2 == 1)
+        .map(|(_, chunk)| chunk.to_string())
+        .collect()
+}
+
+/// Unquote a metadata-grade string value text (`"foo"` → `foo`).
+fn unquote(text: &str) -> Option<String> {
+    text.trim()
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .map(str::to_string)
 }
 
 /// Whether a tolerant-parse failure kind means a subsection's data was
@@ -936,10 +1384,21 @@ fn build_completeness(
         }
     }
     for field in &outcome.static_fields {
+        // PATCHED (asc, DX-P04): every reason that means "an encoded
+        // value the DEX carries is not reflected in the source" counts
+        // as an incompleteness. `AssignedInClinit`/`R8InlinedAssignment`
+        // stay intentional-only shapes that cannot carry a rendered
+        // declaration initializer under javac rules — but since DX-P04
+        // an encoded value present on such a field IS emitted (with the
+        // final flag lowered), so neither fires for a present value.
         let dropped = matches!(
             field.drop_reason,
-            Some(InitializerDropReason::NonFinalStatic)
-                | Some(InitializerDropReason::UnrenderableValue)
+            Some(
+                InitializerDropReason::NonFinalStatic
+                    | InitializerDropReason::UnrenderableValue
+                    | InitializerDropReason::TruncatedStaticValues
+                    | InitializerDropReason::TypeConflict
+            )
         );
         if dropped {
             reasons.push(IncompleteReason::StaticInitializerDropped {
