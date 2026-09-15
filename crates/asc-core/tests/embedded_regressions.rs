@@ -324,3 +324,22 @@ fn reference_locations_budget_is_combined_across_dexes() {
         .expect_err("four locations must exceed the combined location ceiling");
     assert_kind(&error, ErrorKind::ResourceLimit);
 }
+
+#[test]
+fn out_of_range_standard_data_offsets_return_errors_without_panicking() {
+    let engine = Engine::new(EngineOptions::default()).unwrap();
+    let control = OperationControl::new();
+    for offset in [G02_DEX.len() as u32 + 1, u32::MAX] {
+        let mut broken = G02_DEX.to_vec();
+        broken[0x6c..0x70].copy_from_slice(&offset.to_le_bytes());
+        let raw = engine.open_bytes(Arc::from(broken.clone()), InputKind::Dex, &control).unwrap();
+        let error = engine.classes(&raw, &ClassFilter::none(), &control).unwrap_err();
+        assert_kind(&error, ErrorKind::MalformedInput);
+        let apk = apk_with_dexes(&[("classes.dex", &broken)]);
+        let artifact = open_apk(&engine, &apk);
+        let error = engine.classes(&artifact, &ClassFilter::none(), &control).unwrap_err();
+        assert_kind(&error, ErrorKind::MalformedInput);
+    }
+    let artifact = engine.open_bytes(Arc::from(G02_DEX), InputKind::Dex, &control).unwrap();
+    assert!(!engine.classes(&artifact, &ClassFilter::none(), &control).unwrap().value().is_empty());
+}

@@ -44,3 +44,7 @@ cargo test -p asc-core --all-features --test embedded_regressions --locked
 ## 工具链说明
 
 本机 `rustup run 1.93.1 rustc/cargo --version` 确认为 1.93.1；同命令调用 cargo clippy 时实际选择 clippy 0.1.98。严格 `-D warnings` 被既有 vendor `chunks_exact_to_as_chunks` 警告阻断，未将其记为通过。新增的 collapsible_if 警告已修正；未顺带重排 vendor 或修改既有 lint 基线。
+
+## 下游接入复查：EMB-09
+
+`validate_standard_dex` 未先校验 `data_off <= len` 就做减法；公开 API 用 G02 的 data_off=len+1 复现 debug panic（`/tmp/asc-audit-logs/data-range-before.log`）。改用 checked_sub 后，len+1/u32::MAX 的 raw DEX 和 APK 路径均返回 MalformedInput，Engine 可继续处理有效输入。9 个 embedded regressions 全通过（`/tmp/asc-audit-logs/data-range-after.log`）。这项单点修复独立于内存账户/provider 功能计划，见归档 change `reject-out-of-range-dex-data`。

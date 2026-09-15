@@ -224,7 +224,7 @@ fn validate_standard_dex(data: &[u8], control: &ControlProbe<'_>) -> Result<(), 
     // whose builders historically leave both zero).
     let data_off = read(data, 0x6c).unwrap_or(0) as usize;
     let data_size = read(data, 0x68).unwrap_or(0) as usize;
-    if data_off < HEADER_SIZE_STD || data_size != data.len() - data_off {
+    if data_off < HEADER_SIZE_STD || data.len().checked_sub(data_off) != Some(data_size) {
         return Err(malformed(format!(
             "header declares data_off {data_off}/data_size {data_size}, which does not tile \
              the {} byte file",
