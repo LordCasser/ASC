@@ -1,0 +1,132 @@
+{
+  "facts_kind": "references",
+  "artifact": {
+    "input": "inputs/ref03-opcode-families.dex",
+    "dex_catalog": [
+      {
+        "entry_ordinal": 0,
+        "logical_ordinal": 0,
+        "raw_entry_name": "<memory.dex>",
+        "version": "035",
+        "header_offset": 0
+      }
+    ]
+  },
+  "queries": [
+    {
+      "query": { "kind": "string", "mode": "literal", "pattern": "str" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Ops;",
+          "name": "mstrings",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "string", "index": 4, "value": "strA", "code_unit_offsets": [0] },
+            { "kind": "string", "index": 5, "value": "strB", "code_unit_offsets": [2] }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "string", "mode": "literal", "pattern": "strB" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Ops;",
+          "name": "mstrings",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "string", "index": 5, "value": "strB", "code_unit_offsets": [2] }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "type", "mode": "literal", "pattern": "OpsType" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 1,
+          "owner": "Lexample/Ops;",
+          "name": "mtypes",
+          "prototype": "()V",
+          "targets": [
+            {
+              "kind": "type",
+              "index": 4,
+              "value": "LOpsType;",
+              "code_unit_offsets": [0, 2, 4, 6, 8, 10, 13]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "field", "mode": "literal", "name": "fTarget" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 2,
+          "owner": "Lexample/Ops;",
+          "name": "mfields",
+          "prototype": "()V",
+          "targets": [
+            {
+              "kind": "field",
+              "index": 0,
+              "value": { "owner": "Lexample/Ops;", "name": "fTarget", "field_type": "I" },
+              "code_unit_offsets": [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "method", "mode": "literal", "name": "target" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 3,
+          "owner": "Lexample/Ops;",
+          "name": "minvoke",
+          "prototype": "()V",
+          "targets": [
+            {
+              "kind": "method",
+              "index": 8,
+              "value": { "owner": "Lexample/Ops;", "name": "target", "prototype": "()V" },
+              "code_unit_offsets": [0, 3, 6, 9, 12, 15, 18, 21, 24, 27]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "method", "mode": "literal", "name": "poly" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 4,
+          "owner": "Lexample/Ops;",
+          "name": "mpoly",
+          "prototype": "()V",
+          "targets": [
+            {
+              "kind": "method",
+              "index": 9,
+              "value": { "owner": "Lexample/Ops;", "name": "poly", "prototype": "(I)V" },
+              "code_unit_offsets": [0, 4]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "method", "mode": "literal", "name": "m" },
+      "references": []
+    }
+  ]
+}

@@ -6,6 +6,7 @@
 //! sharing the full reader's decoding rules, and answers `None` whenever the prefix
 //! does not reach far enough so the caller falls back instead of trusting a guess.
 
+use super::mutf8;
 use super::read_uleb;
 use crate::bytes::read_u32;
 use anyhow::Result;
@@ -53,10 +54,7 @@ pub(crate) fn class_names(prefix: &[u8]) -> Result<Option<Vec<String>>> {
         let Some(bytes) = string_at(prefix, data_off) else {
             return Ok(None);
         };
-        names.push(
-            droidsaw_dex::mutf8::decode_mutf8(bytes)
-                .unwrap_or_else(|_| String::from_utf8_lossy(bytes).into_owned()),
-        );
+        names.push(mutf8::decode_lossy_string(bytes));
     }
     Ok(Some(names))
 }

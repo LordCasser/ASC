@@ -39,8 +39,17 @@ impl Targets {
     }
 
     pub(super) fn new(indices: impl IntoIterator<Item = u32>) -> Self {
+        Self::with_prefilter(indices, true)
+    }
+
+    /// The structured scan's constructor: an explicit switch for the byte
+    /// pre-filter. The filter only ever skips methods that provably cannot
+    /// carry a target operand, so both settings must produce identical scan
+    /// results; tests assert that equivalence.
+    pub(super) fn with_prefilter(indices: impl IntoIterator<Item = u32>, enabled: bool) -> Self {
         let indices: BTreeSet<u32> = indices.into_iter().collect();
-        let bytes = (indices.len() <= Self::MAX_FILTER_TARGETS).then(|| TargetBytes::new(&indices));
+        let bytes = (enabled && indices.len() <= Self::MAX_FILTER_TARGETS)
+            .then(|| TargetBytes::new(&indices));
         Self { indices, bytes }
     }
 }
@@ -122,5 +131,24 @@ mod tests {
         };
         assert_eq!(filtered, dex.scan_all_classes(kind, &unfiltered).unwrap());
         assert_eq!(filtered.len(), PARALLEL_SCAN_CLASSES);
+    }
+
+    #[test]
+    fn explicit_prefilter_switch_only_disables_acceleration() {
+        let indices = [7u32, 0x1a2b];
+        let on = Targets::with_prefilter(indices, true);
+        let off = Targets::with_prefilter(indices, false);
+        assert!(on.bytes.is_some());
+        assert!(off.bytes.is_none(), "the switch must be able to disable it");
+        // Code carrying an operand lets both settings through; code without
+        // any operand bytes may be skipped by `on` only.
+        assert!(on.might_reference(b"\x1a\x00\x07\x00"));
+        assert!(off.might_reference(b"\x1a\x00\x07\x00"));
+        assert!(!on.might_reference(b"\x03\x00\x00\x00\x00"));
+        assert!(off.might_reference(b"\x03\x00\x00\x00\x00"));
+        for index in indices {
+            assert!(on.contains(index) && off.contains(index));
+        }
+        assert!(!off.contains(9));
     }
 }

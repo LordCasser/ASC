@@ -1,0 +1,148 @@
+{
+  "facts_kind": "references",
+  "artifact": {
+    "input": "inputs/ref04-shared-code-and-overloads.dex",
+    "dex_catalog": [
+      {
+        "entry_ordinal": 0,
+        "logical_ordinal": 0,
+        "raw_entry_name": "<memory.dex>",
+        "version": "035",
+        "header_offset": 0
+      }
+    ]
+  },
+  "queries": [
+    {
+      "query": { "kind": "string", "mode": "literal", "pattern": "tok" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Ident;",
+          "name": "main",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "string", "index": 4, "value": "tok", "code_unit_offsets": [0, 2] }
+          ]
+        },
+        {
+          "dex": "0:0",
+          "method_idx": 1,
+          "owner": "Lexample/Ident;",
+          "name": "run",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "string", "index": 4, "value": "tok", "code_unit_offsets": [0] }
+          ]
+        },
+        {
+          "dex": "0:0",
+          "method_idx": 2,
+          "owner": "Lexample/Ident;",
+          "name": "run",
+          "prototype": "(I)V",
+          "targets": [
+            { "kind": "string", "index": 4, "value": "tok", "code_unit_offsets": [0, 2] }
+          ]
+        },
+        {
+          "dex": "0:0",
+          "method_idx": 3,
+          "owner": "Lexample/Ident;",
+          "name": "alpha",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "string", "index": 4, "value": "tok", "code_unit_offsets": [0] }
+          ]
+        },
+        {
+          "dex": "0:0",
+          "method_idx": 4,
+          "owner": "Lexample/Ident;",
+          "name": "beta",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "string", "index": 4, "value": "tok", "code_unit_offsets": [0] }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "method", "mode": "literal", "name": "run" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Ident;",
+          "name": "main",
+          "prototype": "()V",
+          "targets": [
+            {
+              "kind": "method",
+              "index": 1,
+              "value": { "owner": "Lexample/Ident;", "name": "run", "prototype": "()V" },
+              "code_unit_offsets": [8]
+            },
+            {
+              "kind": "method",
+              "index": 2,
+              "value": { "owner": "Lexample/Ident;", "name": "run", "prototype": "(I)V" },
+              "code_unit_offsets": [11]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "field", "mode": "literal", "name": "f\nield" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Ident;",
+          "name": "main",
+          "prototype": "()V",
+          "targets": [
+            {
+              "kind": "field",
+              "index": 0,
+              "value": { "owner": "Lexample/Ident;", "name": "f\nield", "field_type": "I" },
+              "code_unit_offsets": [14]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "type", "mode": "literal", "pattern": "ctrl" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Ident;",
+          "name": "main",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "type", "index": 4, "value": "Lctrl/Type;", "code_unit_offsets": [6] }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "string", "mode": "literal", "pattern": "a\tb\nc" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Ident;",
+          "name": "main",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "string", "index": 5, "value": "a\tb\nc", "code_unit_offsets": [4] }
+          ]
+        }
+      ]
+    }
+  ]
+}

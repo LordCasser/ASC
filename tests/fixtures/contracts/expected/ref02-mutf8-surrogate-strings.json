@@ -1,0 +1,137 @@
+{
+  "facts_kind": "references",
+  "artifact": {
+    "input": "inputs/ref02-mutf8-strings.dex",
+    "dex_catalog": [
+      {
+        "entry_ordinal": 0,
+        "logical_ordinal": 0,
+        "raw_entry_name": "<memory.dex>",
+        "version": "035",
+        "header_offset": 0
+      }
+    ]
+  },
+  "queries": [
+    {
+      "query": { "kind": "string", "mode": "literal", "pattern": "alpha" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Pool;",
+          "name": "main",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "string", "index": 0, "value": "alpha", "code_unit_offsets": [0] },
+            { "kind": "string", "index": 14, "value": "alpha", "code_unit_offsets": [17] }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "string", "mode": "regex", "pattern": "e.oji" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Pool;",
+          "name": "main",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "string", "index": 1, "value": "emoji😀end", "code_unit_offsets": [2] }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "string", "mode": "literal", "pattern": "a\u0000b" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Pool;",
+          "name": "main",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "string", "index": 2, "value": "a\u0000b", "code_unit_offsets": [4] }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "string", "mode": "literal", "pattern": "tok" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Pool;",
+          "name": "main",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "string", "index": 3, "value": "tok", "code_unit_offsets": [6] }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "string", "mode": "regex", "pattern": "tok.n" },
+      "references": []
+    },
+    {
+      "query": { "kind": "type", "mode": "literal", "pattern": "po😀ol" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Pool;",
+          "name": "main",
+          "prototype": "()V",
+          "targets": [
+            { "kind": "type", "index": 3, "value": "Lpo😀ol;", "code_unit_offsets": [10] }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "field", "mode": "literal", "name": "fi😀eld" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Pool;",
+          "name": "main",
+          "prototype": "()V",
+          "targets": [
+            {
+              "kind": "field",
+              "index": 0,
+              "value": { "owner": "Lexample/Pool;", "name": "fi😀eld", "field_type": "I" },
+              "code_unit_offsets": [12]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "query": { "kind": "method", "mode": "literal", "name": "m😀th" },
+      "references": [
+        {
+          "dex": "0:0",
+          "method_idx": 0,
+          "owner": "Lexample/Pool;",
+          "name": "main",
+          "prototype": "()V",
+          "targets": [
+            {
+              "kind": "method",
+              "index": 1,
+              "value": { "owner": "Lexample/Pool;", "name": "m😀th", "prototype": "()V" },
+              "code_unit_offsets": [14]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
