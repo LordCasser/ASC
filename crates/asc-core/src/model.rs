@@ -250,8 +250,9 @@ pub struct ClassDescriptor {
 }
 
 impl ClassDescriptor {
-    /// Validates an already-normalized `L...;` descriptor.
-    pub(crate) fn from_normalized(descriptor: String) -> Result<Self, Error> {
+    /// Validates an already-normalized `L...;` descriptor; hosts use the
+    /// query builders (`query::exact_descriptor`) which call this.
+    pub fn from_normalized(descriptor: String) -> Result<Self, Error> {
         validate_descriptor(&descriptor)?;
         Ok(Self { descriptor })
     }
