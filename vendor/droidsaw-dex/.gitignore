@@ -1,6 +1,9 @@
 /target
 .claude/
-tests/fixtures/*.dex
+# Upstream test fixtures are NOT redistributed in this repository; tests read
+# them at runtime and skip when absent (src/lib.rs test_fixtures, DX-P07).
+# The old `tests/fixtures/*.dex` ignore is gone so restored copies become
+# trackable and `git status` surfaces them.
 tests/snapshots/
 droidsaw-semgrep-*/
 
@@ -11,4 +14,3 @@ droidsaw-semgrep-*/
 /fuzz/target
 /fuzz/Cargo.lock
 /orchestration
-!tests/fixtures/g02-static-initializers.dex

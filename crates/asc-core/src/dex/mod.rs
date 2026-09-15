@@ -919,7 +919,7 @@ pub(crate) mod tests {
     ///
     /// Each logical DEX gets a 0x78-byte header whose section offsets point into
     /// the container, and every header records the container size and its own
-    /// offset, which is what `logical_dexes` validates.
+    /// offset, which is what the validated member chain checks.
     #[allow(dead_code)] // legacy-era fixture; A09 corpus tests may reuse
     pub(crate) fn dex041_container(class_counts: &[usize]) -> Vec<u8> {
         let mut out: Vec<u8> = Vec::new();

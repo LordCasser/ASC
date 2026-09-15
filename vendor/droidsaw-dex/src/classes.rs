@@ -4608,7 +4608,10 @@ mod tests {
         // no data classes, so every class either lacks `<init>` or has
         // an empty type_list from the proto's parameters_off — the
         // helper should return `None` for all of them.
-        let data = include_bytes!("../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for cd in &dex.class_defs {
             if cd.class_data_off == 0 {
@@ -4669,7 +4672,10 @@ mod tests {
         // helper must return None defensively rather than rendering an
         // empty body. The is_kotlin_sealed_root predicate's gate
         // short-circuits the scan via kotlin_sealed_subclasses.
-        let data = include_bytes!("../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for cd in &dex.class_defs {
             let mut imports = BTreeSet::new();
@@ -4693,7 +4699,10 @@ mod tests {
         // verdict gate is global, so all metadata-gated detectors flip
         // together — this exercises sites 112/133/147 plus the class-level
         // sealed-subclass checks collectively.) Also the public-API e2e path.
-        let data = include_bytes!("../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse");
         dex.parse_errors.push(crate::parser::ParseFailure {
             kind: crate::parser::ParseFailureKind::AnnotationItem,
@@ -4732,7 +4741,10 @@ mod tests {
         // Negative gate: with no planted parse failure the detectors return
         // Yes/No (never Indeterminate), so the additive banner must NOT fire on
         // clean input — the rendered shape stays authoritative.
-        let data = include_bytes!("../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for cd in &dex.class_defs {
             let src = decompile_class(&dex, data, cd);
@@ -4754,7 +4766,10 @@ mod tests {
         // resist the optimizer's single-use inlining pass — a simple
         // `int x = a; return x;` would get inlined to `return a;` before
         // the name could surface in the decompile output.
-        let data = include_bytes!("../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).unwrap();
         let class_def = dex
             .class_defs
@@ -4779,7 +4794,10 @@ mod tests {
 
     #[test]
     fn decompile_minimal_class() {
-        let data = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).unwrap();
         let class_def = dex
             .class_defs

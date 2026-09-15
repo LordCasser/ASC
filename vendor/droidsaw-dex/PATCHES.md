@@ -242,10 +242,33 @@ production code.
    的 phi 恢复失败后回退渲染。方法仍标记 Emitted（DECL-04 关注点）。
 2. fill-array-data 初始化 sugar 渲染错误（`new int{ v6 }`），数组内容
    未从 payload 展开。
-3. 上游 lib 单元测试因 `exclude=/tests` 缺 fixture 自 A04 起不可编译
-   （pre-existing；ASC 验证口径为 asc_contracts + asc_semantics 两个
-   显式 target）。
+3. ~~上游 lib 单元测试因 `exclude=/tests` 缺 fixture 自 A04 起不可编译~~
+   （已由 DX-P07 修复：fixture 改为运行时读取 + skip，干净检出可编译）。
 
 测试基建修复（tests/support，非上游语义）：type_list 4 字节对齐
 （androguard 仲裁确认违反规范）、if-lt/if-ge/if-lez 操作码勘误、
 switch/fill payload 32 位偏移的第二个占位字、若干 clippy 项。
+
+---
+
+## DX-P07 — 测试 fixture 运行时读取（修复 lib 单测不可编译）
+
+- **问题输入**: 任何 fresh checkout。上游 lib 单测以 `include_bytes!`
+  引用 `tests/fixtures/classes.dex`、`classes_named.dex` 与 fuzz
+  seeds/crash 语料，这些文件不随仓库分发（`.gitignore` 排除），导致
+  `cargo test --workspace` 在干净检出上直接编译失败（A04 起登记的已知
+  缺陷 3）。
+- **修改文件/符号**: `src/lib.rs` 新增 `#[cfg(test)] mod test_fixtures`
+  （`optional()`/`fallback_dex()`/`skipping()`）；约 90 处测试站点由
+  `include_bytes!` 改为运行时读取 + 缺失即 skip；`scaffold_dex`/两处
+  `fixture_dex`/`ort` 在上游 fixture 缺失时回退到已提交的 g02 契约
+  DEX（这些测试只需一个可解析的 `DexFile`）；`static_field_lookup` 的
+  SBOM fixture 同样改为运行时 skip。
+- **目标行为**: 干净检出上 workspace 测试可编译可运行；fixture 恢复后
+  同一测试自动恢复完整断言（skip 分支不再触发）。936 lib 测试 +
+  asc_contracts/asc_semantics 全绿验证。
+- **测试**: `cargo test --workspace` 于无 fixture 的检出上通过。
+- **必要**: 是（可复现验收的前置条件）。
+- **上游状态**: 不适用（构建/测试基建，非语义）。
+- **移除条件**: 上游 fixture 以可再分发许可入库后可回退为
+  `include_bytes!`；在此之前保留。

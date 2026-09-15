@@ -484,10 +484,35 @@ fn decode_axml(
         max_attributes: limits.max_attributes,
         max_string_units: limits.max_string_units,
     };
-    let document = axmldecoder::parse_document(bytes, &vendor_limits).map_err(|error| match error {
-        axmldecoder::ParseError::Malformed(message) => malformed(message),
-        axmldecoder::ParseError::Limit(message) => resource_limit(message),
-    })?;
+    // AX-P06: the vendor parser consults this probe at its chunk, string and
+    // attribute checkpoints, so a hostile manifest is deadline-bounded
+    // instead of only checkable between decodes.
+    let cancel_flag = control.cancel_flag();
+    let deadline = control.deadline();
+    let cancel = match &cancel_flag {
+        Some(flag) => axmldecoder::Cancel::from_flag_and_deadline(flag, deadline),
+        None => match deadline {
+            Some(deadline) => axmldecoder::Cancel::from_deadline(deadline),
+            None => axmldecoder::Cancel::none(),
+        },
+    };
+    let document =
+        axmldecoder::parse_document_with(bytes, &vendor_limits, cancel).map_err(|error| match error {
+            axmldecoder::ParseError::Malformed(message) => malformed(message),
+            axmldecoder::ParseError::Limit(message) => resource_limit(message),
+            axmldecoder::ParseError::Cancelled => {
+                let cause = if control
+                    .deadline()
+                    .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+                {
+                    crate::error::CancelCause::Deadline
+                } else {
+                    crate::error::CancelCause::User
+                };
+                Error::new(ErrorKind::Cancelled { cause })
+                    .with_context("manifest decode cancelled at a checkpoint")
+            }
+        })?;
     control.check()?;
 
     let mut converter = AxmlConverter { diagnostics: Vec::new(), inferred_namespace: false };
@@ -1837,26 +1862,4 @@ fn write_optional_string(w: &mut crate::model::dto::Writer, value: Option<String
         Some(value) => w.string(&value),
         None => w.null(),
     }
-}
-
-// ---------------------------------------------------------------------------
-// Legacy string bridge (A07 deletes this)
-// ---------------------------------------------------------------------------
-
-/// Decodes one manifest entry and renders it to XML text.
-///
-/// Bridge for the current CLI path (`apk::read_entry` -> `manifest::decode`).
-/// The A07 integration routes `Engine::manifest` through
-/// [`decode_manifest_entry`] plus `Manifest::to_xml` and removes this
-/// function; it must not grow new callers. (Test targets compile it in via
-/// `#[path]` without calling it.)
-#[allow(dead_code)]
-pub fn decode(data: &[u8]) -> anyhow::Result<String> {
-    let control = OperationControl::new();
-    let report = decode_manifest_entry(data, &XmlDecodeLimits::default(), &control)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-    report
-        .value
-        .to_xml(&XmlRenderOptions::default(), &control)
-        .map_err(|error| anyhow::anyhow!("{error}"))
 }

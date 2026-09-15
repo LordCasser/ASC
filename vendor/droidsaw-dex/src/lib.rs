@@ -70,6 +70,58 @@ pub mod access_flags;
 pub mod analysis;
 pub mod annotation;
 pub mod api;
+
+/// PATCHED (rasc, DX-P07): runtime access to the optional upstream test
+/// fixtures. `classes.dex`, `classes_named.dex` and the fuzz seeds are not
+/// committed to this repository, so tests that need them read at runtime and
+/// skip when absent — a fresh checkout stays buildable and the tests carry
+/// their meaning wherever the fixtures are restored.
+#[cfg(test)]
+pub(crate) mod test_fixtures {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    /// Reads one optional fixture (paths relative to the crate root).
+    /// `None` means the file is absent; the caller skips the test.
+    pub(crate) fn optional(relative: &'static str) -> Option<&'static [u8]> {
+        static CACHE: OnceLock<HashMap<&'static str, Option<Vec<u8>>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| {
+            let mut map = HashMap::new();
+            for name in [
+                "tests/fixtures/classes.dex",
+                "tests/fixtures/classes_named.dex",
+                "fuzz/crashes/parser_differential/4356e5cf6538",
+                "fuzz/seeds/fuzz_parser/duplicate_class_def.dex",
+            ] {
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(name);
+                map.insert(name, std::fs::read(path).ok());
+            }
+            map
+        });
+        cache.get(relative).and_then(|bytes| bytes.as_ref().map(Vec::as_slice))
+    }
+
+    /// A real DEX that IS committed to this repository (the ASC contract
+    /// fixture g02: one class, static initializers, valid checksums), used as
+    /// the fallback when helpers only need *a* parsed `DexFile` rather than
+    /// the upstream fixture's specific shape.
+    pub(crate) fn fallback_dex() -> Option<&'static [u8]> {
+        static CACHE: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../tests/fixtures/contracts/inputs/g02-static-initializers.dex");
+                std::fs::read(path).ok()
+            })
+            .as_ref()
+            .map(Vec::as_slice)
+    }
+
+    /// The skip line tests print when an optional fixture is absent.
+    pub(crate) fn skipping(relative: &str) {
+        eprintln!("skipped: {relative} is not present in this checkout");
+    }
+}
 pub mod cfg;
 pub mod dex_string;
 #[cfg(any(test, kani, fuzzing))]

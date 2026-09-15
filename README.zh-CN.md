@@ -50,12 +50,14 @@ rasc manifest app.apk                                  # 二进制 AndroidManife
 rasc getclass app.apk example.Test --dex 0:1           # 钉选某个逻辑 DEX
 ```
 
-所有命令共用：`--threads/--thread N`（默认 8，必须为正）、`--debug`（stderr
+所有命令共用：`--threads/--thread N`（并行 entry fold 的线程数；默认使用
+全部可用核心，必须为正）、`--debug`（stderr
 输出统计，不改变 payload）、`-o/--output FILE`（与 stdout 完全相同的字节，
 经同目录临时文件原子替换写入）、`--format text|json`（默认 `text`；JSON 为
 单个 envelope 对象，含 `schema_version`、`operation`、`artifact_id`、`data`
 与 `diagnostics`）、`--timeout-ms N`（N 毫秒后取消）、可重复的
-`--limit KEY=VALUE`（资源上限表覆盖，十进制正整数，见 `rasc --help`）。
+`--limit KEY=VALUE`（资源上限表覆盖，十进制正整数；其中 `dexes` 与
+`code-units` 为 accepted-not-enforced，见 `rasc --help`）。
 
 退出码：`0` 完整成功（含空结果），`2` 参数或查询错误，`1` 输入/分析/输出错误
 与不完整反编译，`130` 取消（用户或超时）。`--help`/`--version` 输出到 stdout

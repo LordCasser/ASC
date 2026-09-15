@@ -1311,9 +1311,14 @@ mod tests {
     // --- opcode_result_type direct tests ---
 
     fn ort(op: Opcode, pool: Option<&PoolIndex>) -> DexType {
-        // Create a minimal DexFile for tests that don't need pool lookups
-        let data = include_bytes!("../tests/fixtures/classes.dex");
-        let dex = crate::parser::DexFile::parse(data, None).unwrap();
+        // Create a minimal DexFile for tests that don't need pool lookups.
+        // PATCHED (rasc, DX-P07): runtime fixture access; the committed g02
+        // DEX stands in when the upstream fixture is absent (its field@0 is
+        // also an `int`, so the FieldIdx(0) expectation keeps its meaning).
+        let bytes = crate::test_fixtures::optional("tests/fixtures/classes.dex")
+            .or_else(crate::test_fixtures::fallback_dex)
+            .expect("classes.dex or the committed g02 fallback");
+        let dex = crate::parser::DexFile::parse(bytes, None).unwrap();
         opcode_result_type(op, pool, &dex)
     }
 
@@ -1384,7 +1389,10 @@ mod tests {
     #[test]
     fn ort_new_instance_with_pool() {
         // type@0 in fixture — look up what it is
-        let data = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(data, None).unwrap();
         // Find StringBuilder type index
         let sb_idx = dex

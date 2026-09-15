@@ -6,7 +6,7 @@
 //! end, invalid UTF-8/UTF-16, oversized strings) into a `ParseError`.
 
 use crate::cursor::Cursor;
-use crate::ParseError;
+use crate::{Cancel, ParseError};
 
 /// Sentinel used for "no string" indices throughout binary XML.
 pub(crate) const NO_INDEX: u32 = 0xFFFF_FFFF;
@@ -58,6 +58,7 @@ pub(crate) fn read_string_pool(
     data: &[u8],
     offset: usize,
     max_string_units: usize,
+    cancel: Cancel<'_>,
 ) -> Result<(StringPoolData, usize), ParseError> {
     const STRING_POOL_TYPE: u16 = 0x0001;
     const FLAG_UTF8: u32 = 1 << 8;
@@ -147,6 +148,11 @@ pub(crate) fn read_string_pool(
     let mut strings = Vec::with_capacity(string_count as usize);
     let mut unit_counts = Vec::with_capacity(string_count as usize);
     for (i, rel) in string_offsets.iter().enumerate() {
+        // One cancel probe per 256 strings: a limit-sized pool holds up to a
+        // million strings, and the walk must stay deadline-bounded.
+        if i.is_multiple_of(256) {
+            cancel.check()?;
+        }
         let absolute = offset
             .checked_add(strings_start)
             .and_then(|base| base.checked_add(*rel as usize))
@@ -184,7 +190,7 @@ pub(crate) fn read_string_pool(
                 offset + styles_start
             )));
         }
-        let spans = parse_style_entry(data, absolute, chunk_end, string_count)?;
+        let spans = parse_style_entry(data, absolute, chunk_end, string_count, cancel)?;
         // Validate span boundaries against the owning string. AOSP indexes the
         // styles array by string index, so entry i belongs to string i.
         if let Some(units) = unit_counts.get(i) {
@@ -324,16 +330,21 @@ fn parse_utf8_string(data: &[u8], at: usize, end: usize) -> Result<(String, usiz
 }
 
 /// One style entry: a run of spans terminated by the `0xFFFFFFFF` sentinel.
+/// PATCHED (rasc, AX-P02/AX-P06): the walk honours `end` (the pool chunk's
+/// end) instead of running into whatever chunk follows, and consults the
+/// cancel probe between spans.
 fn parse_style_entry(
     data: &[u8],
     at: usize,
-    _end: usize,
+    end: usize,
     string_count: u32,
+    cancel: Cancel<'_>,
 ) -> Result<Vec<StyleSpan>, ParseError> {
     let mut cursor = Cursor::new(data);
     cursor.seek(at)?;
     let mut spans = Vec::new();
     loop {
+        cancel.check()?;
         let name = cursor.u32()?;
         if name == NO_INDEX {
             return Ok(spans);
@@ -345,6 +356,11 @@ fn parse_style_entry(
         }
         let first_char = cursor.u32()?;
         let last_char = cursor.u32()?;
+        if cursor.position() > end {
+            return Err(ParseError::Malformed(
+                "style entry runs past the end of its string-pool chunk".to_owned(),
+            ));
+        }
         spans.push(StyleSpan { name, first_char, last_char });
     }
 }

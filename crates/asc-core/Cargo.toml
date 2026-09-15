@@ -15,11 +15,13 @@ anyhow = "1.0"
 droidsaw-dex = { package = "asc-droidsaw-dex", version = "0.1.0", path = "../../vendor/droidsaw-dex", optional = true }
 axmldecoder = { package = "asc-axmldecoder", version = "0.1.0", path = "../../vendor/axmldecoder", optional = true }
 flate2 = { version = "1", default-features = false, features = ["zlib"] }
-libdeflater = "1.26"
 fancy-regex = "0.19"
 memchr = "2.7"
 rayon = "1.12"
 quick-xml = { version = "0.42.0", default-features = false }
+
+[dev-dependencies]
+libdeflater = "1.26"
 
 [features]
 default = []

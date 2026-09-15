@@ -119,7 +119,7 @@ fn validate_common(common: &cli::CommonArgs) -> Result<(), Outcome> {
     for limit in &parsed {
         if !limit.key.enforced() {
             eprintln!(
-                "[debug] limit {}={} is accepted but not enforced yet (A11/A06)",
+                "[debug] limit {}={} is accepted but not enforced in this build",
                 limit.key.as_key(),
                 limit.value
             );
@@ -142,6 +142,13 @@ fn make_context(
         max_engine_owned_bytes: limits.max_engine_owned_bytes,
         max_entry_bytes: limits.max_entry_bytes,
         max_total_decoded_bytes: limits.max_total_decoded_bytes,
+        max_archive_entries: limits.max_archive_entries,
+        manifest: asc_core::manifest::XmlDecodeLimits {
+            max_depth: limits.max_xml_depth,
+            max_nodes: limits.max_xml_nodes,
+            max_attributes: limits.max_xml_attributes,
+            max_string_units: limits.max_string_units,
+        },
         scan: dex::ScanLimits {
             max_result_items: limits.max_result_items,
             max_reference_locations: limits.max_reference_locations,
@@ -150,7 +157,8 @@ fn make_context(
             max_result_bytes: limits.max_result_bytes,
         },
     };
-    let engine = Engine::new(EngineOptions { limits: core_limits }).map_err(core_outcome)?;
+    let engine = Engine::new(EngineOptions { limits: core_limits, threads: common.threads })
+        .map_err(core_outcome)?;
     Ok((engine, control))
 }
 
@@ -229,17 +237,21 @@ fn run_findrefs(args: &cli::FindRefsArgs) -> Result<(), Outcome> {
     } else {
         query::MatchMode::Literal
     };
-    let limits = asc_core::model::PatternLimits::default();
+    // The resolved `--limit pattern-bytes/regex-bytes/regex-steps` values
+    // ride into the query construction; parsing happens before the input is
+    // opened, so a bad limit or a bad query still exits 2 with no I/O.
+    let limits = effective_limits(&common)?;
+    let pattern_limits = limits.pattern;
     let reference_query = match &args.kind {
-        cli::FindKind::String(q) => query::string_query(&q.value, mode, &limits),
-        cli::FindKind::Type(q) => query::type_query(&q.value, mode, &limits),
+        cli::FindKind::String(q) => query::string_query(&q.value, mode, &pattern_limits),
+        cli::FindKind::Type(q) => query::type_query(&q.value, mode, &pattern_limits),
         cli::FindKind::Method(q) => {
             let spec = member_spec(q.name.as_deref(), q, mode)?;
-            query::member_query(false, spec, &limits)
+            query::member_query(false, spec, &pattern_limits)
         }
         cli::FindKind::Field(q) => {
             let spec = member_spec(q.name.as_deref(), q, mode)?;
-            query::member_query(true, spec, &limits)
+            query::member_query(true, spec, &pattern_limits)
         }
     }
     .map_err(core_outcome)?;
@@ -260,7 +272,7 @@ fn run_findrefs(args: &cli::FindRefsArgs) -> Result<(), Outcome> {
         &artifact.id(),
         report.diagnostics(),
         &CommandData::Findrefs(report.value()),
-        args.kind_common().output.as_deref(),
+        common.output.as_deref(),
         &args.apk_path,
         &control,
     )

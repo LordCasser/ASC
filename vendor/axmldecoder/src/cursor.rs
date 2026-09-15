@@ -20,6 +20,11 @@ impl<'a> Cursor<'a> {
         Self { data, pos: 0 }
     }
 
+    /// The current byte position.
+    pub(crate) fn position(&self) -> usize {
+        self.pos
+    }
+
     pub(crate) fn seek(&mut self, pos: usize) -> Result<(), ParseError> {
         if pos > self.data.len() {
             return Err(malformed(self.pos, "seek past the end of the input"));

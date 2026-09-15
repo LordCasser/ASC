@@ -8,14 +8,13 @@
 //! root DEX entry before reporting success — an entry that fails is the
 //! operation's error even when earlier entries already produced rows —
 //! and entries are processed in central-directory order, so the lowest
-//! ordinal wins error selection. The former prefix fast path is gone: a
-//! prefix cannot certify a complete result.
+//! ordinal wins error selection.
 //!
-//! A10 wraps this layer in the Engine/Artifact public API; A11 brings the
-//! shared pool and permits. Until then operations process entries
-//! sequentially, which keeps budget accounting and error selection exact;
-//! the CLI's `--threads` value is accepted and validated but there is
-//! nothing to parallelise yet (the per-operation pool is A11's).
+//! Entry decoding runs in parallel across the selected roots (on the
+//! engine's worker pool when `EngineOptions::threads` is set), but the
+//! fold's budget is reserved serially in ordinal order before any decode
+//! starts, and results, diagnostics and error selection are merged in
+//! ordinal order, so the merged output never depends on scheduling.
 
 use crate::bytes::ControlProbe;
 use crate::dex::container::{self, ValidatedDexView};
@@ -28,7 +27,7 @@ use crate::model::{
     Diagnostic, DiagnosticCode, EnclosingRecord, FieldMetadata, InnerClassRecord, MethodMetadata,
     OperationStats, Prototype, Report, Severity, Source, SourceMetadata, Stage,
 };
-use crate::zip::{self, ArchiveEntry, InputLimits};
+use crate::zip::{self, ArchiveEntry};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -38,9 +37,8 @@ use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::Duration;
 
 /// Per-open and per-operation resource limits the CLI can override
-/// (interfaces.md §5 keys enforced by this layer). Unlisted keys (engine
-/// bytes, archive/logical entry counts, depth, AXML nodes/attributes, code
-/// units) keep their internal defaults until A11/A12 expose them.
+/// (interfaces.md §5 keys enforced by this layer). Unlisted keys (logical
+/// dex count, code units) keep their internal defaults.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     /// `input-bytes`: the owned snapshot may not exceed this.
@@ -52,6 +50,12 @@ pub struct Limits {
     pub max_entry_bytes: u64,
     /// `decoded-bytes`: per-operation accumulated decoded bytes.
     pub max_total_decoded_bytes: u64,
+    /// `entries`: the central-directory entry count cap, enforced inside the
+    /// directory walk.
+    pub max_archive_entries: usize,
+    /// `depth`/`xml-nodes`/`xml-attributes` (and the manifest-side string-unit
+    /// budget) for manifest decoding.
+    pub manifest: crate::manifest::XmlDecodeLimits,
     /// `table-items`/`string-units`/`result-items`/`locations`/`result-bytes`.
     pub scan: crate::dex::ScanLimits,
 }
@@ -63,6 +67,8 @@ impl Default for Limits {
             max_engine_owned_bytes: 2 * 1024 * 1024 * 1024,
             max_entry_bytes: crate::zip::InputLimits::DEFAULT.max_entry_bytes,
             max_total_decoded_bytes: crate::zip::InputLimits::DEFAULT.max_total_decoded_bytes,
+            max_archive_entries: crate::zip::InputLimits::DEFAULT.max_archive_entries,
+            manifest: crate::manifest::XmlDecodeLimits::default(),
             scan: crate::dex::ScanLimits::DEFAULT,
         }
     }
@@ -73,7 +79,7 @@ impl Limits {
         crate::zip::InputLimits {
             max_entry_bytes: self.max_entry_bytes,
             max_total_decoded_bytes: self.max_total_decoded_bytes,
-            max_archive_entries: crate::zip::InputLimits::DEFAULT.max_archive_entries,
+            max_archive_entries: self.max_archive_entries,
         }
     }
 }
@@ -114,6 +120,28 @@ impl ControlGuard {
             Some(flag) => ControlProbe { cancelled: flag, deadline: self.deadline },
             None => ControlProbe { cancelled: &self.dummy, deadline: self.deadline },
         }
+    }
+
+    /// Mirrors the host's cancellation state into the backend token so the
+    /// backend's own checkpoints (parse entry/exit, between method stages)
+    /// observe a host cancel or an expired deadline instead of only the
+    /// engine-side probes around the call.
+    #[cfg(feature = "decompile")]
+    fn sync_backend(&self) {
+        let host_cancelled =
+            self.flag.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed));
+        let deadline_expired =
+            self.deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline);
+        if host_cancelled || deadline_expired {
+            self.backend.cancel();
+        }
+    }
+
+    /// The backend budget derived from the host control: the same deadline,
+    /// plus an input-length cap for the bytes being parsed.
+    #[cfg(feature = "decompile")]
+    fn backend_budget(&self, input_len: u64) -> droidsaw_dex::analysis::Budget {
+        droidsaw_dex::analysis::Budget { deadline: self.deadline, max_input_bytes: Some(input_len) }
     }
 }
 
@@ -169,6 +197,34 @@ impl Drop for Artifact {
     }
 }
 
+/// Atomically reserves `len` bytes against the engine-owned budget. The
+/// check and the add are one CAS loop, so concurrent opens cannot both pass
+/// the same headroom the way a load-compare-then-add sequence allowed.
+fn reserve_bytes(runtime: &Runtime, len: u64, max: u64) -> Result<(), Error> {
+    let mut current = runtime.active_bytes.load(Ordering::Relaxed);
+    loop {
+        let Some(next) = current.checked_add(len) else {
+            return Err(Error::resource_limit(format!(
+                "engine-owned bytes {current} + {len} overflow the account"
+            )));
+        };
+        if next > max {
+            return Err(Error::resource_limit(format!(
+                "engine-owned bytes {current} + {len} would exceed the {max} limit"
+            )));
+        }
+        match runtime.active_bytes.compare_exchange_weak(
+            current,
+            next,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return Ok(()),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
 /// Opens `path` as an APK: bounded owned snapshot, content id, archive
 /// catalog, root DEX selection.
 pub(crate) fn open_path(
@@ -205,19 +261,8 @@ pub(crate) fn open_path(
         }
         bytes.extend_from_slice(&buffer[..read]);
     }
-    // Engine-owned budget: the snapshot reserves its full length until the
-    // artifact drops (interfaces.md §2: no waiting on another artifact's
-    // drop - insufficient budget fails immediately).
-    if runtime.active_bytes.load(Ordering::Relaxed) + bytes.len() as u64
-        > limits.max_engine_owned_bytes
-    {
-        return Err(Error::resource_limit(format!(
-            "engine-owned bytes {} + {} would exceed the {} limit",
-            runtime.active_bytes.load(Ordering::Relaxed),
-            bytes.len(),
-            limits.max_engine_owned_bytes
-        )));
-    }
+    // A file grown between the stat and the read is still caught by the
+    // snapshot-length check in `open_bytes`.
     let artifact = open_bytes(Arc::from(bytes.into_boxed_slice()), limits, runtime, control)?;
     let mut artifact = artifact;
     artifact.limits = *limits;
@@ -232,19 +277,36 @@ pub(crate) fn open_bytes(
     control: &OperationControl,
 ) -> Result<Artifact, Error> {
     let _ = control;
-    // Engine-owned budget: the snapshot reserves its full length until the
-    // artifact drops (interfaces.md §2: no waiting on another artifact's
-    // drop - insufficient budget fails immediately).
-    let live = runtime.active_bytes.load(Ordering::Relaxed);
-    if live + bytes.len() as u64 > limits.max_engine_owned_bytes {
+    let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if len > limits.max_input_bytes {
         return Err(Error::resource_limit(format!(
-            "engine-owned bytes {live} + {} would exceed the {} limit",
-            bytes.len(),
-            limits.max_engine_owned_bytes
+            "the input snapshot is {len} bytes, above the {} input limit",
+            limits.max_input_bytes
         )));
     }
+    // Engine-owned budget: the snapshot reserves its full length until the
+    // artifact drops (interfaces.md §2: no waiting on another artifact's
+    // drop - insufficient budget fails immediately). The reservation is
+    // rolled back if the catalog turns out to be malformed.
+    reserve_bytes(runtime, len, limits.max_engine_owned_bytes)?;
+    match catalog_artifact(bytes, limits, runtime) {
+        Ok(artifact) => Ok(artifact),
+        Err(error) => {
+            runtime.active_bytes.fetch_sub(len, Ordering::Relaxed);
+            Err(error)
+        }
+    }
+}
+
+/// Assembles the artifact from an already-reserved snapshot: content id,
+/// validated catalog and root DEX selection.
+fn catalog_artifact(
+    bytes: Arc<[u8]>,
+    limits: &Limits,
+    runtime: &Arc<Runtime>,
+) -> Result<Artifact, Error> {
     let id = ArtifactId::from_digest(crate::bytes::sha256(&bytes));
-    let catalog = zip::parse_catalog(&bytes, &InputLimits::DEFAULT)?;
+    let catalog = zip::parse_catalog(&bytes, &limits.input())?;
     let selection = zip::select_root_dexes(&catalog);
     let mut open_diagnostics = Vec::new();
     for duplicate in &selection.duplicates {
@@ -268,7 +330,7 @@ pub(crate) fn open_bytes(
             source: RootSource::Archive(entry.clone()),
         })
         .collect();
-    let artifact = Artifact {
+    Ok(Artifact {
         id,
         bytes,
         catalog: Some(catalog),
@@ -276,9 +338,7 @@ pub(crate) fn open_bytes(
         runtime: Arc::clone(runtime),
         open_diagnostics,
         limits: *limits,
-    };
-    runtime.active_bytes.fetch_add(artifact.byte_len(), Ordering::Relaxed);
-    Ok(artifact)
+    })
 }
 
 impl Artifact {
@@ -295,32 +355,61 @@ impl Artifact {
         let guard = ControlGuard::new(control);
         let probe = guard.probe();
         let input_limits = self.limits.input();
+        // Deterministic budget reservation: the exact-size decode contract
+        // makes the central-directory uncompressed sizes the authoritative
+        // output lengths, so the operation's whole decoded-byte budget is
+        // decided serially in ordinal order before any parallel work starts.
+        // Which entry (if any) crosses the cap therefore never depends on
+        // scheduling, and the concurrent decodes hold at most the
+        // already-reserved total.
+        let mut declared_total: u64 = 0;
+        for root in &self.roots {
+            if let RootSource::Archive(entry) = &root.source {
+                declared_total =
+                    declared_total.saturating_add(entry.declared_uncompressed_bytes());
+            }
+        }
+        if declared_total > input_limits.max_total_decoded_bytes {
+            return Err(Error::resource_limit(format!(
+                "the selected entries declare {declared_total} decoded bytes in total, above the \
+                 {} per-operation limit",
+                input_limits.max_total_decoded_bytes
+            )));
+        }
         let decoded = AtomicU64::new(0);
-        // Parallel across entries; results and errors are merged in ordinal
-        // order, so the lowest ordinal decides the operation's error and the
-        // merged output never depends on scheduling (interfaces.md §4).
+        // Parallel across entries on the engine's pool (the rayon global pool
+        // when no worker count was configured); results and errors are merged
+        // in ordinal order, so the lowest ordinal decides the operation's
+        // error and the merged output never depends on scheduling
+        // (interfaces.md §4).
+        let fold = || {
+            self.roots
+                .par_iter()
+                .map(|root| {
+                    let data: &[u8] = match &root.source {
+                        RootSource::Archive(entry) => {
+                            &zip::read_entry(&self.bytes, entry, &input_limits, &decoded, &probe)?
+                        }
+                        RootSource::Raw => &self.bytes,
+                    };
+                    let (views, entry_integrity) = container::validate_dex_entry(
+                        self.id,
+                        root.ordinal,
+                        &root.raw_name,
+                        data,
+                        &probe,
+                    )?;
+                    let rows = op(root, &views, &probe)?;
+                    Ok((rows, entry_integrity))
+                })
+                .collect::<Vec<_>>()
+        };
         #[allow(clippy::type_complexity)]
-        let per_root: Vec<Result<(Vec<T>, Vec<Diagnostic>), Error>> = self
-            .roots
-            .par_iter()
-            .map(|root| {
-                let data: &[u8] = match &root.source {
-                    RootSource::Archive(entry) => {
-                        &zip::read_entry(&self.bytes, entry, &input_limits, &decoded, &probe)?
-                    }
-                    RootSource::Raw => &self.bytes,
-                };
-                let (views, entry_integrity) = container::validate_dex_entry(
-                    self.id,
-                    root.ordinal,
-                    &root.raw_name,
-                    data,
-                    &probe,
-                )?;
-                let rows = op(root, &views, &probe)?;
-                Ok((rows, entry_integrity))
-            })
-            .collect();
+        let per_root: Vec<Result<(Vec<T>, Vec<Diagnostic>), Error>> =
+            match &self.runtime.pool {
+                Some(pool) => pool.install(fold),
+                None => fold(),
+            };
         let mut results = Vec::new();
         let mut integrity = Vec::new();
         for entry in per_root {
@@ -465,7 +554,6 @@ pub fn decompile(
     for (entry_index, root) in artifact.roots.iter().enumerate() {
         probe.check()?;
         #[allow(unused_assignments)] // Raw input never fills the buffer
-        #[allow(unused_assignments)] // Raw input never fills the buffer
         let mut data_buffer = None;
         let data: &[u8] = match &root.source {
             RootSource::Archive(entry) => {
@@ -574,12 +662,24 @@ pub fn decompile(
         container::validate_dex_entry(artifact.id, root.ordinal, &root.raw_name, data, &probe)?;
     diagnostics.extend(entry_integrity);
     let view = &views.views[resolved.logical];
-    let scratch = container::backend_scratch(view, &integrity);
+    // Only integrity findings about *this* view decide whether it needs the
+    // normalization scratch; a checksum warning on another entry must not
+    // cost a full copy here.
+    let view_integrity: Vec<Diagnostic> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.dex() == Some(view.id()))
+        .cloned()
+        .collect();
+    let scratch = container::backend_scratch(view, &view_integrity);
     let backend_bytes: &[u8] = match &scratch {
         Some(scratch_view) => &scratch_view.bytes,
         None => view.bytes(),
     };
-    let budget = droidsaw_dex::analysis::Budget::default();
+    // The host's cancel flag and deadline are mirrored into the backend
+    // token/budget so the backend's own checkpoints honor them, and the
+    // budget caps the parse at exactly this view's length.
+    guard.sync_backend();
+    let budget = guard.backend_budget(u64::try_from(backend_bytes.len()).unwrap_or(u64::MAX));
     let parsed = droidsaw_dex::analysis::parse_for_analysis(
         backend_bytes,
         &droidsaw_dex::analysis::ParseOptions::default(),
@@ -591,6 +691,7 @@ pub fn decompile(
             .with_context(format!("backend parse: {error}"))
             .with_diagnostics(diagnostics.clone())
     })?;
+    guard.sync_backend();
     let report = droidsaw_dex::analysis::decompile_checked(
         &parsed,
         resolved.class_def_idx as usize,
@@ -661,7 +762,7 @@ pub fn manifest(
     let bytes = zip::read_entry(&artifact.bytes, entry, &artifact.limits.input(), &decoded, &probe)?;
     let report = crate::manifest::decode_manifest_entry(
         &bytes,
-        &crate::manifest::XmlDecodeLimits::default(),
+        &artifact.limits.manifest,
         control,
     )?;
     let diagnostics = report
@@ -842,7 +943,10 @@ fn typed_to_encoded(value: &droidsaw_dex::analysis::TypedValue) -> crate::model:
                 .collect::<Vec<_>>()),
         }),
         T::MethodType(text) => M::Type(DexText::from_str_lossless(text)),
-        T::MethodHandle(idx) => M::Int(*idx as i32),
+        // The model has no method-handle variant; the exact u32 index rides
+        // in a Long instead of a sign-truncating Int (a handle index at or
+        // above 2^31 must not wrap negative).
+        T::MethodHandle(index) => M::Long(i64::from(*index)),
     }
 }
 
@@ -894,22 +998,21 @@ fn prototype_from_descriptor(descriptor: &str) -> Prototype {
     let mut parameters = Vec::new();
     let mut rest = params_text;
     while !rest.is_empty() {
-        let consumed = match rest.as_bytes()[0] {
-            b'L' => rest.find(';').map(|semi| semi + 1).unwrap_or(rest.len()),
-            b'[' => 1 + prototype_component_size(&rest[1..]),
-            _ => 1,
-        };
+        let consumed = prototype_component_size(rest);
         parameters.push(DexText::from_str_lossless(&rest[..consumed]));
         rest = &rest[consumed..];
     }
     Prototype::new(parameters, DexText::from_str_lossless(ret))
 }
 
-/// Length of one non-array component at the head of `rest` (1 for
-/// primitives, up to and including the `;` for class types).
+/// Length of one parameter type at the head of `rest`: 1 per primitive unit,
+/// up to and including the `;` for class types, and 1 per array dimension
+/// plus its component (nested arrays are one parameter, so `[[I` consumes
+/// all three units).
 #[cfg(feature = "decompile")]
 fn prototype_component_size(rest: &str) -> usize {
     match rest.as_bytes().first() {
+        Some(b'[') => 1 + prototype_component_size(&rest[1..]),
         Some(b'L') => rest.find(';').map(|semi| semi + 1).unwrap_or(rest.len()),
         _ => 1,
     }
@@ -1173,6 +1276,29 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
+    #[cfg(feature = "decompile")]
+    #[test]
+    fn prototype_descriptor_splits_nested_array_parameters() {
+        let proto = prototype_from_descriptor("([[Ljava/lang/String;[II)Z");
+        let params: Vec<String> = proto
+            .parameters()
+            .iter()
+            .map(|text| text.as_str().unwrap_or_default().to_owned())
+            .collect();
+        assert_eq!(params, ["[[Ljava/lang/String;", "[I", "I"], "{params:?}");
+        assert_eq!(proto.return_type().as_str().unwrap_or_default(), "Z");
+
+        // Single-dimension arrays and plain class types keep parsing as one
+        // parameter each.
+        let proto = prototype_from_descriptor("([Ljava/lang/Object;J)V");
+        let params: Vec<String> = proto
+            .parameters()
+            .iter()
+            .map(|text| text.as_str().unwrap_or_default().to_owned())
+            .collect();
+        assert_eq!(params, ["[Ljava/lang/Object;", "J"], "{params:?}");
+    }
+
     #[test]
     fn named_entries_win_over_fallback_and_junk_dex_fails_loudly() {
         let good = const_string_fixture(1);
@@ -1215,16 +1341,19 @@ pub enum InputKind {
     Dex,
 }
 
-/// Engine construction options. A11 extends this with the runtime
-/// limits/pool surface; the current shape carries the default limits.
+/// Engine construction options.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EngineOptions {
     pub limits: Limits,
+    /// Worker threads for the parallel entry fold. `None` uses the rayon
+    /// global pool (all cores); `Some(0)` is rejected at construction.
+    pub threads: Option<usize>,
 }
 
-/// Shared engine runtime: serial top-level admission plus the engine-owned
-/// active-bytes account. Clones share one runtime (interfaces.md §2: the
-/// Engine is a cloneable handle over one private runtime).
+/// Shared engine runtime: serial top-level admission, the engine-owned
+/// active-bytes account and the worker pool. Clones share one runtime
+/// (interfaces.md §2: the Engine is a cloneable handle over one private
+/// runtime).
 #[derive(Debug, Default)]
 pub(crate) struct Runtime {
     /// Serial top-level admission: held for the duration of one operation.
@@ -1234,6 +1363,9 @@ pub(crate) struct Runtime {
     /// Engine-owned active bytes (inputs + catalogs of artifacts opened
     /// through this engine, dropped with the artifact).
     active_bytes: AtomicU64,
+    /// The engine's own worker pool when `EngineOptions::threads` was set;
+    /// `None` runs the parallel fold on the rayon global pool.
+    pool: Option<Arc<rayon::ThreadPool>>,
 }
 
 /// A long-lived analysis engine: holds the runtime limits and hands out
@@ -1246,7 +1378,30 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(options: EngineOptions) -> Result<Engine, Error> {
-        Ok(Engine { options, runtime: Arc::new(Runtime::default()) })
+        let pool = match options.threads {
+            None => None,
+            Some(0) => {
+                return Err(Error::invalid_query(
+                    "worker threads must be greater than zero",
+                ));
+            }
+            Some(count) => {
+                let built = rayon::ThreadPoolBuilder::new()
+                    .num_threads(count)
+                    .build()
+                    .map_err(|error| {
+                        Error::new(ErrorKind::InvalidQuery)
+                            .with_context(format!("worker pool: {error}"))
+                    })?;
+                Some(Arc::new(built))
+            }
+        };
+        let runtime = Arc::new(Runtime {
+            admission: Mutex::new(()),
+            active_bytes: AtomicU64::new(0),
+            pool,
+        });
+        Ok(Engine { options, runtime })
     }
 
     /// Serial top-level admission (interfaces.md §5): a caller waits for the
@@ -1294,7 +1449,9 @@ impl Engine {
     ) -> Result<Artifact, Error> {
         match kind {
             InputKind::Apk => open_bytes(bytes, &self.options.limits, &self.runtime, control),
-            InputKind::Dex => open_dex_bytes(bytes, &self.runtime, control),
+            InputKind::Dex => {
+                open_dex_bytes(bytes, &self.options.limits, &self.runtime, control)
+            }
         }
     }
 
@@ -1397,17 +1554,28 @@ fn open_dex_path(
         }
         bytes.extend_from_slice(&buffer[..read]);
     }
-    open_dex_bytes(Arc::from(bytes.into_boxed_slice()), runtime, control)
+    open_dex_bytes(Arc::from(bytes.into_boxed_slice()), limits, runtime, control)
 }
 
 /// Opens an owned raw DEX byte stream: entry ordinal 0, display name
-/// `<memory.dex>` (interfaces.md §1).
+/// `<memory.dex>` (interfaces.md §1). The same input/engine-byte limits as
+/// the APK path apply, and the artifact carries the engine's configured
+/// operation limits (not silently the defaults).
 fn open_dex_bytes(
     bytes: Arc<[u8]>,
+    limits: &Limits,
     runtime: &Arc<Runtime>,
     control: &OperationControl,
 ) -> Result<Artifact, Error> {
     let _ = control;
+    let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if len > limits.max_input_bytes {
+        return Err(Error::resource_limit(format!(
+            "the raw DEX input is {len} bytes, above the {} input limit",
+            limits.max_input_bytes
+        )));
+    }
+    reserve_bytes(runtime, len, limits.max_engine_owned_bytes)?;
     let id = ArtifactId::from_digest(crate::bytes::sha256(&bytes));
     let roots = vec![Root { ordinal: 0, raw_name: b"<memory.dex>".to_vec(), source: RootSource::Raw }];
     let artifact = Artifact {
@@ -1417,8 +1585,7 @@ fn open_dex_bytes(
         roots,
         runtime: Arc::clone(runtime),
         open_diagnostics: Vec::new(),
-        limits: Limits::default(),
+        limits: *limits,
     };
-    runtime.active_bytes.fetch_add(artifact.byte_len(), Ordering::Relaxed);
     Ok(artifact)
 }

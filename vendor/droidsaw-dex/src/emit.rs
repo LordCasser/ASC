@@ -6042,7 +6042,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let s = emit_stmt(&Stmt::Return(None), &env, &dex, 0, &mut ctx);
@@ -6055,7 +6058,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let v = VarId::new(0, 1);
@@ -6076,7 +6082,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let insn = SsaInsn {
             insn: Instruction {
@@ -6111,7 +6120,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let debug = DebugInfo {
             line_start: 10,
@@ -6151,7 +6163,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let stmt = Stmt::StringConcat {
@@ -6669,7 +6684,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let v_s = VarId::new(0, 1);
@@ -6726,7 +6744,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let v_x = VarId::new(0, 1);
@@ -6763,7 +6784,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let v_s = VarId::new(0, 1);
@@ -6809,7 +6833,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let v_s = VarId::new(0, 1);
@@ -6854,7 +6881,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let stmt = Stmt::Unrecognized {
@@ -6891,7 +6921,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let stmt = Stmt::Unrecognized {
@@ -6921,7 +6954,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let stmt = Stmt::Unrecognized {
@@ -6959,7 +6995,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let stmt = Stmt::Unrecognized {
@@ -6993,7 +7032,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let v = VarId::new(0, 1);
@@ -7036,7 +7078,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let v = VarId::new(0, 1);
@@ -7072,7 +7117,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let a = VarId::new(0, 1);
@@ -7107,7 +7155,10 @@ mod tests {
             types: rustc_hash::FxHashMap::default(),
             casts: vec![],
         };
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(fixture, None).unwrap();
         let mut ctx = EmitCtx::new();
         let a = VarId::new(0, 1);

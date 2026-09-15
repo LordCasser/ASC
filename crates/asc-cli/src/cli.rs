@@ -27,7 +27,8 @@ pub enum Format {
 /// Options shared by every command.
 #[derive(Debug, Args, Clone, Default)]
 pub struct CommonArgs {
-    /// Worker threads for analysis (default: 8, must be positive).
+    /// Worker threads for the parallel entry fold (default: all cores; must
+    /// be positive).
     #[arg(long, alias = "thread")]
     pub threads: Option<usize>,
     /// Print stats and timings on stderr; never changes the payload bytes.
@@ -48,12 +49,11 @@ pub struct CommonArgs {
     /// Repeatable; unknown or repeated keys exit 2. Keys marked (accepted)
     /// are validated but not yet enforced; their internal defaults stay in
     /// effect and a stderr note says so:
-    ///   input-bytes, entry-bytes, decoded-bytes, result-items, locations,
-    ///   string-units, table-items, result-bytes, pattern-bytes,
-    ///   regex-bytes, regex-steps;
-    ///   engine-bytes (accepted), entries (accepted), dexes (accepted),
-    ///   depth (accepted), xml-nodes (accepted), xml-attributes (accepted),
-    ///   code-units (accepted).
+    ///   input-bytes, entry-bytes, decoded-bytes, engine-bytes, entries,
+    ///   string-units, table-items, result-items, locations, result-bytes,
+    ///   depth, xml-nodes, xml-attributes, pattern-bytes, regex-bytes,
+    ///   regex-steps;
+    ///   dexes (accepted), code-units (accepted).
     #[arg(long = "limit")]
     pub limits: Vec<String>,
 }
@@ -279,17 +279,21 @@ impl LimitKey {
     }
 
     /// Whether this build actually routes the key into an operation. The
-    /// remaining keys belong to the A11 engine and A06 AXML internals and
-    /// only their defaults are in effect.
+    /// remaining keys (`dexes`, `code-units`) belong to engine internals
+    /// whose defaults are still in effect.
     pub fn enforced(self) -> bool {
         matches!(
             self,
             LimitKey::InputBytes
                 | LimitKey::EngineBytes
+                | LimitKey::Entries
                 | LimitKey::EntryBytes
                 | LimitKey::DecodedBytes
                 | LimitKey::TableItems
                 | LimitKey::StringUnits
+                | LimitKey::Depth
+                | LimitKey::XmlNodes
+                | LimitKey::XmlAttributes
                 | LimitKey::ResultItems
                 | LimitKey::Locations
                 | LimitKey::ResultBytes
@@ -350,6 +354,10 @@ pub struct EffectiveLimits {
     pub max_engine_owned_bytes: u64,
     pub max_entry_bytes: u64,
     pub max_total_decoded_bytes: u64,
+    pub max_archive_entries: usize,
+    pub max_xml_depth: usize,
+    pub max_xml_nodes: usize,
+    pub max_xml_attributes: usize,
     pub max_result_items: usize,
     pub max_reference_locations: u64,
     pub max_string_units: usize,
@@ -367,6 +375,10 @@ impl EffectiveLimits {
             max_engine_owned_bytes: 2 * 1024 * 1024 * 1024,
             max_entry_bytes: 256 * 1024 * 1024,
             max_total_decoded_bytes: 1024 * 1024 * 1024,
+            max_archive_entries: 100_000,
+            max_xml_depth: 256,
+            max_xml_nodes: 1_000_000,
+            max_xml_attributes: 1_000_000,
             max_result_items: 250_000,
             max_reference_locations: 1_000_000,
             max_string_units: 1_048_576,
@@ -389,12 +401,11 @@ impl EffectiveLimits {
                 LimitKey::RegexBytes => resolved.pattern.regex_compile_bytes = value,
                 LimitKey::RegexSteps => resolved.pattern.regex_backtrack_limit = value,
                 LimitKey::EngineBytes => resolved.max_engine_owned_bytes = value as u64,
-                LimitKey::Entries
-                | LimitKey::Dexes
-                | LimitKey::Depth
-                | LimitKey::XmlNodes
-                | LimitKey::XmlAttributes
-                | LimitKey::CodeUnits => {}
+                LimitKey::Entries => resolved.max_archive_entries = value,
+                LimitKey::Depth => resolved.max_xml_depth = value,
+                LimitKey::XmlNodes => resolved.max_xml_nodes = value,
+                LimitKey::XmlAttributes => resolved.max_xml_attributes = value,
+                LimitKey::Dexes | LimitKey::CodeUnits => {}
             }
         }
         resolved

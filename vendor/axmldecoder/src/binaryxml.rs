@@ -13,7 +13,7 @@
 use crate::cursor::Cursor;
 use crate::stringpool::{read_string_pool, StringPoolData, NO_INDEX};
 use crate::xml::attribute_name_for_resource;
-use crate::{DecodeLimits, ParseError};
+use crate::{Cancel, DecodeLimits, ParseError};
 
 // Chunk types (ResChunk_header::type).
 const RES_XML_TYPE: u16 = 0x0003;
@@ -119,7 +119,11 @@ struct OpenNamespace {
     owner_seq: Option<u32>,
 }
 
-pub(crate) fn parse(data: &[u8], limits: &DecodeLimits) -> Result<Document, ParseError> {
+pub(crate) fn parse(
+    data: &[u8],
+    limits: &DecodeLimits,
+    cancel: Cancel<'_>,
+) -> Result<Document, ParseError> {
     if limits.max_depth == 0 || limits.max_nodes == 0 || limits.max_attributes == 0
         || limits.max_string_units == 0
     {
@@ -127,6 +131,7 @@ pub(crate) fn parse(data: &[u8], limits: &DecodeLimits) -> Result<Document, Pars
             "decode limits must be positive".to_owned(),
         ));
     }
+    cancel.check()?;
 
     let mut cursor = Cursor::new(data);
     let doc_type = cursor.u16()?;
@@ -155,7 +160,7 @@ pub(crate) fn parse(data: &[u8], limits: &DecodeLimits) -> Result<Document, Pars
     let end = doc_size;
     let mut pos = usize::from(header_size);
 
-    let (string_pool, pool_size) = read_string_pool(data, pos, limits.max_string_units)?;
+    let (string_pool, pool_size) = read_string_pool(data, pos, limits.max_string_units, cancel)?;
     pos += pool_size;
 
     let mut resource_map = Vec::new();
@@ -192,6 +197,7 @@ pub(crate) fn parse(data: &[u8], limits: &DecodeLimits) -> Result<Document, Pars
         &string_pool,
         &resource_map,
         limits,
+        cancel,
     )
 }
 
@@ -203,6 +209,7 @@ fn parse_node_stream(
     string_pool: &StringPoolData,
     resource_map: &[u32],
     limits: &DecodeLimits,
+    cancel: Cancel<'_>,
 ) -> Result<Document, ParseError> {
     let mut stack: Vec<OpenElement> = Vec::new();
     let mut ns_stack: Vec<OpenNamespace> = Vec::new();
@@ -215,6 +222,9 @@ fn parse_node_stream(
     let mut attribute_count: usize = 0;
 
     while pos < end {
+        // One check per node chunk: chunks carry at least 16 bytes, so the
+        // probe cost stays amortized while the walk stays deadline-bounded.
+        cancel.check()?;
         let chunk_type = u16_at(data, pos)?;
         let header_size = u16_at(data, pos + 2)?;
         let chunk_size = u32_at(data, pos + 4)? as usize;
@@ -314,6 +324,7 @@ fn parse_node_stream(
                     resource_map,
                     limits,
                     &mut attribute_count,
+                    cancel,
                 )?;
                 // Namespace starts waiting for this element attach to it.
                 let mut element = element;
@@ -440,6 +451,7 @@ fn parse_element(
     resource_map: &[u32],
     limits: &DecodeLimits,
     attribute_count: &mut usize,
+    cancel: Cancel<'_>,
 ) -> Result<Element, ParseError> {
     // The 20-byte ext header: ns, name, attributeStart, attributeSize,
     // attributeCount, idIndex, classIndex, styleIndex.
@@ -504,8 +516,17 @@ fn parse_element(
     let comment = resolve_comment(string_pool, comment_index)?;
 
     let mut attributes = Vec::with_capacity(count);
-    let mut seen: Vec<(u32, String)> = Vec::with_capacity(count);
+    // PATCHED (rasc, AX-P02/AX-P06): duplicate detection is a hash set. The
+    // original linear `seen` scan made an element with N attributes cost
+    // O(N^2) string comparisons — up to ~5e11 for a limit-sized element —
+    // and nothing bounded the loop in time; the cancel probe now runs every
+    // 256 attributes as well.
+    let mut seen: std::collections::HashSet<(u32, String)> =
+        std::collections::HashSet::with_capacity(count);
     for i in 0..count {
+        if i.is_multiple_of(256) {
+            cancel.check()?;
+        }
         let at = attributes_base + i * attribute_size;
         let attr_ns_index = u32_at(data, at)?;
         let attr_name_index = u32_at(data, at + 4)?;
@@ -545,12 +566,11 @@ fn parse_element(
             }
         };
         // AX-P02: duplicate attributes (same namespace and name) are malformed.
-        if seen.iter().any(|(ns, name)| *ns == attr_ns_index && *name == attr_name) {
+        if !seen.insert((attr_ns_index, attr_name.clone())) {
             return Err(ParseError::Malformed(format!(
                 "duplicate attribute {attr_name} on element {name} at {chunk_start}"
             )));
         }
-        seen.push((attr_ns_index, attr_name.clone()));
 
         let raw_value = match raw_value_index {
             NO_INDEX => None,

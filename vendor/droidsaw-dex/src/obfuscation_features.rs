@@ -569,7 +569,12 @@ mod tests {
     /// exercise `extract` against a real (if minimal) DEX without
     /// hand-fabricating a `DexFile`.
     fn fixture_dex() -> DexFile {
-        let bytes = include_bytes!("../tests/fixtures/classes.dex");
+        // PATCHED (rasc, DX-P07): runtime fixture access; the committed g02
+        // contract DEX stands in when the upstream fixture is absent (these
+        // tests only need a parseable DexFile with at least one class_def).
+        let bytes = crate::test_fixtures::optional("tests/fixtures/classes.dex")
+            .or_else(crate::test_fixtures::fallback_dex)
+            .expect("classes.dex or the committed g02 fallback");
         DexFile::parse(bytes, None).expect("fixture parses")
     }
 

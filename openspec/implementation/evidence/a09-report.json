@@ -303,7 +303,7 @@
   ],
   "known_defects_blocking": [],
   "known_defects_deferred": [
-    "7 --limit keys accepted-not-enforced until A11/A06 setters (engine-bytes/entries/dexes/depth/xml-nodes/xml-attributes/code-units)",
+    "CORRECTED (A14 adversarial review): the original '7 accepted-not-enforced keys' entry miscounted in both directions -- engine-bytes was in fact enforced at A09 time, and pattern-bytes/regex-bytes/regex-steps were dropped despite being marked enforced. As of the A14 review fixes the accepted-not-enforced set is exactly dexes and code-units; entries/depth/xml-nodes/xml-attributes and the pattern trio are wired and tested.",
     "deadline->130 timing test #[ignore]; Windows behaviors -> DIST-03",
     "long fuzz campaign + crash minimization (QUAL-04 full campaign) -> A14 follow-up"
   ]

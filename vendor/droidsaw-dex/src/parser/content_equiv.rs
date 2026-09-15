@@ -197,8 +197,14 @@ mod tests {
     use super::*;
     use crate::DexString;
 
-    const FIXTURE: &[u8] =
-        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/classes.dex"));
+    /// PATCHED (rasc, DX-P07): runtime fixture access with per-test skip.
+    fn fixture() -> Option<&'static [u8]> {
+        crate::test_fixtures::optional("tests/fixtures/classes.dex")
+    }
+
+    fn skipping() {
+        crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+    }
 
     fn first_decoded_idx(dex: &DexFile) -> usize {
         dex.strings
@@ -216,8 +222,12 @@ mod tests {
     /// derived `DexString` `PartialEq` saw the flag); green after.
     #[test]
     fn content_equiv_ignores_had_terminator_flip() {
-        let dex_a = DexFile::parse(FIXTURE, None).expect("fixture parses");
-        let mut dex_b = DexFile::parse(FIXTURE, None).expect("fixture parses");
+        let Some(fixture_bytes) = fixture() else {
+            skipping();
+            return;
+        };
+        let dex_a = DexFile::parse(fixture_bytes, None).expect("fixture parses");
+        let mut dex_b = DexFile::parse(fixture_bytes, None).expect("fixture parses");
         let idx = first_decoded_idx(&dex_a);
 
         // Flip had_terminator only; declared_chars + raw_bytes untouched.
@@ -245,8 +255,12 @@ mod tests {
     /// field (`declared_chars`) on one string MUST still register as divergence.
     #[test]
     fn content_equiv_still_catches_declared_chars_divergence() {
-        let dex_a = DexFile::parse(FIXTURE, None).expect("fixture parses");
-        let mut dex_c = DexFile::parse(FIXTURE, None).expect("fixture parses");
+        let Some(fixture_bytes) = fixture() else {
+            skipping();
+            return;
+        };
+        let dex_a = DexFile::parse(fixture_bytes, None).expect("fixture parses");
+        let mut dex_c = DexFile::parse(fixture_bytes, None).expect("fixture parses");
         let idx = first_decoded_idx(&dex_a);
 
         match dex_c.strings.get_mut(idx).expect("same-length pool") {

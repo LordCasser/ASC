@@ -96,17 +96,7 @@ fn replace_file(path: &Path, payload: &[u8], input: &Path) -> Result<(), OutputE
         )));
     }
 
-    let temporary = temporary_path(path)?;
-    let write = OpenOptions::new().write(true).create_new(true).open(&temporary);
-    let mut file = match write {
-        Ok(file) => file,
-        Err(error) => {
-            return Err(OutputError::io(
-                format!("create temporary file {}", temporary.display()),
-                &error,
-            ));
-        }
-    };
+    let (mut file, temporary) = create_temporary(path)?;
     let written =
         file.write_all(payload).and_then(|()| file.flush()).and_then(|()| file.sync_all());
     drop(file);
@@ -140,9 +130,12 @@ fn rename_over(temporary: &Path, path: &Path) -> io::Result<()> {
     }
 }
 
-/// Hidden same-directory name with a random-ish suffix; the `create_new`
-/// open makes collisions harmless (a new suffix is chosen instead).
-fn temporary_path(path: &Path) -> Result<PathBuf, OutputError> {
+/// Creates the hidden same-directory temporary via an exclusive `create_new`
+/// open. A collision between the name construction and the open (another
+/// process grabbing the same name) surfaces as `AlreadyExists` and retries
+/// with the next suffix instead of failing the command; after eight
+/// collisions in a row the output error is the honest answer.
+fn create_temporary(path: &Path) -> Result<(fs::File, PathBuf), OutputError> {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path.file_name().map_or_else(|| "output".to_owned(), |name| {
@@ -152,16 +145,32 @@ fn temporary_path(path: &Path) -> Result<PathBuf, OutputError> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_nanos())
         .unwrap_or_default();
-    loop {
+    let mut last: Option<PathBuf> = None;
+    for _ in 0..8 {
         let candidate = directory.join(format!(
             ".{name}.rasc-{}-{nanos:x}-{}.tmp",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed),
         ));
-        if !candidate.exists() {
-            return Ok(candidate);
+        last = Some(candidate.clone());
+        match OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(file) => return Ok((file, candidate)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(OutputError::io(
+                    format!("create temporary file {}", candidate.display()),
+                    &error,
+                ));
+            }
         }
     }
+    Err(OutputError::io(
+        format!(
+            "create temporary file {} (persistent name collisions)",
+            last.expect("at least one candidate was tried").display()
+        ),
+        &io::Error::other("create_new collided eight times in a row"),
+    ))
 }
 
 /// True when `path` and `input` denote the same file: same device and inode

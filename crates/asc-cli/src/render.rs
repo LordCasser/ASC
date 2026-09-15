@@ -3,9 +3,11 @@
 //! stdout.
 //!
 //! Every serialization runs under the `result-bytes` budget: growth past the
-//! budget is refused (`ResourceLimit`) before it happens, and the control
-//! token is checked at least every 64 KiB of output. Nothing buffers the
-//! payload unbounded and checks afterwards.
+//! budget is refused (`ResourceLimit`), and the control token is checked at
+//! least every 64 KiB of output. Per-row staging is bounded by the input
+//! data (a row's target list is at most the scanner's locations limit), so
+//! a hostile input degrades to a resource-limit error, never an unbounded
+//! buffer.
 
 use asc_core::error::Error;
 use asc_core::manifest::{Manifest, XmlRenderOptions};

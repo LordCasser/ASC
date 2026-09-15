@@ -1748,7 +1748,10 @@ mod tests {
 
     #[test]
     fn collect_spec_invariant_findings_surfaces_each_kind() {
-        let data = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let mut dex = crate::DexFile::parse(data, None).expect("parse fixture");
         // Clean d8 fixture → no spec-invariant records.
         assert!(
@@ -1786,7 +1789,10 @@ mod tests {
         // walker emits exactly one DEX_DUPLICATE_CLASS_DEF finding per
         // duplicate row recorded in parse_errors. Detail carries the
         // shared class_idx for triage.
-        let data = include_bytes!("../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = crate::DexFile::parse(data, None).expect("parse fixture");
         let first = dex
             .class_defs
@@ -1819,7 +1825,10 @@ mod tests {
 
     #[test]
     fn collect_duplicate_class_def_findings_quiet_on_unique_rows() {
-        let data = include_bytes!("../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = crate::DexFile::parse(data, None).expect("parse fixture");
         let findings = collect_duplicate_class_def_findings(&dex);
         assert!(
@@ -1835,7 +1844,10 @@ mod tests {
         // out-of-sync; not a production path but the walker must not
         // panic). Walker emits a Finding with the "class_idx=?"
         // fallback string rather than dropping the record silently.
-        let data = include_bytes!("../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = crate::DexFile::parse(data, None).expect("parse fixture");
         let oob = u32::try_from(dex.class_defs.len()).expect("≤ u32::MAX")
             .saturating_add(1000);
@@ -1857,7 +1869,10 @@ mod tests {
         // Synthesize the Lens 4 PoC byte shape: two class_def_item rows
         // with DIFFERENT class_idx but SAME class_data_off. Walker must
         // emit exactly one Finding per colliding group.
-        let data = include_bytes!("../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = crate::DexFile::parse(data, None).expect("parse fixture");
         // Find a class_def with non-zero class_data_off; clone it but
         // change class_idx to a different valid index so we have a
@@ -1901,7 +1916,10 @@ mod tests {
     fn collect_class_data_off_collision_findings_quiet_on_unique_offsets() {
         // Unmodified fixture: every class_def has its own class_data_off
         // (toolchains do not share). Walker must emit zero Findings.
-        let data = include_bytes!("../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = crate::DexFile::parse(data, None).expect("parse fixture");
         let findings = collect_class_data_off_collision_findings(&dex);
         let matching: Vec<&Finding> = findings
@@ -1921,7 +1939,10 @@ mod tests {
         // the prior `format!("{:?}", class_idxs)` ballooned each
         // Finding detail to O(N) bytes. SAMPLE_CAP=5 + `[+N more]`
         // rollup bounds per-Finding string size regardless of N.
-        let data = include_bytes!("../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = crate::DexFile::parse(data, None).expect("parse fixture");
         let donor_idx = dex
             .class_defs
@@ -1968,7 +1989,10 @@ mod tests {
         // Rows with class_data_off == 0 (no class_data attached, e.g.
         // marker classes / interfaces with no method bodies) MUST NOT
         // count as colliding even though they share the 0 "sentinel".
-        let data = include_bytes!("../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = crate::DexFile::parse(data, None).expect("parse fixture");
         // Plant two rows with class_data_off == 0.
         let mut clone_a = dex.class_defs[0].clone();

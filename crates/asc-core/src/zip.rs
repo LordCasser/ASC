@@ -1,34 +1,23 @@
 //! ZIP container codec: end-of-central-directory discovery, central-directory
 //! entries and per-entry inflation.
 //!
-//! The file has two layers:
+//! [`parse_catalog`] builds a fully validated central-directory catalog
+//! (single volume, no encryption, ZIP64 explicitly rejected, bounded entry
+//! count — enforced inside the directory walk, not just against the EOCD
+//! count) and [`read_entry`] decodes one entry with local-header/central-
+//! directory agreement, data-descriptor verification, exact-size and CRC
+//! checks, resource limits and cancellation checkpoints. [`select_root_dexes`]
+//! applies the root `classes*.dex` / `*.dex` discovery rules on raw name
+//! bytes and keeps duplicate names with their original ordinals for the
+//! upper layer (A07 owns the final selection policy).
 //!
-//! - The **A02 target-contract layer** (IN-02 in the acceptance matrix):
-//!   [`parse_catalog`] builds a fully validated central-directory catalog
-//!   (single volume, no encryption, ZIP64 explicitly rejected, bounded entry
-//!   count) and [`read_entry`] decodes one entry with local-header/central-
-//!   directory agreement, data-descriptor verification, exact-size and CRC
-//!   checks, resource limits and cancellation checkpoints. [`select_root_dexes`]
-//!   applies the root `classes*.dex` / `*.dex` discovery rules on raw name
-//!   bytes and keeps duplicate names with their original ordinals for the
-//!   upper layer (A07 owns the final selection policy).
-//! - The **legacy bridge** below (`parse_zip_entries`, `inflate_entry`,
-//!   `inflate_until`): the pre-A02 permissive reader that `src/apk.rs` still
-//!   calls. **A07 deletes it** together with its call sites; it must stay
-//!   signature-compatible and is deliberately not tightened (it does not
-//!   verify CRCs), so legacy tests keep their meaning until the switch.
-//!
-//! The binary's call graph does not reach the target-contract layer until A07
-//! wires it (the contract tests compile this file in directly), so the layer
-//! is allowed dead below; **A07 deletes the allow together with the bridge**.
-
-#![allow(dead_code)]
+//! The pre-A02 permissive bridge (`parse_zip_entries`, `inflate_entry`,
+//! `inflate_until`) was removed with its call sites; it never verified CRCs
+//! and carried no resource limits.
 
 use crate::bytes::{read_u16, read_u32, Checkpoints, ControlProbe, CHECKPOINT_SPACING};
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::error::{Error, ErrorKind};
-use anyhow::{Context, Result, bail};
-use libdeflater::{DecompressionError, Decompressor};
 use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
@@ -70,7 +59,6 @@ pub(crate) struct ArchiveEntry {
     pub(crate) raw_name: Vec<u8>,
     pub(crate) method: u16,
     pub(crate) flags: u16,
-    pub(crate) version_needed: u16,
     pub(crate) crc32: u32,
     pub(crate) compressed_size: u32,
     pub(crate) uncompressed_size: u32,
@@ -83,6 +71,13 @@ impl ArchiveEntry {
     pub(crate) fn display(&self) -> String {
         display_name(&self.raw_name)
     }
+
+    /// The central-directory uncompressed size. The exact-size decode
+    /// contract in [`read_entry`] makes this the authoritative output length,
+    /// so callers can budget against it before decoding.
+    pub(crate) fn declared_uncompressed_bytes(&self) -> u64 {
+        u64::from(self.uncompressed_size)
+    }
 }
 
 /// A name carried by more than one central-directory record, with every
@@ -91,22 +86,40 @@ impl ArchiveEntry {
 #[derive(Clone, Debug)]
 pub(crate) struct DuplicateName {
     pub(crate) name: Vec<u8>,
+    /// Contract-test surface (the input contract suite compiles this file in
+    /// and asserts every original ordinal).
+    #[allow(dead_code)]
     pub(crate) ordinals: Vec<u32>,
 }
 
-/// The validated archive catalog: every central-directory entry in CD order
-/// plus the duplicate-name report.
+/// The validated archive catalog: every central-directory entry in CD order.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ArchiveCatalog {
     pub(crate) entries: Vec<ArchiveEntry>,
-    pub(crate) duplicates: Vec<DuplicateName>,
 }
 
 /// Display form of a raw ZIP name: valid UTF-8 when possible, otherwise each
-/// byte escaped as `\xNN` — never a lossy key.
+/// byte escaped as `\xNN` — never a lossy key. Control characters are escaped
+/// in both branches: entry names reach diagnostics and stderr verbatim, and a
+/// raw ESC/CR/LF inside a name must not be able to forge terminal output or
+/// log lines.
 pub(crate) fn display_name(raw: &[u8]) -> String {
     match std::str::from_utf8(raw) {
-        Ok(text) => text.to_owned(),
+        Ok(text) => {
+            if text.chars().any(char::is_control) {
+                text.chars()
+                    .map(|character| {
+                        if character.is_control() {
+                            format!("\\u{{{:x}}}", u32::from(character))
+                        } else {
+                            character.to_string()
+                        }
+                    })
+                    .collect()
+            } else {
+                text.to_owned()
+            }
+        }
         Err(_) => raw.iter().map(|byte| format!("\\x{byte:02x}")).collect(),
     }
 }
@@ -283,12 +296,21 @@ pub(crate) fn parse_catalog(
             raw_name: data[name_start..name_end].to_vec(),
             method,
             flags,
-            version_needed,
             crc32,
             compressed_size,
             uncompressed_size,
             local_header_offset,
         });
+        // Enforced inside the walk: the EOCD count above only bounds what the
+        // archive *declares*, so a small declared count in front of a packed
+        // directory must not be walked to completion first.
+        if entries.len() > limits.max_archive_entries {
+            return Err(Error::resource_limit(format!(
+                "the central directory holds more than {} entries (record #{ordinal} at offset \
+                 {offset} crosses the limit)",
+                limits.max_archive_entries
+            )));
+        }
         offset = next;
     }
     if offset != cd_end {
@@ -305,16 +327,7 @@ pub(crate) fn parse_catalog(
         )));
     }
 
-    let mut by_name: BTreeMap<Vec<u8>, Vec<u32>> = BTreeMap::new();
-    for entry in &entries {
-        by_name.entry(entry.raw_name.clone()).or_default().push(entry.ordinal);
-    }
-    let duplicates = by_name
-        .into_iter()
-        .filter(|(_, ordinals)| ordinals.len() > 1)
-        .map(|(name, ordinals)| DuplicateName { name, ordinals })
-        .collect();
-    Ok(ArchiveCatalog { entries, duplicates })
+    Ok(ArchiveCatalog { entries })
 }
 
 fn truncated_eocd(eocd: usize) -> Error {
@@ -335,8 +348,14 @@ const DESCRIPTOR_SIGNATURE: u32 = 0x0807_4B50;
 /// compressed-data range, complete stream consumption with exact declared
 /// sizes (no trailing stream), CRC-32, and — when the descriptor flag is set
 /// — the data descriptor values (with or without the optional signature)
-/// against the actual stream. `decoded_bytes` accumulates the per-operation
-/// total across entries against `limits.max_total_decoded_bytes`.
+/// against the actual stream.
+///
+/// `decoded_bytes` accumulates the per-operation total across entries against
+/// `limits.max_total_decoded_bytes`. The full declared size is **reserved
+/// before the decode starts** and rolled back on failure: the exact-size
+/// contract below makes the declared size the authoritative output length, so
+/// concurrent entries can never hold decoded buffers beyond what the account
+/// already covers.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn read_entry(
     data: &[u8],
@@ -428,60 +447,80 @@ pub(crate) fn read_entry(
     }
     let compressed = &data[data_start..data_end];
 
-    let output = match entry.method {
-        STORED => {
-            if compressed_size != declared {
-                return Err(malformed(format!(
-                    "entry {name}: stored sizes disagree (compressed {compressed_size}, \
-                     uncompressed {declared})"
-                )));
-            }
-            copy_chunked(compressed, control)?
-        }
-        DEFLATE => inflate_strict(compressed, declared, &name, control)?,
-        method => {
-            return Err(unsupported(format!(
-                "entry {name} uses compression method {method} (only Stored (0) and \
-                 Deflate (8) are supported)"
-            )));
-        }
-    };
-
-    let produced = output.len() as u64;
-    let decoded_now = decoded_bytes.fetch_add(produced, Ordering::Relaxed) + produced;
-    if decoded_now > limits.max_total_decoded_bytes {
+    // Reserve the declared output before any decode work: the exact-size
+    // contract below guarantees `produced == declared` on success, so the
+    // reservation is exact and an over-cap entry is rejected before its
+    // buffer is allocated, not after.
+    let declared_u64 = declared as u64;
+    let reserved_now =
+        decoded_bytes.fetch_add(declared_u64, Ordering::Relaxed) + declared_u64;
+    if reserved_now > limits.max_total_decoded_bytes {
+        decoded_bytes.fetch_sub(declared_u64, Ordering::Relaxed);
         return Err(Error::resource_limit(format!(
-            "decoded bytes reach {decoded_now} across entries, above the {} per-operation limit \
+            "decoded bytes reach {reserved_now} across entries, above the {} per-operation limit \
              (while reading {name})",
             limits.max_total_decoded_bytes
         )));
     }
 
-    let crc = crc32_chunked(&output, control)?;
-    if crc != entry.crc32 {
-        return Err(malformed(format!(
-            "entry {name}: CRC-32 mismatch (local header at offset {local_offset}, data at \
-             offset {data_start}): stored 0x{:08x}, computed 0x{crc:08x}",
-            entry.crc32
-        )));
+    let decoded = (|| -> Result<Vec<u8>, Error> {
+        let output = match entry.method {
+            STORED => {
+                if compressed_size != declared {
+                    return Err(malformed(format!(
+                        "entry {name}: stored sizes disagree (compressed {compressed_size}, \
+                         uncompressed {declared})"
+                    )));
+                }
+                copy_chunked(compressed, control)?
+            }
+            DEFLATE => inflate_strict(compressed, declared, &name, control)?,
+            method => {
+                return Err(unsupported(format!(
+                    "entry {name} uses compression method {method} (only Stored (0) and \
+                     Deflate (8) are supported)"
+                )));
+            }
+        };
+        debug_assert_eq!(
+            output.len(),
+            declared,
+            "the exact-size contract makes the declared size the output length"
+        );
+
+        let crc = crc32_chunked(&output, control)?;
+        if crc != entry.crc32 {
+            return Err(malformed(format!(
+                "entry {name}: CRC-32 mismatch (local header at offset {local_offset}, data at \
+                 offset {data_start}): stored 0x{:08x}, computed 0x{crc:08x}",
+                entry.crc32
+            )));
+        }
+        // Without the descriptor flag the local header carries CRC/sizes too; a
+        // disagreement with the directory (or, after the checks above, with the
+        // actual stream) is structural. This runs after the stream checks so a
+        // tampered central-directory size reports the decode-level error first.
+        if !descriptor
+            && (local_crc != entry.crc32
+                || local_compressed != entry.compressed_size
+                || local_uncompressed != entry.uncompressed_size)
+        {
+            return Err(malformed(format!(
+                "entry {name}: local header CRC/sizes disagree with the central directory"
+            )));
+        }
+        if descriptor {
+            verify_descriptor(data, data_end, entry, &name, crc)?;
+        }
+        Ok(output)
+    })();
+    match decoded {
+        Ok(output) => Ok(output),
+        Err(error) => {
+            decoded_bytes.fetch_sub(declared_u64, Ordering::Relaxed);
+            Err(error)
+        }
     }
-    // Without the descriptor flag the local header carries CRC/sizes too; a
-    // disagreement with the directory (or, after the checks above, with the
-    // actual stream) is structural. This runs after the stream checks so a
-    // tampered central-directory size reports the decode-level error first.
-    if !descriptor
-        && (local_crc != entry.crc32
-            || local_compressed != entry.compressed_size
-            || local_uncompressed != entry.uncompressed_size)
-    {
-        return Err(malformed(format!(
-            "entry {name}: local header CRC/sizes disagree with the central directory"
-        )));
-    }
-    if descriptor {
-        verify_descriptor(data, data_end, entry, &name, crc)?;
-    }
-    Ok(output)
 }
 
 const STORED: u16 = 0;
@@ -651,12 +690,16 @@ fn inflate_strict(
 pub(crate) struct RootSelection<'a> {
     pub(crate) selected: Vec<&'a ArchiveEntry>,
     pub(crate) duplicates: Vec<DuplicateName>,
+    /// Contract-test surface: whether the fallback tier produced the
+    /// selection (asserted by the input contract suite).
+    #[allow(dead_code)]
     pub(crate) used_fallback: bool,
 }
 
 impl RootSelection<'_> {
     /// The error dex-backed operations report for DEX-less archives; A07 maps
-    /// classes/references/getclass onto this contract.
+    /// classes/references/getclass onto this contract. Contract-test surface.
+    #[allow(dead_code)]
     pub(crate) fn require_selected(&self) -> Result<&[&ArchiveEntry], Error> {
         if self.selected.is_empty() {
             return Err(Error::new(ErrorKind::NotFound).with_context(
@@ -712,199 +755,8 @@ pub(crate) fn select_root_dexes(catalog: &ArchiveCatalog) -> RootSelection<'_> {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy bridge — A07 deletes this whole section together with src/apk.rs's
-// call sites. Kept signature-compatible with the pre-A02 reader; it does not
-// verify CRCs or descriptor values, so the legacy tests keep their meaning.
+// Test builders
 // ---------------------------------------------------------------------------
-
-#[derive(Clone, Debug)]
-pub(crate) struct ZipEntry {
-    pub(crate) name: String,
-    pub(crate) uncompressed_size: usize,
-    pub(crate) compressed_size: usize,
-    pub(crate) local_header_offset: usize,
-    pub(crate) compression: u16,
-}
-
-pub(crate) fn parse_zip_entries(
-    data: &[u8],
-    mut include: impl FnMut(&[u8]) -> bool,
-) -> Result<Vec<ZipEntry>> {
-    let search_start = data.len().saturating_sub(65_557);
-    let eocd = data[search_start..]
-        .windows(4)
-        .rposition(|window| window == b"PK\x05\x06")
-        .map(|position| position + search_start)
-        .context("EOCD not found")?;
-    let cd_size = read_u32(data, eocd + 12)? as usize;
-    let cd_offset = read_u32(data, eocd + 16)? as usize;
-    let cd_end = cd_offset
-        .checked_add(cd_size)
-        .context("central directory overflow")?;
-    if cd_end > data.len() {
-        bail!("bad central directory range");
-    }
-    let mut entries = Vec::new();
-    let mut offset = cd_offset;
-    while offset + 46 <= cd_end {
-        if data.get(offset..offset + 4) != Some(b"PK\x01\x02") {
-            bail!("bad central directory signature at {offset}");
-        }
-        let name_len = read_u16(data, offset + 28)? as usize;
-        let extra_len = read_u16(data, offset + 30)? as usize;
-        let comment_len = read_u16(data, offset + 32)? as usize;
-        let name_start = offset + 46;
-        let name_end = name_start
-            .checked_add(name_len)
-            .context("ZIP name overflow")?;
-        let name_bytes = data
-            .get(name_start..name_end)
-            .context("bad ZIP name range")?;
-        if include(name_bytes) {
-            entries.push(ZipEntry {
-                name: String::from_utf8_lossy(name_bytes).into_owned(),
-                uncompressed_size: read_u32(data, offset + 24)? as usize,
-                compressed_size: read_u32(data, offset + 20)? as usize,
-                local_header_offset: read_u32(data, offset + 42)? as usize,
-                compression: read_u16(data, offset + 10)?,
-            });
-        }
-        offset = name_end
-            .checked_add(extra_len)
-            .and_then(|v| v.checked_add(comment_len))
-            .context("central directory entry overflow")?;
-    }
-    Ok(entries)
-}
-
-/// The compressed bytes of `entry`, with the local header skipped.
-fn compressed_slice<'a>(data: &'a [u8], entry: &ZipEntry) -> Result<&'a [u8]> {
-    let offset = entry.local_header_offset;
-    if data.get(offset..offset + 4) != Some(b"PK\x03\x04") {
-        bail!("bad local header for {}", entry.name);
-    }
-    let name_len = read_u16(data, offset + 26)? as usize;
-    let extra_len = read_u16(data, offset + 28)? as usize;
-    let start = offset + 30 + name_len + extra_len;
-    let end = start
-        .checked_add(entry.compressed_size)
-        .context("compressed range overflow")?;
-    data.get(start..end).context("bad compressed range")
-}
-
-/// What an incremental prefix inflate should do after each chunk.
-pub(crate) enum PrefixStep {
-    /// Keep going until at least this many bytes are present (0 = "not enough
-    /// information yet, ask again after the next chunk").
-    Continue(usize),
-    /// Give up on the prefix: the caller inflates the whole entry instead.
-    Abort,
-}
-
-/// Decompresses `entry` incrementally, letting `decide` stop it.
-///
-/// `decide` sees the bytes produced so far and returns how much further to go (or
-/// that the prefix is not worth it). The stream is decoded on the fly - system zlib
-/// rather than libdeflate - so the caller can stop as soon as its decision is safe
-/// and never pays for the code section. Returns `(bytes, finished)`; `finished` is
-/// false when the caller aborted, in which case the bytes so far are still exact.
-pub(crate) fn inflate_until(
-    data: &[u8],
-    entry: &ZipEntry,
-    mut decide: impl FnMut(&[u8]) -> PrefixStep,
-) -> Result<(Vec<u8>, bool)> {
-    if entry.compression != 8 {
-        return Ok((inflate_entry(data, entry)?, true));
-    }
-    const CHUNK: usize = 1 << 18;
-    let compressed = compressed_slice(data, entry)?;
-    let mut decompressor = flate2::Decompress::new(false);
-    let mut output: Vec<u8> = Vec::new();
-    let mut target: Option<usize> = None;
-    loop {
-        let base = output.len();
-        output.resize(base + CHUNK, 0);
-        let consumed = decompressor.total_in() as usize;
-        let status = decompressor
-            .decompress(
-                compressed.get(consumed..).context("compressed range")?,
-                &mut output[base..],
-                flate2::FlushDecompress::None,
-            )
-            .with_context(|| format!("inflate prefix of {}", entry.name))?;
-        let written = decompressor.total_out() as usize - base;
-        output.truncate(base + written);
-        if target.is_none() {
-            match decide(&output) {
-                // 0 means the caller needs more bytes before it can decide, so ask
-                // again after the next chunk rather than committing to a target.
-                PrefixStep::Continue(0) => {}
-                PrefixStep::Continue(limit) => target = Some(limit.min(entry.uncompressed_size)),
-                PrefixStep::Abort => return Ok((output, false)),
-            }
-        }
-        if let Some(limit) = target
-            && output.len() >= limit
-        {
-            return Ok((output, status == flate2::Status::StreamEnd));
-        }
-        if status == flate2::Status::StreamEnd {
-            return Ok((output, true));
-        }
-        if written == 0 && decompressor.total_in() as usize == consumed {
-            bail!("deflate made no progress for {}", entry.name);
-        }
-    }
-}
-
-pub(crate) fn inflate_entry(data: &[u8], entry: &ZipEntry) -> Result<Vec<u8>> {
-    let compressed = compressed_slice(data, entry)?;
-    match entry.compression {
-        0 => {
-            if compressed.len() != entry.uncompressed_size {
-                bail!(
-                    "size mismatch for {}: expected {}, got {}",
-                    entry.name,
-                    entry.uncompressed_size,
-                    compressed.len()
-                );
-            }
-            Ok(compressed.to_vec())
-        }
-        8 => {
-            // A declared uncompressed size is attacker-controlled, and a ZIP64
-            // placeholder (0xFFFFFFF0) used to reserve ~4 GiB before any
-            // validation could run. Grow the buffer on demand instead: the first
-            // capacity is four times the compressed size, which covers the ratios
-            // real entries show (the benchmark's is 2.8), and a larger entry pays
-            // one retry per doubling.
-            let declared = entry.uncompressed_size;
-            let initial = declared.min(entry.compressed_size.saturating_mul(4).max(64 * 1024));
-            let mut output = vec![0; initial];
-            let mut decompressor = Decompressor::new();
-            let written = loop {
-                match decompressor.deflate_decompress(compressed, &mut output) {
-                    Ok(written) => break written,
-                    Err(DecompressionError::InsufficientSpace) if output.len() < declared => {
-                        let grown = output.len().saturating_mul(2).max(64 * 1024).min(declared);
-                        output = vec![0; grown];
-                    }
-                    Err(error) => {
-                        return Err(error).with_context(|| format!("inflate {}", entry.name));
-                    }
-                }
-            };
-            if written != declared {
-                bail!(
-                    "size mismatch for {}: expected {declared}, got {written}",
-                    entry.name
-                );
-            }
-            Ok(output)
-        }
-        method => bail!("unsupported compression method {method} for {}", entry.name),
-    }
-}
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -986,21 +838,6 @@ pub(crate) mod tests {
         data
     }
 
-    /// Offsets inside a central-directory entry, as read by the parser.
-    const CENTRAL_COMPRESSED_SIZE: usize = 20;
-    const CENTRAL_UNCOMPRESSED_SIZE: usize = 24;
-    const CENTRAL_NAME_LENGTH: usize = 28;
-    const CENTRAL_LOCAL_OFFSET: usize = 42;
-
-    /// Corrupts `field` of the first central-directory entry.
-    fn patch_central_entry(zip: &mut [u8], field: usize, value: u32) {
-        let start = zip
-            .windows(4)
-            .position(|window| window == b"PK\x01\x02")
-            .expect("archive has a central directory");
-        write_u32(zip, start + field, value);
-    }
-
     /// Writes `data` to a uniquely named temporary file.
     pub(crate) fn temp_apk(tag: &str, data: &[u8]) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!("rasc-{tag}-{}.apk", std::process::id()));
@@ -1009,180 +846,87 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn parser_filters_entries_by_name_and_inflates_both_methods() {
-        let first = vec![7u8; 4096];
-        let second = b"second payload".to_vec();
-        let zip = build_zip(&[
-            ("classes.dex", &first, true),
-            ("classes2.dex", &second, false),
-            ("AndroidManifest.xml", b"<manifest/>", false),
+    fn catalog_entry_cap_is_enforced_inside_the_walk() {
+        // An EOCD that undercounts its entries must not let the walk collect
+        // an unbounded directory before the count cross-check runs.
+        let mut zip = build_zip(&[
+            ("classes.dex", b"payload", false),
+            ("classes2.dex", b"payload", false),
+            ("classes3.dex", b"payload", false),
         ]);
-        let entries = parse_zip_entries(&zip, |name| name.starts_with(b"classes")).unwrap();
-        let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
-        assert_eq!(names, ["classes.dex", "classes2.dex"]);
-        assert_eq!(entries[0].uncompressed_size, first.len());
-        assert_eq!(entries[0].compression, 8);
-        assert_eq!(inflate_entry(&zip, &entries[0]).unwrap(), first);
-        assert_eq!(entries[1].compression, 0);
-        assert_eq!(inflate_entry(&zip, &entries[1]).unwrap(), second);
-    }
-
-    #[test]
-    fn stored_entry_size_mismatch_is_rejected() {
-        // A stored entry whose compressed size disagrees with its declared
-        // uncompressed size used to pass unvalidated.
-        let mut zip = build_zip(&[("classes.dex", b"payload", false)]);
-        patch_central_entry(&mut zip, CENTRAL_COMPRESSED_SIZE, 3);
-        let entry = &parse_zip_entries(&zip, |_| true).unwrap()[0];
-        let error = inflate_entry(&zip, entry).unwrap_err().to_string();
-        assert!(error.contains("size mismatch"), "unexpected error: {error}");
-    }
-
-    #[test]
-    fn deflate_size_mismatch_is_rejected() {
-        let payload = vec![1u8; 2048];
-        let mut zip = build_zip(&[("classes.dex", &payload, true)]);
-        patch_central_entry(&mut zip, CENTRAL_UNCOMPRESSED_SIZE, 2048 + 64);
-        let entry = &parse_zip_entries(&zip, |_| true).unwrap()[0];
-        let error = inflate_entry(&zip, entry).unwrap_err().to_string();
-        assert!(error.contains("size mismatch"), "unexpected error: {error}");
-    }
-
-    #[test]
-    fn deflate_grows_the_buffer_for_a_high_ratio_entry() {
-        // An all-zero payload compresses far below a quarter of its size, so the
-        // first capacity is not enough and the grow path has to run.
-        let payload = vec![0u8; 128 * 1024];
-        let zip = build_zip(&[("classes.dex", &payload, true)]);
-        let entry = &parse_zip_entries(&zip, |_| true).unwrap()[0];
-        let compressed = zip.len();
-        assert!(
-            entry.uncompressed_size > compressed * 4,
-            "fixture is not high-ratio enough"
-        );
-        assert_eq!(inflate_entry(&zip, entry).unwrap(), payload);
-    }
-
-    #[test]
-    fn zip64_placeholder_uncompressed_size_is_rejected() {
-        // 0xFFFFFFF0 is what a ZIP64 archive writes when the real 64-bit size
-        // lives in the extra field. It must fail without reserving the declared
-        // size first.
-        let payload = vec![3u8; 4096];
-        let mut zip = build_zip(&[("classes.dex", &payload, true)]);
-        patch_central_entry(&mut zip, CENTRAL_UNCOMPRESSED_SIZE, 0xFFFFFFF0);
-        let entry = &parse_zip_entries(&zip, |_| true).unwrap()[0];
-        let error = inflate_entry(&zip, entry).unwrap_err().to_string();
-        assert!(error.contains("classes.dex"), "unexpected error: {error}");
-    }
-
-    #[test]
-    fn deflate_into_an_undersized_buffer_is_rejected() {
-        let payload = vec![2u8; 2048];
-        let mut zip = build_zip(&[("classes.dex", &payload, true)]);
-        patch_central_entry(&mut zip, CENTRAL_UNCOMPRESSED_SIZE, 1024);
-        let entry = &parse_zip_entries(&zip, |_| true).unwrap()[0];
-        assert!(inflate_entry(&zip, entry).is_err());
-    }
-
-    #[test]
-    fn archive_without_end_of_central_directory_is_rejected() {
-        let zip = build_zip(&[("classes.dex", b"payload", false)]);
-        let truncated = &zip[..zip.len() - 30];
-        let error = parse_zip_entries(truncated, |_| true)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("EOCD not found"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn bad_central_directory_signature_is_rejected() {
-        let mut zip = build_zip(&[("classes.dex", b"payload", false)]);
-        let start = zip
-            .windows(4)
-            .position(|window| window == b"PK\x01\x02")
-            .unwrap();
-        zip[start + 3] = b'X';
-        let error = parse_zip_entries(&zip, |_| true).unwrap_err().to_string();
-        assert!(
-            error.contains("central directory signature"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn zip64_end_of_central_directory_placeholders_are_rejected() {
-        // ZIP64 archives carry 0xFFFF/0xFFFFFFFF placeholders in the plain EOCD
-        // and put the real values in a ZIP64 record. APKs cannot be ZIP64, so
-        // those values must be reported rather than used to scan a 4 GiB range.
-        let mut zip = build_zip(&[("classes.dex", b"payload", false)]);
         let eocd = zip
             .windows(4)
             .rposition(|window| window == b"PK\x05\x06")
             .expect("archive has an EOCD");
-        zip[eocd + 8..eocd + 12].copy_from_slice(&[0xFF; 4]);
-        write_u32(&mut zip, eocd + 12, u32::MAX);
-        write_u32(&mut zip, eocd + 16, u32::MAX);
-        let error = parse_zip_entries(&zip, |_| true).unwrap_err().to_string();
+        // Declared count 1 (under the cap) while the directory holds 3.
+        zip[eocd + 8..eocd + 10].copy_from_slice(&1u16.to_le_bytes());
+        zip[eocd + 10..eocd + 12].copy_from_slice(&1u16.to_le_bytes());
+        let limits =
+            InputLimits { max_archive_entries: 2, ..InputLimits::DEFAULT };
+        let error = parse_catalog(&zip, &limits).unwrap_err();
         assert!(
-            error.contains("bad central directory range"),
+            error.to_string().contains("more than 2 entries"),
             "unexpected error: {error}"
         );
     }
 
     #[test]
-    fn concatenated_archives_use_the_last_end_of_central_directory() {
-        // Two archives appended to each other (a common polyglot trick): the EOCD
-        // is found by searching backwards, so the trailing record wins — the same
-        // one the reference implementation's `rfind` picks. Offsets inside a
-        // concatenated archive stay relative to its own start, so this only works
-        // when the prefix has the same layout; that is what the two identical
-        // halves below exercise.
-        let archive = build_zip(&[("classes.dex", b"payload", false)]);
-        let mut both = archive.clone();
-        both.extend_from_slice(&archive);
-        let entries = parse_zip_entries(&both, |_| true).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(inflate_entry(&both, &entries[0]).unwrap(), b"payload");
+    fn display_name_escapes_control_characters() {
+        // A raw ESC inside a valid-UTF-8 name must not reach stderr verbatim.
+        let shown = display_name(b"ok\x1b[2Jevil");
+        assert!(shown.contains("\\u{1b}"), "escaped form: {shown:?}");
+        assert!(!shown.contains('\u{1b}'), "raw control byte leaked: {shown:?}");
     }
 
     #[test]
-    fn data_descriptor_flag_uses_the_central_directory_sizes() {
-        // Local-header flag bit 3 means sizes and CRC live in a trailing data
-        // descriptor; the central directory still carries them, and that is what
-        // the parser reads.
-        let payload = b"streamed payload".to_vec();
+    fn read_entry_reserves_the_budget_and_rolls_back_on_failure() {
+        let payload = b"budgeted payload".to_vec();
         let mut zip = build_zip(&[("classes.dex", &payload, false)]);
-        let local = zip
-            .windows(4)
-            .position(|window| window == b"PK\x03\x04")
-            .unwrap();
-        zip[local + 6..local + 8].copy_from_slice(&0x0008u16.to_le_bytes());
-        write_u32(&mut zip, local + 18, 0);
-        write_u32(&mut zip, local + 22, 0);
-        let entries = parse_zip_entries(&zip, |_| true).unwrap();
-        assert_eq!(inflate_entry(&zip, &entries[0]).unwrap(), payload);
-    }
+        let limits = InputLimits::DEFAULT;
+        let catalog = parse_catalog(&zip, &limits).unwrap();
+        let entry = &catalog.entries[0];
+        let decoded = AtomicU64::new(0);
+        let probe = ControlProbe::never();
 
-    #[test]
-    fn central_name_length_past_the_directory_is_rejected() {
-        let mut zip = build_zip(&[("classes.dex", b"payload", false)]);
-        patch_central_entry(&mut zip, CENTRAL_NAME_LENGTH, 0xFFFF);
-        let error = parse_zip_entries(&zip, |_| true).unwrap_err().to_string();
+        // Success: the reservation equals the produced bytes exactly.
+        let output = read_entry(&zip, entry, &limits, &decoded, &probe).unwrap();
+        assert_eq!(output, payload);
+        assert_eq!(decoded.load(Ordering::Relaxed), payload.len() as u64);
+
+        // Failure after the reservation (CRC tampered): the account rolls back.
+        let start = zip
+            .windows(4)
+            .position(|window| window == b"PK\x01\x02")
+            .expect("archive has a central directory");
+        write_u32(&mut zip, start + 16, 0xDEAD_BEEF);
+        let catalog = parse_catalog(&zip, &limits).unwrap();
+        let entry = &catalog.entries[0];
+        let error = read_entry(&zip, entry, &limits, &decoded, &probe).unwrap_err();
         assert!(
-            error.contains("bad ZIP name range"),
+            error.to_string().contains("CRC-32 mismatch"),
             "unexpected error: {error}"
         );
-    }
+        assert_eq!(
+            decoded.load(Ordering::Relaxed),
+            payload.len() as u64,
+            "a failed read must return its reservation"
+        );
 
-    #[test]
-    fn central_local_header_offset_past_the_end_is_rejected() {
-        let mut zip = build_zip(&[("classes.dex", b"payload", false)]);
-        patch_central_entry(&mut zip, CENTRAL_LOCAL_OFFSET, u32::MAX);
-        let entry = &parse_zip_entries(&zip, |_| true).unwrap()[0];
-        assert!(inflate_entry(&zip, entry).is_err());
+        // Over-cap declaration: rejected before any decode work.
+        let tight = build_zip(&[("classes.dex", &payload, false)]);
+        let tight_limits =
+            InputLimits { max_total_decoded_bytes: 4, ..InputLimits::DEFAULT };
+        let catalog = parse_catalog(&tight, &tight_limits).unwrap();
+        let entry = &catalog.entries[0];
+        let error = read_entry(&tight, entry, &tight_limits, &decoded, &probe).unwrap_err();
+        assert!(
+            error.to_string().contains("per-operation limit"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            decoded.load(Ordering::Relaxed),
+            payload.len() as u64,
+            "an over-cap read must not touch the account"
+        );
     }
 }

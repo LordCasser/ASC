@@ -42,7 +42,13 @@ An implementation in Zig or C++ might go further.
 
 - Apple M3 Pro (6 performance + 6 efficiency cores), 36 GiB RAM, macOS 26.5.1.
 - ASC: CPython 3.12.14, Androguard 4.1.4. rasc: Rust release build with FatLTO.
-- Input: 56 root DEXes, 567,192 classes. Both implementations use 8 workers.
+- Input: 56 root DEXes, 567,192 classes.
+- **Workers — measurement erratum**: the harness passed `--threads 8` to both
+  implementations, but at measurement time rasc's `--threads` flag was not
+  wired to its worker pool (it is now): rasc ran on rayon's default pool,
+  i.e. all cores (12 on this machine), while ASC ran with 8 workers. Treat
+  the comparison as rasc-12-threads vs ASC-8-threads; the speedups were not
+  measured under symmetric worker counts.
 - End-to-end wall time: fresh process per sample, randomized execution order, median of
   at least 3 runs. Output is discarded, but formatting and writing are included.
 - Exit status and output are checked before timing; result sets are compared where applicable.
@@ -82,8 +88,10 @@ Peak RSS on the same APK with 8 workers:
 
 rasc uses more memory for parallel reference searches, but less for class decompilation
 and manifest decoding in these measurements. Reducing workers trades speed for memory:
-a separate `findrefs field INSTANCE` run with `--threads 2` used 256 MiB and remained
-3.3× faster than ASC.
+that trade-off is real now that `--threads` configures the engine's worker pool, but the
+"256 MiB with `--threads 2`" figure recorded below predates the wiring (that run also
+used the default pool) and should not be read as the flag's effect; re-measure before
+citing worker-count memory numbers.
 
 ### Reproduce
 
@@ -119,14 +127,16 @@ rasc manifest app.apk                                  # binary AndroidManifest.
 rasc getclass app.apk example.Test --dex 0:1           # pin one logical DEX
 ```
 
-Every command accepts `--threads/--thread N` (default 8, positive), `--debug`
+Every command accepts `--threads/--thread N` (worker threads for the parallel
+entry fold; default: all available cores, must be positive), `--debug`
 (extra stats on stderr; never changes the payload), `-o/--output FILE` (the
 same bytes as stdout, written through a same-directory temporary file and an
 atomic replacement), `--format text|json` (default `text`; JSON is one
 envelope object with `schema_version`, `operation`, `artifact_id`, `data` and
 `diagnostics`), `--timeout-ms N` (cancel after N milliseconds) and repeatable
 `--limit KEY=VALUE` overrides for the resource-limit table (decimal positive
-integers; see `rasc --help`).
+integers; `dexes` and `code-units` are accepted but not yet enforced — see
+`rasc --help`).
 
 Exit codes: `0` complete success (including empty results), `2` invalid
 arguments or queries, `1` input/analysis/output errors and incomplete

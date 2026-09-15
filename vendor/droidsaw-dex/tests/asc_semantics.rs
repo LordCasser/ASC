@@ -1015,7 +1015,6 @@ fn dxp05a_no_debug_info_still_complete() -> TestResult {
 // probe appended to asc_semantics temporarily
 
 #[test]
-#[test]
 #[ignore]
 fn debug_print_count_fillarr() {
     let dex = flow_fixture();

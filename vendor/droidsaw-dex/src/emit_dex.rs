@@ -9063,8 +9063,7 @@ mod tests {
             "a completeness failure (ClassData) must trip the PartialIR gate"
         );
         // And the gate also fires under preserve mode for completeness.
-        let mut cfg = EmitConfig::default();
-        cfg.preserve_data_section_layout = true;
+        let cfg = EmitConfig { preserve_data_section_layout: true, ..EmitConfig::default() };
         assert!(
             matches!(
                 emit_dex_with_config(&dex, &cfg).map(|_| ()),
@@ -9409,7 +9408,10 @@ mod tests {
         // section alone, confirm remap cardinality matches parser
         // state. This is the integration-ish check at unit-test
         // level — full emit_dex integration lands in the next commit.
-        let data = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = crate::parser::DexFile::parse(data, None).expect("fixture parses");
         let (blob, remap) =
             emit_debug_info_section(&dex.debug_info_raw_bytes).expect("emit");

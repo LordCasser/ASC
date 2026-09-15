@@ -1,34 +1,25 @@
 //! DEX containers: version-matrix validation, 041 logical members, integrity
 //! diagnostics and the validated view handed to the dex/decompile layers.
 //!
-//! Two layers live here:
+//! [`validate_dex_entry`] checks the DEX version against the explicit support
+//! matrix (035/037/038/039/040/041; 036, unknown versions, CompactDex `cdex`
+//! and ODEX `dey` are `UnsupportedFormat`), validates each version's
+//! header/table/map structure, walks the 041 member chain, and returns one
+//! [`ValidatedDexView`] per logical member sharing the **whole container
+//! address space** (physical bytes + header offset — no per-member copies).
+//! Adler-32/SHA-1 mismatches are *warnings*, never structural failures, and
+//! never mutate the input. [`backend_scratch`] produces the private,
+//! operation-scoped normalization copy a backend needs to accept a 041
+//! member (original offsets recorded, diagnostics preserved).
 //!
-//! - The **A02 target-contract layer** (IN-03/IN-04): [`validate_dex_entry`]
-//!   checks the DEX version against the explicit support matrix (035/037/038/
-//!   039/040/041; 036, unknown versions, CompactDex `cdex` and ODEX `dey` are
-//!   `UnsupportedFormat`), validates each version's header/table/map
-//!   structure, walks the 041 member chain, and returns one
-//!   [`ValidatedDexView`] per logical member sharing the **whole container
-//!   address space** (physical bytes + header offset — no per-member copies).
-//!   Adler-32/SHA-1 mismatches are *warnings*, never structural failures, and
-//!   never mutate the input. [`backend_scratch`] produces the private,
-//!   operation-scoped normalization copy a backend needs to accept a 041
-//!   member (original offsets recorded, diagnostics preserved).
-//! - The **legacy bridge** (`logical_dexes`/`LogicalDexes`/
-//!   `standard_header_view`): the pre-A02 iterator `src/apk.rs` still
-//!   consumes. **A07 deletes it** together with the `dead_code` allow below;
-//!   until the switch the binary's call graph does not reach the A02 layer
-//!   (the contract tests compile it in directly), so it is allowed dead.
+//! The pre-A02 lazy iterator bridge (`logical_dexes`) was removed with its
+//! call sites; the validated-view layer above is the only reader.
 
-#![allow(dead_code)]
-
-use crate::bytes::{read_u32, sha1, Checkpoints, ControlProbe, CHECKPOINT_SPACING};
+use crate::bytes::{sha1, Checkpoints, ControlProbe, CHECKPOINT_SPACING};
 use crate::error::{Error, ErrorKind};
 use crate::model::{
     ArtifactId, DexEntry, DexId, DexText, DexVersion, Diagnostic, DiagnosticCode, Severity, Stage,
 };
-use anyhow::{Context, Result, bail};
-use std::borrow::Cow;
 
 const HEADER_SIZE_STD: usize = 0x70;
 const HEADER_SIZE_041: usize = 0x78;
@@ -78,14 +69,6 @@ impl ValidatedDexView<'_> {
 
     pub(crate) fn logical_name(&self) -> &str {
         &self.logical_name
-    }
-
-    /// The member's header slice (0x70 bytes for standard versions, 0x78 for
-    /// 041), borrowed from the physical bytes.
-    pub(crate) fn header(&self) -> &[u8] {
-        let size = if self.version == DexVersion::V041 { HEADER_SIZE_041 } else { HEADER_SIZE_STD };
-        let end = (self.header_offset + size).min(self.bytes.len());
-        &self.bytes[self.header_offset..end]
     }
 }
 
@@ -327,11 +310,23 @@ fn validate_041_chain(
     // chain never visits as a member base. Every self-consistent member
     // header (right magic, self-pointing header_offset, matching container
     // size) must therefore be one of the walked bases.
-    for position in 0..=data.len().saturating_sub(HEADER_SIZE_041) {
-        if spans.iter().any(|(base, _)| *base == position) {
-            continue;
+    //
+    // The scan is magic-led: the 8-byte magic compare (memmem, SIMD) runs at
+    // every position and the span-membership check and field reads run only
+    // at magic hits, so cost stays linear in the container even with the
+    // maximum member count. Cancellation checkpoints fire every 64 KiB of
+    // scanned bytes, so a deadline bounds the scan.
+    let finder = memchr::memmem::Finder::new(b"dex\n041\0");
+    let mut search_from = 0usize;
+    let mut checkpoints = Checkpoints::new();
+    while let Some(hit) = finder.find(&data[search_from..]) {
+        let position = search_from + hit;
+        checkpoints.tick(control, hit)?;
+        search_from = position + 1;
+        if position + HEADER_SIZE_041 > data.len() {
+            break;
         }
-        if data.get(position..position + 8) != Some(b"dex\n041\0") {
+        if spans.iter().any(|(base, _)| *base == position) {
             continue;
         }
         let declared_container = read(data, position + 0x70).expect("bounds checked above");
@@ -566,9 +561,12 @@ pub(crate) struct BackendScratch {
     /// The normalized copy (member header overlaid at offset zero).
     pub(crate) bytes: Vec<u8>,
     /// Physical offset the overlaid header came from — the mapping back into
-    /// the container for anything diagnosing "view offset 0".
+    /// the container for anything diagnosing "view offset 0". Diagnostic
+    /// surface: read by tests today, by the debug wiring when it lands.
+    #[allow(dead_code)]
     pub(crate) source_header_offset: usize,
     /// Which fields were rewritten and why, for evidence/debug output.
+    #[allow(dead_code)]
     pub(crate) rewrites: &'static [&'static str],
 }
 
@@ -640,146 +638,20 @@ fn normalize_041(container: &[u8], header_offset: usize) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy bridge — A07 deletes this together with src/apk.rs's call sites.
+// Tests
 // ---------------------------------------------------------------------------
-
-/// A copy of a DEX 041 view whose header looks like a standard 0x70 header.
-///
-/// `None` for anything that is not a 041 header, in which case the caller keeps
-/// using its own bytes. DEX 041 adds two header fields after the standard ones and
-/// its checksum covers the whole container, neither of which `droidsaw-dex`
-/// accepts (`invalid DEX header_size: 120`), so the decompiler is handed a view
-/// whose header size says 0x70 and whose Adler-32 matches the view again.
-/// Section offsets stay container-relative, which is exactly what the buffer
-/// produced by [`logical_dexes`] provides.
-pub(crate) fn standard_header_view(data: &[u8]) -> Option<Vec<u8>> {
-    if data.len() < HEADER_SIZE_041 || data.get(..8) != Some(b"dex\n041\0") {
-        return None;
-    }
-    Some(normalize_041(data, 0))
-}
-
-pub(crate) struct LogicalDex<'a> {
-    pub(crate) name: String,
-    pub(crate) data: Cow<'a, [u8]>,
-}
-
-/// Iterator over the logical DEXes of one entry, produced one member at a time.
-///
-/// Every container member needs its own copy of the container with its header
-/// overlaid at offset zero (DEX 041 section offsets are relative to the physical
-/// container), so materializing all of them costs `members × entry size` of
-/// resident memory: a 398 KiB entry with 3400 members measured **1.34 GiB** of
-/// RSS before this became lazy. Members are therefore produced on demand, and a
-/// caller that stops early (a `getclass` hit) never copies the rest.
-pub(crate) struct LogicalDexes<'a> {
-    name: &'a str,
-    data: &'a [u8],
-    /// Member header offsets; empty means "one plain DEX, borrowed".
-    offsets: Vec<usize>,
-    next: usize,
-}
-
-impl<'a> Iterator for LogicalDexes<'a> {
-    type Item = LogicalDex<'a>;
-
-    fn next(&mut self) -> Option<LogicalDex<'a>> {
-        if self.offsets.is_empty() {
-            if self.next > 0 {
-                return None;
-            }
-            self.next = 1;
-            return Some(LogicalDex {
-                name: self.name.to_owned(),
-                data: Cow::Borrowed(self.data),
-            });
-        }
-        let index = self.next;
-        let header_offset = *self.offsets.get(index)?;
-        self.next += 1;
-        // Keep the complete container address space but overlay this member's
-        // header at offset zero, the checked view the scanner expects.
-        let mut normalized = self.data.to_vec();
-        normalized[..HEADER_SIZE_041]
-            .copy_from_slice(&self.data[header_offset..header_offset + HEADER_SIZE_041]);
-        Some(LogicalDex {
-            name: format!("{}!classes{}.dex", self.name, index + 1),
-            data: Cow::Owned(normalized),
-        })
-    }
-}
-
-/// The logical DEXes in `data`: validated up front, yielded lazily.
-///
-/// A single-member 041 container — and any ordinary DEX — keeps the entry's own
-/// name and borrowed bytes, which is what the reference implementation does;
-/// only a container with several members renames them `name!classesN.dex`.
-pub(crate) fn logical_dexes<'a>(name: &'a str, data: &'a [u8]) -> Result<LogicalDexes<'a>> {
-    let plain = LogicalDexes {
-        name,
-        data,
-        offsets: Vec::new(),
-        next: 0,
-    };
-    if data.len() < HEADER_SIZE_041 || data.get(..8) != Some(b"dex\n041\0") {
-        return Ok(plain);
-    }
-
-    let container_size = read_u32(data, 0x70)? as usize;
-    if container_size != data.len() {
-        bail!(
-            "DEX 041 container size mismatch: header={container_size}, actual={}",
-            data.len()
-        );
-    }
-    // Validate every member header first: metadata only, no copies, so a
-    // malformed container is rejected before any member work happens.
-    let mut offsets = Vec::new();
-    let mut header_offset = 0usize;
-    while header_offset + HEADER_SIZE_041 <= data.len() {
-        if data.get(header_offset..header_offset + 8) != Some(b"dex\n041\0") {
-            break;
-        }
-        let file_size = read_u32(data, header_offset + 0x20)? as usize;
-        let declared_header_offset = read_u32(data, header_offset + 0x74)? as usize;
-        let declared_container_size = read_u32(data, header_offset + 0x70)? as usize;
-        if declared_header_offset != header_offset || declared_container_size != container_size {
-            bail!("inconsistent DEX 041 logical header at {header_offset}");
-        }
-        if file_size < HEADER_SIZE_041 || file_size > data.len() - header_offset {
-            bail!("invalid DEX 041 logical file size at {header_offset}");
-        }
-        offsets.push(header_offset);
-        header_offset = header_offset
-            .checked_add(file_size)
-            .context("DEX 041 header offset overflow")?;
-    }
-    if offsets.is_empty() || header_offset != data.len() {
-        bail!("malformed DEX 041 logical container");
-    }
-    if offsets.len() == 1 {
-        // One member: the container is that DEX with an extra-long header, the
-        // overlay would be a no-op, and the reference keeps the plain name.
-        return Ok(plain);
-    }
-    Ok(LogicalDexes {
-        name,
-        data,
-        offsets,
-        next: 0,
-    })
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bytes::read_u32;
 
     fn write_u32(data: &mut [u8], offset: usize, value: u32) {
         data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
 
-    /// Minimal tiling 041 container (legacy-layer shape: only the chain
-    /// fields, no map) for the legacy iterator tests.
+    /// Minimal tiling 041 container (chain fields only, no map) for the
+    /// chain-validation tests.
     fn legacy_041_container(sizes: &[usize]) -> Vec<u8> {
         let total: usize = sizes.iter().sum();
         let mut data = vec![0u8; total];
@@ -796,83 +668,40 @@ mod tests {
     }
 
     #[test]
-    fn dex041_container_exposes_all_logical_headers() {
-        const SIZE: usize = 0x78;
-        let mut data = vec![0; SIZE * 2];
-        for offset in [0, SIZE] {
-            data[offset..offset + 8].copy_from_slice(b"dex\n041\0");
-            write_u32(&mut data, offset + 0x20, SIZE as u32);
-            write_u32(&mut data, offset + 0x24, SIZE as u32);
-            write_u32(&mut data, offset + 0x70, (SIZE * 2) as u32);
-            write_u32(&mut data, offset + 0x74, offset as u32);
-        }
-        let logical: Vec<_> = logical_dexes("classes.dex", &data).unwrap().collect();
-        assert_eq!(logical.len(), 2);
-        assert_eq!(logical[0].name, "classes.dex!classes1.dex");
-        assert_eq!(logical[1].name, "classes.dex!classes2.dex");
-        assert_eq!(&logical[1].data[..8], b"dex\n041\0");
-        assert_eq!(read_u32(&logical[1].data, 0x74).unwrap(), SIZE as u32);
-    }
-
-    #[test]
-    fn single_member_041_container_keeps_the_plain_name_and_bytes() {
-        // One member means the container is that DEX with an extra-long header:
-        // the overlay would be a no-op and the reference yields it under the
-        // entry's own name, so nothing is copied.
-        let container = legacy_041_container(&[0x78]);
-        let mut logical = logical_dexes("classes.dex", &container).unwrap();
-        let member = logical.next().expect("one member");
-        assert_eq!(member.name, "classes.dex");
-        assert!(matches!(member.data, Cow::Borrowed(_)));
-        assert!(logical.next().is_none());
-    }
-
-    #[test]
-    fn logical_members_are_produced_lazily() {
-        // A tiling container with 8000 members in a 600 KiB entry. Materializing
-        // the members (each one copies the whole container, which is what the
-        // first implementation did) would need ~4.8 GiB here; taking one member
-        // costs a single copy instead.
-        const MEMBERS: usize = 8000;
-        let size = HEADER_SIZE_041 * MEMBERS;
-        let mut data = vec![0; size];
-        for index in 0..MEMBERS {
-            let offset = index * HEADER_SIZE_041;
-            data[offset..offset + 8].copy_from_slice(b"dex\n041\0");
-            write_u32(&mut data, offset + 0x20, HEADER_SIZE_041 as u32);
-            write_u32(&mut data, offset + 0x24, 0x70);
-            write_u32(&mut data, offset + 0x70, size as u32);
-            write_u32(&mut data, offset + 0x74, offset as u32);
-        }
-        let mut logical = logical_dexes("classes.dex", &data).unwrap();
-        let first = logical.next().expect("first member");
-        assert_eq!(first.name, "classes.dex!classes1.dex");
-        assert_eq!(read_u32(&first.data, 0x74).unwrap(), 0);
-        let second = logical.next().expect("second member");
-        assert_eq!(second.name, "classes.dex!classes2.dex");
-        assert_eq!(
-            read_u32(&second.data, 0x74).unwrap(),
-            HEADER_SIZE_041 as u32
-        );
-    }
-
-    #[test]
     fn dex041_rejects_inconsistent_offsets() {
         let mut data = vec![0; 0x78];
         data[..8].copy_from_slice(b"dex\n041\0");
         write_u32(&mut data, 0x20, 0x78);
         write_u32(&mut data, 0x70, 0x78);
         write_u32(&mut data, 0x74, 4);
-        assert!(logical_dexes("classes.dex", &data).is_err());
+        let error = validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe())
+            .unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::MalformedInput, "{error}");
     }
 
     #[test]
-    fn ordinary_dex_uses_borrowed_fast_path() {
-        let data = b"dex\n039\0rest";
-        let logical: Vec<_> = logical_dexes("classes.dex", data).unwrap().collect();
-        assert_eq!(logical.len(), 1);
-        assert_eq!(logical[0].name, "classes.dex");
-        assert!(matches!(logical[0].data, Cow::Borrowed(_)));
+    fn swallowed_041_header_is_detected_by_the_magic_led_scan() {
+        // Member 1 is fully valid but overclaims to swallow a self-consistent
+        // member-2 header; the magic-led scan must find the swallowed header
+        // and reject the chain (and must stay linear while doing so).
+        let member_size = HEADER_SIZE_041 + 60;
+        let mut data = valid_skeleton(b"041\0", 0, HEADER_SIZE_041);
+        let second = valid_skeleton(b"041\0", member_size, HEADER_SIZE_041);
+        data.extend_from_slice(&second);
+        let total = data.len() as u32;
+        // Member 1 overclaims the whole container...
+        write_u32(&mut data, 0x20, total);
+        write_u32(&mut data, 0x70, total);
+        write_u32(&mut data, 0x74, 0);
+        // ...while member 2's swallowed header stays fully self-consistent.
+        write_u32(&mut data, member_size + 0x70, total);
+        write_u32(&mut data, member_size + 0x74, member_size as u32);
+        let error =
+            validate_dex_entry(artifact(), 0, b"classes.dex", &data, &probe()).unwrap_err();
+        assert!(
+            error.to_string().contains("swallowed by the member at offset 0"),
+            "unexpected error: {error}"
+        );
     }
 
     // -----------------------------------------------------------------------

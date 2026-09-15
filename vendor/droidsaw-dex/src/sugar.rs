@@ -2168,7 +2168,10 @@ mod tests {
     #[test]
     fn string_concat_detection() {
         // Build the pattern: new SB, init, append(x), MRO, toString, MRO
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = DexFile::parse(fixture, None).unwrap();
 
         // Find StringBuilder type and method indices from the fixture
@@ -2254,7 +2257,10 @@ mod tests {
         // Compiler-emitted alignment Nops can appear between the
         // StringBuilder pattern's instructions. The sugar pass must skip
         // them, not bail.
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = DexFile::parse(fixture, None).unwrap();
 
         let sb_type_idx = dex
@@ -2349,7 +2355,10 @@ mod tests {
     #[test]
     fn string_concat_preserves_non_pattern() {
         // Just a new-instance without the full pattern — should not match
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = DexFile::parse(fixture, None).unwrap();
 
         let mut stmts = vec![
@@ -2695,7 +2704,10 @@ mod tests {
         // touching the Stmt body. Marker: a deliberately-recursive
         // tree at this entry should NOT recurse further — if the guard
         // were absent the test would consume O(DEPTH) frames.
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = DexFile::parse(fixture, None)
             .expect("classes.dex fixture must parse for test setup");
         let env = std::collections::BTreeMap::new();
@@ -2722,7 +2734,10 @@ mod tests {
         // and returns without panic. Confirms the guard is `depth >`
         // (strictly greater), not `>=` (which would erroneously block
         // the legal `depth == MAX_DESUGAR_DEPTH` case).
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = DexFile::parse(fixture, None)
             .expect("classes.dex fixture must parse for test setup");
         let env = std::collections::BTreeMap::new();
@@ -2758,7 +2773,10 @@ mod tests {
         // separately by `fuzz_enum_cross_class` exercising real
         // DEX inputs (parent stream's deferred follow-up
         // `dex-fuzz-decompile-method-deep-nesting-seed`).
-        let fixture = include_bytes!("../tests/fixtures/classes.dex");
+        let Some(fixture) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = DexFile::parse(fixture, None)
             .expect("classes.dex fixture must parse for test setup");
         let env = TypeEnv {

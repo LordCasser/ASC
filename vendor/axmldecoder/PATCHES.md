@@ -134,3 +134,29 @@ declared dependency list of the crate is unchanged so the ASC workspace
 lockfile stays untouched; `deku`/`indexmap`/`byteorder` are no longer
 referenced by the sources and can be dropped when the packaging work
 (A13) rewrites the manifest.
+
+---
+
+## AX-P06 — 协作取消/截止时间探针；二次方去重修复
+
+* Problem input: 两个 CPU 消耗面在 `--timeout-ms` 下不可中断——
+  (a) 整个 crate 原先没有任何取消检查点，string pool / 节点流 /
+  属性循环按输入规模线性到上限（1e6 字符串、1e6 属性）无界运行；
+  (b) 重复属性检测是 `Vec::iter().any(...)` 线性扫描，单个元素带 N 个
+  属性时为 O(N²) 字符串比较（limit 上限下 ~5e11 次比较，分钟到小时级）。
+* Files/symbols: `src/lib.rs`（`Cancel` 探针、`ParseError::Cancelled`、
+  `parse_document_with`；`parse_document` 保持原签名作为包装）；
+  `src/binaryxml.rs`（节点流每 chunk、属性每 256 项一个检查点；去重改
+  `HashSet`）；`src/stringpool.rs`（字符串每 256 项一个检查点；style
+  entry 尊重 pool chunk 结束边界，不再读入后续 chunk 的字节）；
+  `src/cursor.rs`（`position()` 访问器）。
+* Target behaviour: 取消/截止时间在解析内部被观察（AX-P02 的"全程消费"
+  契约不变——取消以 `ParseError::Cancelled` 失败，绝不静默截断）；
+  重复属性检测回到 O(N)；style entry 越出 pool chunk 即 Malformed。
+  ASC core 将 `Cancelled` 映射为 `ErrorKind::Cancelled`（区分
+  User/Deadline）。
+* Tests: vendor 既有全量测试回归通过；ASC 契约测试（manifest 路径）
+  通过；`--timeout-ms` 对 manifest 解析生效由 core 侧
+  `decode_axml` 桥接（`Cancel::from_flag_and_deadline`）。
+* Necessary: yes（`--timeout-ms` 的 CLI 契约要求对所有解析阶段可中断）。
+* Removal condition: 上游引入等价的取消探针与哈希去重后移除。

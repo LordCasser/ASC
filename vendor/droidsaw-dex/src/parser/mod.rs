@@ -4226,7 +4226,10 @@ mod tests {
         // the same offset would produce. Proves the eager-parse path in
         // `DexFile::parse` loses no information relative to the pre-hoist
         // per-method re-parse pattern that `decompile_method` used to do.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).unwrap();
 
         let mut checked = 0usize;
@@ -4257,7 +4260,10 @@ mod tests {
     fn debug_info_zero_offset_returns_none() {
         // Sentinel: DEX uses 0 to mean "no debug_info" in code_items.
         // The accessor must return None without looking up the map.
-        let data = include_bytes!("../../tests/fixtures/classes.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).unwrap();
         assert!(dex.debug_info(0).is_none());
     }
@@ -4266,7 +4272,10 @@ mod tests {
     fn debug_info_for_method_resolves_via_method_idx() {
         // Ergonomic accessor: DebugInfo lookup via MethodIdx should
         // resolve to the same entry as the raw-offset form.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).unwrap();
 
         // Find MinimalNamed.accumulate — the method with named locals.
@@ -4342,7 +4351,10 @@ mod tests {
         // Minimal fixture has only ASCII strings — raw bytes and
         // decoded .as_bytes() must match for every entry. Proves the
         // accessor returns what's actually on disk (not a fallback).
-        let data = include_bytes!("../../tests/fixtures/classes.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         assert!(!dex.strings.is_empty());
         for i in 0..dex.strings.len() {
@@ -4369,7 +4381,10 @@ mod tests {
         // depth-cap defense means even a maliciously cyclic chain would
         // halt at MAX_SUPER_CHAIN_DEPTH; clean Java fixtures terminate
         // before that limit (Object's superclass_idx is None).
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         assert!(
             !dex.class_defs.is_empty(),
@@ -4398,7 +4413,10 @@ mod tests {
         // `kotlinc19::when_sealed_*` metadata gate: if this ever returns
         // true on a Java fixture, the recognizer's metadata gate is
         // unsound (Java code matching a Kotlin recognizer).
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for cd in &dex.class_defs {
             assert!(
@@ -4411,7 +4429,10 @@ mod tests {
 
     #[test]
     fn sealed_root_lca_empty_input_returns_none() {
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         assert_eq!(dex.sealed_root_lca(&[]), None);
     }
@@ -4422,7 +4443,10 @@ mod tests {
         // must equal the first non-Object element of T's super-class chain
         // (or None when no such element exists). Cross-checks the LCA
         // logic against the iterator: same primitive, same answer.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for cd in &dex.class_defs {
             let t = cd.class_idx;
@@ -4447,7 +4471,10 @@ mod tests {
         // Spec: Object is the trivial root and MUST NOT be returned.
         // Across every pair of class_defs, if the LCA returns Some(_),
         // its descriptor must not be `Ljava/lang/Object;`.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for (i, a) in dex.class_defs.iter().enumerate() {
             for b in &dex.class_defs[i + 1..] {
@@ -4471,7 +4498,10 @@ mod tests {
         // named `FooKt` (none in the fixture, but a defensive check)
         // would fail the metadata leg. This is the cheap-gate; the
         // structural gate at emit time tightens further.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for cd in &dex.class_defs {
             assert!(
@@ -4491,7 +4521,10 @@ mod tests {
         // (Java fixtures don't carry metadata, so the second leg also
         // fails — but the first-leg short-circuit is what we exercise
         // here for a tighter unit signal.)
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for cd in &dex.class_defs {
             let desc = dex.get_type_descriptor(cd.class_idx).unwrap_or("?");
@@ -4512,7 +4545,10 @@ mod tests {
         // return false on every class. The metadata leg short-circuits
         // before the structural scan, so this also exercises the
         // cheap-gate path.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for cd in &dex.class_defs {
             assert!(
@@ -4528,7 +4564,10 @@ mod tests {
         // Fabricate a TypeIdx that has no class_def in this DEX
         // (external type). The predicate must short-circuit cleanly,
         // returning false rather than panicking on the missing entry.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         let unknown = TypeIdx(u32::MAX);
         assert!(dex.is_kotlin_data_class(unknown).is_no());
@@ -4540,7 +4579,10 @@ mod tests {
         // DefaultConstructorMarker ctors, so the sealed-root gate
         // must return false on every class. The metadata leg
         // short-circuits before the structural scan.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for cd in &dex.class_defs {
             assert!(
@@ -4553,7 +4595,10 @@ mod tests {
 
     #[test]
     fn is_kotlin_sealed_object_subclass_returns_false_on_java_fixtures() {
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for cd in &dex.class_defs {
             assert!(
@@ -4566,7 +4611,10 @@ mod tests {
 
     #[test]
     fn is_kotlin_sealed_class_subclass_returns_false_on_java_fixtures() {
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for cd in &dex.class_defs {
             assert!(
@@ -4582,7 +4630,10 @@ mod tests {
         // Calling on a class that isn't a sealed root must return
         // an empty Vec rather than panic. The is_kotlin_sealed_root
         // gate at the helper's entry short-circuits the scan.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         for cd in &dex.class_defs {
             let subs = dex
@@ -4599,7 +4650,10 @@ mod tests {
 
     #[test]
     fn is_kotlin_sealed_root_returns_false_on_unknown_type() {
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse");
         let unknown = TypeIdx(u32::MAX);
         assert!(dex.is_kotlin_sealed_root(unknown).is_no());
@@ -4622,7 +4676,10 @@ mod tests {
 
     #[test]
     fn class_has_kotlin_metadata_indeterminate_on_annotation_item_parse_failure() {
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse");
         dex.parse_errors.push(ParseFailure {
             kind: ParseFailureKind::AnnotationItem,
@@ -4646,7 +4703,10 @@ mod tests {
         // Contract under test: the detector NEVER silently returns Yes
         // when class_data is poisoned. The fixture-without-metadata case
         // is the strictest test we can write absent a Kotlin fixture.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse");
         dex.parse_errors.push(ParseFailure {
             kind: ParseFailureKind::ClassData,
@@ -4668,7 +4728,10 @@ mod tests {
         // even though sealed_root reads class_data — `class_has_kotlin_metadata`
         // is the first leg and returns Indeterminate, which then
         // short-circuits the sealed_root walker.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse");
         dex.parse_errors.push(ParseFailure {
             kind: ParseFailureKind::AnnotationSet,
@@ -4685,7 +4748,10 @@ mod tests {
 
     #[test]
     fn is_kotlin_sealed_object_subclass_indeterminate_on_annotation_directory_parse_failure() {
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse");
         dex.parse_errors.push(ParseFailure {
             kind: ParseFailureKind::AnnotationDirectory,
@@ -4707,7 +4773,10 @@ mod tests {
         // metadata gate short-circuits before class_data is read on the
         // Java fixture, so the verdict is No. Contract: NEVER silently
         // Yes when class_data is poisoned.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse");
         dex.parse_errors.push(ParseFailure {
             kind: ParseFailureKind::ClassData,
@@ -4725,7 +4794,10 @@ mod tests {
 
     #[test]
     fn method_throws_errs_on_annotation_subtree_parse_failure() {
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse");
         dex.parse_errors.push(ParseFailure {
             kind: ParseFailureKind::AnnotationItem,
@@ -4756,7 +4828,10 @@ mod tests {
 
     #[test]
     fn find_annotated_methods_errs_on_annotation_subtree_parse_failure() {
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse");
         dex.parse_errors.push(ParseFailure {
             kind: ParseFailureKind::AnnotationSetRefList,
@@ -4777,7 +4852,10 @@ mod tests {
         // poison must be reflected in subsection_clean. Guards against
         // future ParseFailureKind variants being silently omitted from
         // detectors' gate sets.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         for kind in &[
             ParseFailureKind::AnnotationDirectory,
             ParseFailureKind::AnnotationSet,
@@ -5088,7 +5166,10 @@ mod tests {
         // With the guard: first-wins per Android AOSP `DexFile::FindClassDef`,
         // and the duplicate emits a `ParseFailureKind::DuplicateClassDef`
         // entry into `parse_errors` for diag surfacing.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse fixture");
 
         // Pick any existing class_def and plant a duplicate row carrying
@@ -5149,7 +5230,10 @@ mod tests {
         // Companion negative test: when class_defs has no duplicate
         // class_idx rows, rebuild_class_def_index must NOT emit any
         // DuplicateClassDef ParseFailure entries.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse fixture");
         let prior_parse_errors_len = dex.parse_errors.len();
         dex.rebuild_class_def_index();
@@ -5184,7 +5268,10 @@ mod tests {
         // AnnotationItem parse failure, `class_has_kotlin_metadata`
         // returns Indeterminate AND `is_no()` returns false (so the
         // `!is_no()` gate evaluates true → recognizer bails).
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse");
         dex.parse_errors.push(ParseFailure {
             kind: ParseFailureKind::AnnotationItem,
@@ -5221,7 +5308,10 @@ mod tests {
         if std::env::var("DROIDSAW_REGEN_FUZZ_SEEDS").ok().as_deref() != Some("1") {
             return;
         }
-        let base = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(base) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(base, None).expect("parse base fixture");
         let first = dex
             .class_defs
@@ -5267,7 +5357,10 @@ mod tests {
         // mangles the seed bytes such that the duplicate is lost, the
         // seed no longer exercises the new code path and this test
         // fails.
-        let data = include_bytes!("../../fuzz/seeds/fuzz_parser/duplicate_class_def.dex");
+        let Some(data) = crate::test_fixtures::optional("fuzz/seeds/fuzz_parser/duplicate_class_def.dex") else {
+            crate::test_fixtures::skipping("fuzz/seeds/fuzz_parser/duplicate_class_def.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("seed must parse");
         let dup_count = dex
             .parse_errors
@@ -5286,7 +5379,10 @@ mod tests {
         // Plant a duplicate class_idx row; assert the SECOND row
         // (index 1 relative to the originally-shared first row) reports
         // shadowed = true. The first row reports shadowed = false.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse fixture");
         let first = dex.class_defs.first().cloned().expect("fixture has classes");
         let dup_idx = dex.class_defs.len();
@@ -5306,7 +5402,10 @@ mod tests {
     fn class_def_is_shadowed_false_on_unique_rows() {
         // Negative case: no duplicates planted; every row reports
         // shadowed = false.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse fixture");
         for i in 0..dex.class_defs.len() {
             assert!(
@@ -5321,7 +5420,10 @@ mod tests {
         // Degenerate-case regression: OOB class_defs index returns
         // false (the caller already missed `.get()`-bounded lookup;
         // further shadow gating is moot).
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let dex = DexFile::parse(data, None).expect("parse fixture");
         let oob = dex.class_defs.len().saturating_add(1000);
         assert!(
@@ -5337,7 +5439,10 @@ mod tests {
         // duplicate class_idx (iteration saw all rows; index resolved to FIRST).
         // With the guard, the shadow gate drops every row that's not the first
         // encounter for its class_idx.
-        let data = include_bytes!("../../tests/fixtures/classes_named.dex");
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         let mut dex = DexFile::parse(data, None).expect("parse fixture");
         let first = dex.class_defs.first().cloned().expect("fixture has classes");
         let baseline_count = crate::classes::classes_to_decompile(&dex).count();
@@ -5574,7 +5679,12 @@ mod tests {
     /// (`None` superclass = `java.lang.Object`). All `class_idx` /
     /// superclass indices must be `< num_types`. Interfaces are empty.
     fn scaffold_dex(num_types: u32, defs: &[(u32, Option<u32>)]) -> DexFile {
-        let data = include_bytes!("../../tests/fixtures/classes.dex");
+        // PATCHED (rasc, DX-P07): runtime fixture access; the committed g02
+        // contract DEX stands in when the upstream fixture is absent — the
+        // scaffold overwrites the pools it cares about anyway.
+        let data = crate::test_fixtures::optional("tests/fixtures/classes.dex")
+            .or_else(crate::test_fixtures::fallback_dex)
+            .expect("classes.dex or the committed g02 fallback");
         let mut dex = DexFile::parse(data, None).expect("scaffold base parse");
         dex.type_descriptors = (0..num_types).map(|i| format!("LT{i};")).collect();
         dex.class_defs = defs
@@ -5772,7 +5882,10 @@ mod tests {
     /// through `DexFile::parse`. Proves the gauge is wired in.
     #[test]
     fn reserved_bits_wired_into_parse_via_map_item_patch() {
-        let orig = include_bytes!("../../tests/fixtures/classes.dex");
+        let Some(orig) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let base = DexFile::parse(orig, None).expect("baseline parse");
         assert!(
             !base

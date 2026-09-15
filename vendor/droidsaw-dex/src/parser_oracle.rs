@@ -529,10 +529,14 @@ mod tests {
 
     #[test]
     fn unit_regression_040_crash_seed() {
-        let data = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/fuzz/crashes/parser_differential/4356e5cf6538"
-        ));
+        // PATCHED (rasc, DX-P07): the crash seed is read at runtime; the test
+        // skips when the fuzz corpus is not present in this checkout.
+        let Some(data) = crate::test_fixtures::optional(
+            "fuzz/crashes/parser_differential/4356e5cf6538",
+        ) else {
+            crate::test_fixtures::skipping("fuzz/crashes/parser_differential/4356e5cf6538");
+            return;
+        };
         // Production accepts this input (version "040" is valid).
         // Oracle must not return UnsupportedVersion.
         let oracle = naive_parse_dex(data);
@@ -565,10 +569,11 @@ mod tests {
 
     #[test]
     fn unit_classes_dex_full_shape_equal() {
-        let data = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/classes.dex"
-        ));
+        // PATCHED (rasc, DX-P07): runtime fixture access with skip.
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes.dex");
+            return;
+        };
         let prod = DexFile::parse(data, None).expect("production parse must succeed on classes.dex");
         let oracle = naive_parse_dex(data).expect("oracle parse must succeed on classes.dex");
         let prod_shape = prod.to_shape();
@@ -604,10 +609,11 @@ mod tests {
 
     #[test]
     fn unit_classes_named_dex_full_shape_equal() {
-        let data = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/classes_named.dex"
-        ));
+        // PATCHED (rasc, DX-P07): runtime fixture access with skip.
+        let Some(data) = crate::test_fixtures::optional("tests/fixtures/classes_named.dex") else {
+            crate::test_fixtures::skipping("tests/fixtures/classes_named.dex");
+            return;
+        };
         assert_shapes_equal(data, "fixtures/classes_named.dex");
     }
 

@@ -335,6 +335,47 @@ fn output_file_receives_exactly_the_stdout_bytes() {
 }
 
 #[test]
+fn findrefs_output_in_the_outer_position_is_honoured() {
+    // `-o` before the query kind is merged like every other shared option;
+    // it must reach the commit layer, not be silently dropped (regression:
+    // the unmerged inner value used to be passed instead).
+    let apk = fixture(G01);
+    let out = temp_apk("out-refs-outer.txt", b"");
+    let output = run(&[
+        "findrefs",
+        "-o",
+        out.to_str().unwrap(),
+        apk.to_str().unwrap(),
+        "string",
+        "tok.n",
+        "--regex",
+    ]);
+    assert_eq!(status(&output), 0, "stderr: {}", stderr_text(&output));
+    assert!(out.exists(), "the outer -o file must be written");
+    assert_eq!(fs::read(&out).unwrap(), stdout(&output));
+    let _ = fs::remove_file(&out);
+}
+
+#[test]
+fn pattern_limits_are_enforced_before_the_input_is_opened() {
+    // `--limit pattern-bytes` rides into the query construction: an
+    // over-budget pattern fails with the resource-limit error before the
+    // APK is even opened (the path does not exist and is never mentioned).
+    let output = run(&[
+        "findrefs",
+        "--limit",
+        "pattern-bytes=4",
+        "/nonexistent/rasc.apk",
+        "string",
+        "Authorization",
+    ]);
+    assert_eq!(status(&output), 1, "stderr: {}", stderr_text(&output));
+    let stderr = stderr_text(&output);
+    assert!(stderr.contains("byte limit"), "stderr: {stderr}");
+    assert!(!stderr.contains("nonexistent"), "input must not be opened: {stderr}");
+}
+
+#[test]
 fn output_refuses_directory_symlink_input_alias_and_hardlink() {
     let apk = fixture(G01);
     let apk_bytes = fs::read(&apk).unwrap();
@@ -516,6 +557,29 @@ fn thread_and_timeout_rejections_happen_before_the_input_is_opened() {
 }
 
 #[test]
+fn threads_flag_configures_the_pool_without_changing_the_payload() {
+    // The flag really reaches the engine's worker pool now; whatever the
+    // pool width, the payload bytes must stay identical (the fold merges in
+    // entry-ordinal order).
+    let apk = fixture(G01);
+    let baseline = run(&["findrefs", apk.to_str().unwrap(), "string", "tok.n", "--regex"]);
+    assert_eq!(status(&baseline), 0, "stderr: {}", stderr_text(&baseline));
+    for threads in ["1", "2", "8"] {
+        let output = run(&[
+            "findrefs",
+            apk.to_str().unwrap(),
+            "--threads",
+            threads,
+            "string",
+            "tok.n",
+            "--regex",
+        ]);
+        assert_eq!(status(&output), 0, "--threads {threads}: {}", stderr_text(&output));
+        assert_eq!(stdout(&output), stdout(&baseline), "--threads {threads} payload drift");
+    }
+}
+
+#[test]
 fn dex_selector_syntax_and_resolution_errors_exit_two() {
     let apk = fixture(G01);
     for selector in ["abc", "0", "0:", ":1", "1:2:3", "99999999999999:0"] {
@@ -585,15 +649,25 @@ fn enforced_and_accepted_limit_keys_behave_as_declared() {
     assert_eq!(status(&output), 1);
     assert!(stderr_text(&output).contains("ResourceLimit"));
     // A key this build accepts but does not enforce: success with a stderr
-    // note, never a silent drop. (engine-bytes became enforced in A11; the
-    // xml-nodes key still waits on the A06 limits setter.)
-    let output = run(&["classes", apk.to_str().unwrap(), "--limit", "xml-nodes=99"]);
+    // note, never a silent drop. (engine-bytes and the xml trio became
+    // enforced; the dexes/code-units pair still waits on engine internals.)
+    let output = run(&["classes", apk.to_str().unwrap(), "--limit", "dexes=99"]);
     assert_eq!(status(&output), 0, "stderr: {}", stderr_text(&output));
     assert!(stderr_text(&output).contains("not enforced"));
     // engine-bytes is now enforced: a tiny engine budget refuses the open.
     let output = run(&["classes", apk.to_str().unwrap(), "--limit", "engine-bytes=99"]);
     assert_eq!(status(&output), 1);
     assert!(stderr_text(&output).contains("ResourceLimit"));
+    // The xml trio rides into the manifest decode limits: manifest on a
+    // multi-node document with a one-node cap fails closed, no note.
+    let manifest_apk = fixture(MANIFEST_APK);
+    for key in ["xml-nodes=1", "depth=1", "xml-attributes=1"] {
+        let output =
+            run(&["manifest", manifest_apk.to_str().unwrap(), "--limit", key]);
+        assert_eq!(status(&output), 1, "{key}: {}", stderr_text(&output));
+        assert!(stderr_text(&output).contains("ResourceLimit"), "{key}");
+        assert!(!stderr_text(&output).contains("not enforced"), "{key}");
+    }
 }
 
 #[test]
