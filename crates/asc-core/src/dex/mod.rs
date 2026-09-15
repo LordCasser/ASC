@@ -954,6 +954,80 @@ impl<'a> ScanDex<'a> {
                     branches.push(target as u32);
                 }
             };
+            let add_switch_targets = |delta: i64, branches: &mut Vec<u32>| -> Result<(), Error> {
+                let payload_units = (pc / 2) as i64 + delta;
+                if payload_units < 0 {
+                    return Err(malformed(format!(
+                        "code unit {}: switch payload is before the code item",
+                        pc / 2
+                    )));
+                }
+                let payload = (payload_units as usize)
+                    .checked_mul(2)
+                    .ok_or_else(|| malformed("switch payload offset overflows".to_owned()))?;
+                let payload_header_end = payload
+                    .checked_add(4)
+                    .ok_or_else(|| malformed("switch payload header overflows".to_owned()))?;
+                if payload_header_end > code.len() {
+                    return Err(malformed(format!(
+                        "code unit {}: switch payload header outside code item",
+                        pc / 2
+                    )));
+                }
+                let ident = read_u16(code, payload)
+                    .map_err(|_| malformed(format!("code unit {}: switch payload outside code item", pc / 2)))?;
+                let size = usize::from(read_u16(code, payload + 2).map_err(|_| {
+                    malformed(format!("code unit {}: switch payload size outside code item", pc / 2))
+                })?);
+                let (target_offset, target_count) = match ident {
+                    0x0100 => (payload.checked_add(8).ok_or_else(|| {
+                        malformed("packed-switch target offset overflows".to_owned())
+                    })?, size),
+                    0x0200 => {
+                        let keys = size
+                            .checked_mul(4)
+                            .ok_or_else(|| malformed("sparse-switch key table overflows".to_owned()))?;
+                        (payload
+                            .checked_add(4)
+                            .and_then(|offset| offset.checked_add(keys))
+                            .ok_or_else(|| malformed("sparse-switch target offset overflows".to_owned()))?, size)
+                    }
+                    _ => return Err(malformed(format!(
+                        "code unit {}: unknown switch payload ident 0x{ident:04x}",
+                        pc / 2
+                    ))),
+                };
+                let target_bytes = target_count
+                    .checked_mul(4)
+                    .ok_or_else(|| malformed("switch target table overflows".to_owned()))?;
+                let target_end = target_offset
+                    .checked_add(target_bytes)
+                    .ok_or_else(|| malformed("switch target range overflows".to_owned()))?;
+                if target_end > code.len() {
+                    return Err(malformed(format!(
+                        "code unit {}: switch targets outside code item",
+                        pc / 2
+                    )));
+                }
+                for index in 0..target_count {
+                    let offset = target_offset + index * 4;
+                    let low = read_u16(code, offset)
+                        .map_err(|_| malformed("switch target offset outside code item".to_owned()))?;
+                    let high = read_u16(code, offset + 2)
+                        .map_err(|_| malformed("switch target offset outside code item".to_owned()))?;
+                    let relative = i32::from_le_bytes([
+                        low as u8,
+                        (low >> 8) as u8,
+                        high as u8,
+                        (high >> 8) as u8,
+                    ]);
+                    let target = (pc / 2) as i64 + i64::from(relative);
+                    if (0..=u32::MAX as i64).contains(&target) {
+                        branches.push(target as u32);
+                    }
+                }
+                Ok(())
+            };
             match opcode {
                 // 12x register moves and unary arithmetic.
                 0x01 | 0x04 | 0x07 | 0x7b..=0x8f => {
@@ -1122,7 +1196,7 @@ impl<'a> ScanDex<'a> {
                         high as u8,
                         (high >> 8) as u8,
                     ]);
-                    add_branch(i64::from(delta), &mut branch_targets);
+                    add_switch_targets(i64::from(delta), &mut branch_targets)?;
                 }
                 0x2d..=0x31 => {
                     writes.push(a);
@@ -1234,6 +1308,12 @@ impl<'a> ScanDex<'a> {
             writes.dedup();
             branch_targets.sort_unstable();
             branch_targets.dedup();
+            if out.len() >= limits.max_result_items {
+                return Err(Error::resource_limit(format!(
+                    "instruction facts exceed the {} result-item limit",
+                    limits.max_result_items
+                )));
+            }
             let method_target = match reference {
                 Some(InstructionReference::Method { index }) => {
                     Some(self.method_identity(&entry, index, limits)?)

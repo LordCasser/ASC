@@ -901,7 +901,22 @@ fn strings_in_scope(
 }
 
 fn instruction_fact_size(row: &InstructionFact) -> (usize, usize, u64) {
+    let identity_bytes = row.method_target().map_or(0usize, |identity| {
+        let prototype = identity
+            .prototype()
+            .parameters()
+            .iter()
+            .map(|parameter| parameter.unit_len().saturating_mul(2))
+            .fold(identity.prototype().return_type().unit_len().saturating_mul(2), usize::saturating_add);
+        identity
+            .owner()
+            .unit_len()
+            .saturating_add(identity.name().unit_len())
+            .saturating_mul(2)
+            .saturating_add(prototype)
+    });
     let bytes = 128usize
+        .saturating_add(identity_bytes)
         .saturating_add(row.reads().len().saturating_mul(2))
         .saturating_add(row.writes().len().saturating_mul(2))
         .saturating_add(row.branch_targets().len().saturating_mul(4));
