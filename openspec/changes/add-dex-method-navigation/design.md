@@ -20,4 +20,4 @@ vendor method renderer 可能依赖 class context，应保留窄上下文而非�
 先固定 provider 提交，消费者 C 再扩展输入/输出 schema 和 artifact 源码，D 再把 native declarations 与 SO candidates 配对。所有跨语言解析在宿主/后端组合层完成。
 
 ## Open Questions
-首次实施需以现有 vendor renderer 实测确定最小方法入口；没有 metadata 等价证据时该任务不能标为完成。
+核心方法入口、class context 和 metadata 映射已落地；后续仍需用独立 golden fixture 补齐 annotations/debug/参数名及 native/abstract/构造器矩阵，并在目标平台完成 IDA/性能验收。这些扩展不改变已交付的 MethodId、scope 或 typed instruction API。
