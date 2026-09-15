@@ -6,3 +6,5 @@
 - [ ] 2.2 [A17] 前置 1.2、2.1；接入 Engine pool/control/operation quota；验收 limit±1、失败后复用、取消和不完整源码不成功。
 ## 3. 交接
 - [ ] 3.1 [A17] 前置 2.2；四 feature 与仓外 consumer 回归；产出固定 provider commit 与契约样本供消费者 C/D 使用，OpenSpec 校验归档。1.1 可与 A16 archive provider 并行。
+
+> 状态（2026-09-16）：MethodInventory、FieldDeclaration、MethodTarget、显式 MethodScope、`decompile_method`、`visit_method_sources`、`visit_method_declarations`、`instructions_for_methods_in_scope` 与 `dexes_in_scope` 已落地；`method_inventory_accepts_nested_dex_scope_and_all_detected`、`batch_method_visitor_reuses_one_scope_parse` 等 core tests 通过。完整 native/abstract/构造器/metadata 矩阵、四 feature 仓外 consumer 与消费者交接仍未完成，因此 1.1–3.1 保持未勾选。

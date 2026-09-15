@@ -1,0 +1,630 @@
+{
+  "status": "audit only; no Rust synchronization or optimization scheduled",
+  "refs": {
+    "upstream": "c4e268cb78e4a2169455e8d96aa7a2db75c81f36",
+    "python_baseline": "ccc6bae7704f5c5ef1a7271e27314837079621fb",
+    "rust_head": "6141965dfeac4256bd96240799d7bf308fa21e27"
+  },
+  "environment": {
+    "cpu": "Apple M4 Pro",
+    "os": "macOS 26.6.2 arm64",
+    "rustc": "1.98.1",
+    "rust_flags": "--edition=2024 -O -C target-cpu=native"
+  },
+  "python": {
+    "python": "3.14.7 (main, Aug  5 2026, 10:29:49) [Clang 21.0.0 (clang-2100.1.1.101)]",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "dex_bytes": 9577628,
+    "dex_sha256": "5cd2401e9ec9a41fc5f78d06acb10d9f334a973bb82df9af381d3e5024aee337",
+    "code_span": [
+      1290224,
+      4499920
+    ],
+    "code_span_bytes": 3209696,
+    "method_bodies": 46009,
+    "mode": "raw scan only; excludes target resolution, InsnLocator boundary verification, inflate, rendering, startup",
+    "repeat": 15,
+    "queries": [
+      {
+        "kind": "method",
+        "query": "view",
+        "targets": 20,
+        "raw_candidates": 37,
+        "results_equal": {
+          "translate": true,
+          "forced_regex": true,
+          "pre_change": true
+        },
+        "median_ms": {
+          "translate": 9.461959,
+          "forced_regex": 9.4445,
+          "pre_change": 27.945583
+        },
+        "samples_ms": {
+          "translate": [
+            9.524542,
+            9.425541,
+            9.525792,
+            9.392291,
+            9.375083,
+            9.505333,
+            9.502416,
+            9.524416,
+            9.52675,
+            9.451416,
+            9.400583,
+            9.439792,
+            9.4315,
+            9.461959,
+            9.4695
+          ],
+          "forced_regex": [
+            9.4455,
+            9.440208,
+            9.425542,
+            9.472583,
+            9.478292,
+            9.40875,
+            9.463709,
+            9.439916,
+            9.45625,
+            9.336917,
+            9.339792,
+            9.4445,
+            9.496916,
+            9.418666,
+            9.472958
+          ],
+          "pre_change": [
+            28.049417,
+            27.881333,
+            27.85775,
+            27.945583,
+            27.947167,
+            28.080584,
+            27.994208,
+            27.947583,
+            28.008291,
+            27.793166,
+            27.804958,
+            27.883208,
+            27.91125,
+            27.728291,
+            28.078541
+          ]
+        },
+        "translate_time_reduction_vs_forced_regex_percent": -0.18485891259463205,
+        "translate_time_reduction_vs_pre_change_percent": 66.14148647390896
+      },
+      {
+        "kind": "field",
+        "query": "action",
+        "targets": 160,
+        "raw_candidates": 5484,
+        "results_equal": {
+          "translate": true,
+          "forced_regex": true,
+          "pre_change": true
+        },
+        "median_ms": {
+          "translate": 14.952375,
+          "forced_regex": 18.523791,
+          "pre_change": 33.759292
+        },
+        "samples_ms": {
+          "translate": [
+            14.952375,
+            14.969416,
+            14.981375,
+            14.945167,
+            14.9455,
+            14.875417,
+            14.83875,
+            14.875708,
+            15.013042,
+            14.942541,
+            14.823541,
+            14.954042,
+            14.954,
+            15.150792,
+            27.470333
+          ],
+          "forced_regex": [
+            18.255041,
+            18.799375,
+            18.408167,
+            18.358166,
+            18.540792,
+            18.628417,
+            18.898708,
+            18.373333,
+            18.49725,
+            18.463375,
+            18.754125,
+            18.523791,
+            18.840667,
+            18.360583,
+            21.19675
+          ],
+          "pre_change": [
+            33.598666,
+            33.109292,
+            34.083541,
+            33.771917,
+            33.627958,
+            34.091791,
+            33.759292,
+            33.426375,
+            33.484208,
+            33.746958,
+            33.809375,
+            33.196458,
+            34.075167,
+            33.89225,
+            53.919625
+          ]
+        },
+        "translate_time_reduction_vs_forced_regex_percent": 19.28015706936015,
+        "translate_time_reduction_vs_pre_change_percent": 55.70886083748439
+      },
+      {
+        "kind": "type",
+        "query": "View",
+        "targets": 654,
+        "raw_candidates": 5497,
+        "results_equal": {
+          "translate": true,
+          "forced_regex": true,
+          "pre_change": true
+        },
+        "median_ms": {
+          "translate": 16.968666,
+          "forced_regex": 19.101625,
+          "pre_change": 25.790708
+        },
+        "samples_ms": {
+          "translate": [
+            17.035292,
+            16.891458,
+            16.834833,
+            16.968666,
+            16.867292,
+            16.944959,
+            16.923458,
+            17.010959,
+            17.156125,
+            16.967917,
+            17.144208,
+            17.08775,
+            17.062208,
+            17.065042,
+            16.944625
+          ],
+          "forced_regex": [
+            19.144583,
+            19.101625,
+            19.003167,
+            19.37925,
+            19.084583,
+            19.155375,
+            19.027167,
+            18.919959,
+            19.044417,
+            19.101708,
+            19.666834,
+            19.089666,
+            19.794334,
+            19.022458,
+            19.130417
+          ],
+          "pre_change": [
+            25.790708,
+            26.121334,
+            25.578292,
+            25.798375,
+            25.808458,
+            25.651,
+            25.627209,
+            25.559875,
+            25.958833,
+            26.036625,
+            25.713958,
+            25.552292,
+            26.035708,
+            25.909083,
+            25.780583
+          ]
+        },
+        "translate_time_reduction_vs_forced_regex_percent": 11.166374588549399,
+        "translate_time_reduction_vs_pre_change_percent": 34.20628080469912
+      },
+      {
+        "kind": "string",
+        "query": "create",
+        "targets": 572,
+        "raw_candidates": 97,
+        "results_equal": {
+          "translate": true,
+          "forced_regex": true,
+          "pre_change": true
+        },
+        "median_ms": {
+          "translate": 3.000209,
+          "forced_regex": 2.968625,
+          "pre_change": 17.900792
+        },
+        "samples_ms": {
+          "translate": [
+            3.000209,
+            3.102333,
+            3.029375,
+            2.927125,
+            3.116084,
+            2.948834,
+            3.038792,
+            2.962583,
+            3.048625,
+            2.959875,
+            3.14675,
+            2.999625,
+            2.952667,
+            2.984458,
+            3.024458
+          ],
+          "forced_regex": [
+            3.032,
+            2.982583,
+            3.089334,
+            2.967042,
+            2.937458,
+            2.909708,
+            2.968625,
+            3.074625,
+            2.924167,
+            3.04425,
+            2.951417,
+            3.059416,
+            2.905583,
+            3.006875,
+            2.928375
+          ],
+          "pre_change": [
+            17.933334,
+            17.84125,
+            17.764459,
+            18.0985,
+            17.846,
+            17.737084,
+            17.617958,
+            18.167083,
+            17.900792,
+            17.806583,
+            17.893166,
+            17.94175,
+            18.460875,
+            18.09125,
+            18.178541
+          ]
+        },
+        "translate_time_reduction_vs_forced_regex_percent": -1.0639269021853526,
+        "translate_time_reduction_vs_pre_change_percent": 83.23979743466099
+      },
+      {
+        "kind": "method",
+        "query": "onCreate",
+        "targets": 141,
+        "raw_candidates": 117,
+        "results_equal": {
+          "translate": true,
+          "forced_regex": true,
+          "pre_change": true
+        },
+        "median_ms": {
+          "translate": 12.702542,
+          "forced_regex": 11.988291,
+          "pre_change": 28.47425
+        },
+        "samples_ms": {
+          "translate": [
+            12.638042,
+            12.708042,
+            12.6265,
+            12.702542,
+            13.221,
+            12.756875,
+            12.683875,
+            12.664958,
+            12.775833,
+            12.786333,
+            12.789041,
+            12.683833,
+            12.644708,
+            12.814625,
+            12.686958
+          ],
+          "forced_regex": [
+            11.987625,
+            11.977375,
+            11.961833,
+            12.057208,
+            12.346792,
+            11.920292,
+            11.980292,
+            12.1025,
+            11.977541,
+            11.988291,
+            12.078917,
+            12.151334,
+            11.995375,
+            11.910125,
+            12.157458
+          ],
+          "pre_change": [
+            28.577125,
+            28.738833,
+            28.680167,
+            28.211458,
+            29.046291,
+            29.349417,
+            28.321625,
+            28.284417,
+            28.130917,
+            28.47425,
+            28.405458,
+            28.293083,
+            28.512958,
+            28.784625,
+            28.345917
+          ]
+        },
+        "translate_time_reduction_vs_forced_regex_percent": -5.9579050925607335,
+        "translate_time_reduction_vs_pre_change_percent": 55.389371098448606
+      },
+      {
+        "kind": "field",
+        "query": "INSTANCE",
+        "targets": 199,
+        "raw_candidates": 1402,
+        "results_equal": {
+          "translate": true,
+          "forced_regex": true,
+          "pre_change": true
+        },
+        "median_ms": {
+          "translate": 13.991209,
+          "forced_regex": 18.016916,
+          "pre_change": 33.500542
+        },
+        "samples_ms": {
+          "translate": [
+            13.994459,
+            13.9765,
+            14.001917,
+            14.15625,
+            14.075083,
+            13.95575,
+            13.991209,
+            13.805083,
+            13.86375,
+            13.909666,
+            14.0915,
+            13.99375,
+            13.917791,
+            14.016667,
+            13.978333
+          ],
+          "forced_regex": [
+            18.182917,
+            18.168583,
+            18.016916,
+            18.17675,
+            17.965791,
+            18.119584,
+            17.82175,
+            17.912084,
+            17.924834,
+            18.111459,
+            17.805583,
+            18.016667,
+            18.307291,
+            18.144042,
+            17.987459
+          ],
+          "pre_change": [
+            33.895125,
+            33.63725,
+            33.678875,
+            33.799459,
+            33.761334,
+            33.522208,
+            33.500542,
+            33.4395,
+            33.438375,
+            33.525834,
+            33.493208,
+            33.472291,
+            33.398292,
+            33.443958,
+            33.327666
+          ]
+        },
+        "translate_time_reduction_vs_forced_regex_percent": 22.344040456202375,
+        "translate_time_reduction_vs_pre_change_percent": 58.235872721104045
+      },
+      {
+        "kind": "type",
+        "query": "Activity",
+        "targets": 135,
+        "raw_candidates": 1807,
+        "results_equal": {
+          "translate": true,
+          "forced_regex": true,
+          "pre_change": true
+        },
+        "median_ms": {
+          "translate": 12.848375,
+          "forced_regex": 11.180292,
+          "pre_change": 25.031917
+        },
+        "samples_ms": {
+          "translate": [
+            12.742792,
+            12.874917,
+            12.850792,
+            12.8115,
+            12.78925,
+            12.848375,
+            12.911917,
+            12.856709,
+            13.178083,
+            13.204125,
+            12.838667,
+            12.806083,
+            12.767959,
+            12.678542,
+            12.920625
+          ],
+          "forced_regex": [
+            11.267,
+            11.195208,
+            11.152792,
+            11.094125,
+            11.2685,
+            11.102541,
+            11.221459,
+            11.1775,
+            11.331083,
+            12.591542,
+            11.387042,
+            11.149125,
+            11.180292,
+            11.151209,
+            11.099167
+          ],
+          "pre_change": [
+            24.993125,
+            25.093208,
+            24.896292,
+            25.122792,
+            25.101417,
+            24.90425,
+            24.845834,
+            25.031917,
+            25.438875,
+            25.268042,
+            24.808625,
+            24.9585,
+            25.235041,
+            24.937834,
+            25.037417
+          ]
+        },
+        "translate_time_reduction_vs_forced_regex_percent": -14.919851824979169,
+        "translate_time_reduction_vs_pre_change_percent": 48.67202939351388
+      }
+    ]
+  },
+  "rust": {
+    "scope": "isolated instruction-width and target-membership loop, not asc-core or CLI",
+    "excluded": [
+      "target construction",
+      "tiny-target prefilter",
+      "reference aggregation",
+      "metadata resolution",
+      "cancellation checks",
+      "budget accounting",
+      "thread pool",
+      "ZIP decompression and CRC",
+      "CLI startup and rendering"
+    ],
+    "correctness": "equal hit count and position/ID checksum across all variants; not full Reference equality",
+    "sampling": "15 interleaved rounds, 10 scans per timed round, median milliseconds per scan; raw Rust timing samples were not retained",
+    "queries": [
+      {
+        "query": 0,
+        "kind": 8,
+        "targets": 20,
+        "locations": 23,
+        "bitmap_bytes": 5056,
+        "btree_ms": 2.823667,
+        "hi_btree_ms": 2.224392,
+        "bitmap_ms": 2.289546,
+        "target_kind": "method",
+        "pattern": "view"
+      },
+      {
+        "query": 1,
+        "kind": 4,
+        "targets": 160,
+        "locations": 397,
+        "bitmap_bytes": 2608,
+        "btree_ms": 2.549196,
+        "hi_btree_ms": 2.303575,
+        "bitmap_ms": 2.086167,
+        "target_kind": "field",
+        "pattern": "action"
+      },
+      {
+        "query": 2,
+        "kind": 2,
+        "targets": 654,
+        "locations": 1848,
+        "bitmap_bytes": 936,
+        "btree_ms": 2.131108,
+        "hi_btree_ms": 2.112442,
+        "bitmap_ms": 1.850804,
+        "target_kind": "type",
+        "pattern": "View"
+      },
+      {
+        "query": 3,
+        "kind": 1,
+        "targets": 572,
+        "locations": 74,
+        "bitmap_bytes": 8520,
+        "btree_ms": 1.932971,
+        "hi_btree_ms": 1.829533,
+        "bitmap_ms": 1.756346,
+        "target_kind": "string",
+        "pattern": "create"
+      },
+      {
+        "query": 4,
+        "kind": 8,
+        "targets": 141,
+        "locations": 98,
+        "bitmap_bytes": 5176,
+        "btree_ms": 3.365083,
+        "hi_btree_ms": 2.536158,
+        "bitmap_ms": 2.282633,
+        "target_kind": "method",
+        "pattern": "onCreate"
+      },
+      {
+        "query": 5,
+        "kind": 4,
+        "targets": 199,
+        "locations": 1254,
+        "bitmap_bytes": 2656,
+        "btree_ms": 2.547554,
+        "hi_btree_ms": 2.334725,
+        "bitmap_ms": 2.087212,
+        "target_kind": "field",
+        "pattern": "INSTANCE"
+      },
+      {
+        "query": 6,
+        "kind": 2,
+        "targets": 135,
+        "locations": 206,
+        "bitmap_bytes": 920,
+        "btree_ms": 2.04585,
+        "hi_btree_ms": 1.961017,
+        "bitmap_ms": 1.835321,
+        "target_kind": "type",
+        "pattern": "Activity"
+      }
+    ]
+  }
+}

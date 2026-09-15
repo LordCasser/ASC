@@ -48,3 +48,22 @@ cargo test -p asc-core --all-features --test embedded_regressions --locked
 ## 下游接入复查：EMB-09
 
 `validate_standard_dex` 未先校验 `data_off <= len` 就做减法；公开 API 用 G02 的 data_off=len+1 复现 debug panic（`/tmp/asc-audit-logs/data-range-before.log`）。改用 checked_sub 后，len+1/u32::MAX 的 raw DEX 和 APK 路径均返回 MalformedInput，Engine 可继续处理有效输入。9 个 embedded regressions 全通过（`/tmp/asc-audit-logs/data-range-after.log`）。这项单点修复独立于内存账户/provider 功能计划，见归档 change `reject-out-of-range-dex-data`。
+
+## 2026-09-16 provider/navigation 增量核对
+
+本节记录本轮在 ASC 源仓的实现 checkpoint，不把下游 APK/IDA 联调结果倒灌成 core 证据。
+
+* A16 provider 已由 `b41b82f` 提供 archive identity、bounded catalog、受控 copy 和 shared decoded quota。A16 2.1 的 feature matrix 与仓外 path consumer 证据仍以 `/tmp/asc-audit-logs/feature-matrix-after-gates-final.log` 和 `/tmp/asc-audit-logs/consumer-path-final.log` 为准；2.2 staged-output 联合验收未在本仓归档。
+* A17 的 `4b5064f`/`d9f4b49` 提供 MethodInventory、FieldDeclaration、MethodTarget 和显式 scope；`bd84da4` 增加 `visit_method_declarations`、按 MethodId 的 `instructions_for_methods_in_scope`，`08f51c2` 增加有序 `invoke_registers`，`935207f` 增加不物化声明的 `dexes_in_scope`。`cargo test -p asc-core --all-features --locked` 本轮为 209 passed；其中包含 nested/all-detected scope 与 batch visitor 回归。完整 native/abstract/metadata 矩阵以及仓外消费者/IDA 仍未完成，故 A17 tasks 不归档。
+* A18 的 `6141965`、`8b91724`、`abf5816` 和上述 scoped visitor 让输入、解压、scan/report 结果及部分 typed facts 在分配前取得精确或保守的 ledger charge，并由 RAII 归还。该 ledger 的 `max_engine_owned_bytes` 只是引擎可计量资源的上限；vendor parse/CFG/SSA、部分中间结构没有完整精确计量，任何 `estimated_scan_work` 或 report estimate 也都不是 OS RSS 硬限制。A18 任务保持未勾选。
+
+复现命令（ASC 源仓，Rust 1.93.1，复用默认 `target`，未创建第二 target）：
+
+```sh
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 \
+  cargo test -p asc-core --all-features --locked
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 \
+  cargo test -p asc-droidsaw-dex --test asc_contracts --locked
+```
+
+两条命令分别通过 209 个 asc-core 测试和 8 个 vendor contract tests。它们证明当前公开 API 与 fixture 合同，不证明完整平台矩阵、RSS 硬限制或真实 IDA 运行。

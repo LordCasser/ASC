@@ -5,3 +5,5 @@
 ## 2. 交接
 - [ ] 2.1 [A18] 前置 1.3；独立 feature matrix、取消/坏 DEX 回归和资源计数器验收，更新接口文档/审计债务；不以 RSS 一次采样标记通过。
 - [ ] 2.2 [A18] 前置 2.1；固定独立提交供消费者更新gitlink，OpenSpec 校验归档；可与 A16/A17 独立审计，但共享 engine.rs 的实现编辑必须串行。
+
+> 状态（2026-09-16）：`MemoryAccount`、RAII permits、输入/解压/scan/report 的部分估算边界及失败回收已有实现和单元测试；vendor parse/CFG/SSA 与中间结构仍未形成完整精确账户。`max_engine_owned_bytes` 是引擎 ledger 的测量或保守估算上限，不是 OS RSS 硬限制，故 A18 各项保持未勾选。

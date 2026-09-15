@@ -5,6 +5,7 @@
 ## 当前工作
 
 - [嵌入审计](audits/embedding/report.md)：固定 c42e7e6，记录复现、修复和独立债务。
+- 2026-09-16 provider/navigation checkpoint：A16 2.1 已有 feature matrix 与仓外 path consumer 证据；A17 定向声明/DEX/instruction visitor 已实现；A18 仍是未完成的内存账户债务。
 - [嵌入合同修复](changes/archive/2026-09-15-harden-embedded-core-contracts/proposal.md)：独立 feature、输入控制、全 DEX 校验、私有 pool 和跨 DEX 结果预算。
 - [历史 CLI 审计](audits/cli-parity/report.md) 与 [验收矩阵](implementation/acceptance.md)：保留原始基线和未验证平台，不能把目录归档理解为所有声明都已验证。
 
@@ -24,4 +25,4 @@ openspec validate --all --strict --no-interactive
 - [DEX 方法导航](changes/add-dex-method-navigation/proposal.md)：供源码精确导航与 JNI 声明清单使用。
 - [活跃内存账户](changes/bound-engine-owned-memory/proposal.md)：独立修复 MEM-01/02，不混入接入变更。
 
-三项均为待实施计划；没有把创建 change 当作功能完成。
+A16 的消费者 staged-output 联合验收、A17 的完整 metadata/feature 矩阵，以及 A18 的完整 vendor 内存账户仍未完成；没有把实现 checkpoint 当作归档或正式发布。
