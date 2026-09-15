@@ -1851,15 +1851,17 @@ impl<T> Report<T> {
         self
     }
 
-    /// Moves the complete report contents for crate-internal adapters. The
-    /// report is intentionally required to be unique so an owned payload and
-    /// its permit cannot be separated from a surviving clone.
-    pub(crate) fn into_parts(
-        self,
-    ) -> (T, Vec<Diagnostic>, OperationStats, Option<MemoryPermit>) {
+    /// Moves an unaccounted report's contents for crate-internal adapters.
+    /// The report is intentionally required to be unique, and a charged
+    /// report is rejected so its payload cannot be separated from its permit.
+    pub(crate) fn into_unaccounted_parts(self) -> (T, Vec<Diagnostic>, OperationStats) {
         let inner = Arc::try_unwrap(self.inner)
             .unwrap_or_else(|_| panic!("report parts cannot be moved while a clone is alive"));
-        (inner.value, inner.diagnostics, inner.stats, inner.memory)
+        assert!(
+            inner.memory.is_none(),
+            "charged report contents cannot be moved out of their permit"
+        );
+        (inner.value, inner.diagnostics, inner.stats)
     }
 
     pub fn value(&self) -> &T {

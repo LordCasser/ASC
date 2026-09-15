@@ -2576,13 +2576,9 @@ fn manifest(
         &decoded,
         &probe,
     )?;
-    let (manifest, report_diagnostics, _report_stats, report_memory) =
+    let (manifest, report_diagnostics, _report_stats) =
         crate::manifest::decode_manifest_entry(&bytes, &artifact.limits.manifest, control)?
-            .into_parts();
-    debug_assert!(
-        report_memory.is_none(),
-        "manifest decoder does not charge reports"
-    );
+            .into_unaccounted_parts();
     let diagnostics: Vec<Diagnostic> = report_diagnostics
         .into_iter()
         .chain(artifact.open_diagnostics.iter().cloned())
