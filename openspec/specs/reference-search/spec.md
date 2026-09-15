@@ -6,54 +6,63 @@
 
 ## Requirements
 
+
 ### Requirement: Target selection
-查询器 SHALL 支持 string、type、method、field 四类目标。string 使用 `re.compile(pattern.encode('utf-8'))` 在字符串数据区搜索；type 将匹配的 string id 映射为 type id。method/field 将匹配名称映射为对应成员 id，并可增加精确或模糊声明类约束。
+查询器 SHALL 支持 Literal/Regex 两种显式模式，并独立组合目标名称与声明类约束；按逐条解码字符串匹配，精确、无类、模糊类路径语义一致。禁止跨字符串数据、ULEB 前缀或 NUL 边界匹配。模式构造和执行受资源限制。
 
 #### Scenario: Pattern wildcard
-- **WHEN** 字符串 `token` 被代码引用，查询 `tok.n` 或 `tok(en|x)`
-- **THEN** Python 正则可选中 `token`；这不是字面子串语义。
+- **WHEN** token 被引用，模式 tok.n 分别构造成 Regex 和 Literal
+- **THEN** 前者命中、后者不命中；非法/空模式返回 InvalidQuery。
+
+#### Scenario: Unicode member
+- **WHEN** string、type、field 或 method 名含相同非 BMP 字符
+- **THEN** 所有路径使用相同 MUTF-8/UTF-16 规则，不因某条路径把 UTF-8 字节直接对比 MUTF-8 而漏报；不能完成 regex 判定的 surrogate 保留原单元并返回 UnsupportedEncoding，不能跳过后当完整成功。
 
 #### Scenario: Exact and fuzzy class paths differ
-- **WHEN** 对成员名 `SECOND` 查询 `SEC.ND`
-- **THEN** 无类约束及模糊类约束路径用正则；精确类约束路径使用 `.name.find(pattern)`，把点当字面字符。
+- **WHEN** 成员名模式 SEC.ND 为显式 Regex，分别使用精确类、模糊类或无类约束
+- **THEN** 消除历史路径差异，名称始终按同一种 Regex 语义匹配；类约束按自身模式执行。
 
 #### Scenario: Invalid and empty patterns
-- **WHEN** string 模式为 `[` 或空字符串
-- **THEN** 前者因正则语法错误失败；后者可能因字符串偏移映射失败而报错，审计 fixture 中为 `Error: 0`。type 空字符串直接无目标。不得把这些偶然差异视为合理的统一查询 API。
+- **WHEN** 模式非法、为空或只有空白
+- **THEN** 返回 InvalidQuery；非空模式中的有效空格不得被删去。
 
 ### Requirement: Reference instruction families
-扫描器 SHALL 将 const-string / jumbo 识别为 string 引用，将 `1c,1f,20,22–25` 识别为 type 引用、`52–6d` 为 field 引用、`6e–72,74–78,fa,fb` 的第一索引为 method 引用。
+扫描器 SHALL 支持 string、type、field、method 的原有 opcode 家族和 jumbo/polymorphic 第一引用索引；invoke-custom/handle/proto 不误归类。未知/损坏指令返回明确错误。
+
+#### Scenario: Polymorphic operands
+- **WHEN** fa/fb 指令带 method 与 proto 两个索引
+- **THEN** method 查询只使用 method 索引；扫描步长包含整个指令。
 
 #### Scenario: Shared code and method zero
-- **WHEN** method id 0 与另一方法共享 code_item
-- **THEN** 两个方法都可返回，不因 0 的假值语义丢失结果。
+- **WHEN** method id 0 与其他方法共享 code_item
+- **THEN** 各方法的身份与引用均保留。
 
 #### Scenario: Extended DEX references
-- **WHEN** 遇到 invoke-custom、const-method-handle、const-method-type 或 polymorphic 的第二 proto 索引
-- **THEN** 当前四种查询没有独立 call-site / handle / proto 模式；不得将这些索引误当成普通 method id。
+- **WHEN** 遇到 call-site、handle、proto operand
+- **THEN** 不当作 method id 返回；仍正确跳过指令宽度，不增加未声明查询种类。
 
 ### Requirement: Instruction boundary verification
-扫描器 SHALL 在字节候选匹配后由 `InsnLocator.INSN_VERIFY.fullmatch` 校验从方法起点到候选偏移的指令序列；通过 class data / class definitions 构建方法位置映射，并支持 map 缺失时的回退。
+扫描器 SHALL 基于 class data、code_item 范围与完整指令宽度验证引用位置；共享代码与 method 0 不丢失。字节预筛只减少工作，不能改变完整扫描结果。
 
 #### Scenario: Opcode bytes inside an operand
-- **WHEN** `const` 的立即数内含 `const-string` 的 opcode 和目标索引字节
-- **THEN** 不应返回该伪引用；本次合成样本中 Python 和 Rust 都正确返回零行。
+- **WHEN** 普通立即数或 switch/array payload 内出现类似引用的字节
+- **THEN** 不返回伪引用；开启/关闭预筛得到同一结构化结果。
 
 #### Scenario: Missing map entry
-- **WHEN** class_data map entry 缺失或 map 为空
-- **THEN** 从 class definitions 回退建立定位，仍能找到共享 code_item 的两个方法。
+- **WHEN** class_data map 项缺失但 class_defs/class_data 结构可读
+- **THEN** 引用扫描仍从已验证的 class_defs/class_data 路径得到同一事实，不依赖 map 的偶然布局。
 
 ### Requirement: Reference aggregation
-CLI 路径 SHALL 按调用方 method id 聚合，matched target id 去重并按索引排序，生成 `DEX | CLASS->METHOD | matched=(TARGET; TARGET)`。调用方按 method id 排序；跨 DEX 批次按进程完成顺序交付。
-
-#### Scenario: Multiple matching instructions
-- **WHEN** 同一方法多次引用同一匹配目标
-- **THEN** 聚合行只显示该目标一次；同一方法匹配多个目标时用 `; ` 连接。
+结果 SHALL 使用 DexId、调用方完整 method identity、目标 kind/index 和指令位置建模。聚合按调用方身份去重 target id，按确定的 ordinal/index 排序；显示文本仅为投影。
 
 #### Scenario: Overloads and special characters
-- **WHEN** 同一类有同名重载，或字符串中包含换行/` | `/`; `
-- **THEN** 历史文本没有完整方法原型，字符串也不转义；不能将显示行作为无歧义的引用标识。
+- **WHEN** 同类两个同名但不同 prototype 的方法都引用目标
+- **THEN** 两条方法身份都保留，text 和 JSON 可区分，不能用 class->name 覆盖。
 
-## Evidence
+#### Scenario: Delimiters in targets
+- **WHEN** 目标字符串含换行、分隔符或 NUL
+- **THEN** JSON 无损表达原值/原始单元，text 明确转义；往返后身份和匹配集合不变。
 
-固定 main：[`findrefs_manager.py`](https://github.com/MG1937/ASC/blob/ccc6bae7704f5c5ef1a7271e27314837079621fb/src/asc_core/findrefs/findrefs_manager.py)、相邻 `locator/{string,type,method,field,insn}_locator.py`、`scan/code_item_scan.py`、[`asc_handler.py`](https://github.com/MG1937/ASC/blob/ccc6bae7704f5c5ef1a7271e27314837079621fb/src/asc_client/asc_handler.py) 的 `findrefs`。Python 直接 core 调用可关闭聚合，但 CLI 没有此开关，不增加对应命令行需求。
+#### Scenario: Multiple matching instructions
+- **WHEN** 同一方法多次引用一个 target 并引用多个不同 target
+- **THEN** 聚合按 target id 去重，保留位置事实，稳定排序，不合并重载。

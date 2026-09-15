@@ -6,50 +6,66 @@
 
 ## Requirements
 
-### Requirement: Root DEX discovery
-读取器 SHALL 优先选择根目录中以 `classes` 开头、以 `.dex` 结尾的条目；只有不存在这类条目时才回退到任意根 `.dex`。嵌套目录内的 DEX 不参与 CLI 分析。
 
-#### Scenario: Named entries suppress fallback
-- **WHEN** APK 同时含 `classes.dex`、`other.dex` 与 `assets/classes.dex`
-- **THEN** 仅选择 `classes.dex`。
+### Requirement: Root DEX discovery
+读取器 SHALL 优先 root classes*.dex、否则 root *.dex，忽略嵌套 DEX；两条路径均按原中央目录 ordinal 保留第一个同名 entry，并报告重名诊断。
 
 #### Scenario: Duplicate entry names
-- **WHEN** 根 `classes*.dex` 出现同名重复条目
-- **THEN** Python 保留中央目录中的第一项；回退路径的任意根 `.dex` 不去重，所以同名 `a.dex` 可重复扫描。
+- **WHEN** 存在两个同名 a.dex 且没有 classes*.dex
+- **THEN** 扫描一次并记录重复名，不能产生重复引用行。
+
+#### Scenario: Named entries suppress fallback
+- **WHEN** 存在 classes.dex、other.dex 与 assets/classes.dex
+- **THEN** 只选择 root classes.dex。
 
 ### Requirement: Archive entry decoding
-读取器 SHALL 使用中央目录中的大小、压缩方式及本地头偏移读取条目，支持 Stored(0) 与 Deflate(8)，拒绝其他压缩方法；声明的非零解压大小应与实际大小一致。
+读取器 SHALL 支持单卷、非加密 Stored/Deflate，使用中央目录大小并支持 data descriptor；显式拒绝 ZIP64/多卷/加密/未知压缩，检查范围、实际解压大小、CRC 和资源预算。坏结构返回错误，不返回空结果。
+
+#### Scenario: CRC mismatch
+- **WHEN** 完整解压成功但 CRC 不一致
+- **THEN** 分析失败并标注 entry，不宣称完整 payload。
+
+#### Scenario: Prefix optimization
+- **WHEN** class lookup 用 prefix 判断某 DEX 不命中
+- **THEN** 它的结果不得比完整路径减少所承诺的校验；需完成剩余流校验，或明确未完成并不能提交完整成功。
 
 #### Scenario: Stored and deflated multidex
-- **WHEN** 相同 DEX 分别装入 Stored 与 Deflate 的多 DEX APK
-- **THEN** 两种压缩均可执行 getclass/findrefs，引用结果保留 DEX 名称。
+- **WHEN** 相同多 DEX 负载分别为 Stored/Deflate
+- **THEN** 两个路径得到同一引用事实和来源身份。
 
 #### Scenario: Invalid container metadata
-- **WHEN** 找不到 EOCD、本地头签名错误或非零声明大小不匹配
-- **THEN** 读取失败；当前实现没有完整 ZIP64、加密、多卷、CRC 验证契约。
+- **WHEN** EOCD、本地头、range 或 size 无效
+- **THEN** 返回带位置/entry 信息的结构错误，不返回空成功。
 
 ### Requirement: Logical DEX containers
-读取器 SHALL 对 `dex\n041\0` 依次按逻辑头的 `file_size` 寻找成员；保留物理容器的完整地址空间，将后续成员的头覆盖到副本起点，供后续按绝对偏移解析。
+读取器 SHALL 为 035/037/038/039/040/041 建立经 fixture 验证的支持矩阵；041 校验成员链、大小及 header offset。内部 DexId 包含物理 entry ordinal 和逻辑 member ordinal，读视图保留整个容器地址空间；未知版本和 CompactDex/ODEX 返回 Unsupported。
 
 #### Scenario: Multiple logical members
-- **WHEN** 一项 `classes.dex` 中找到多个逻辑 DEX
-- **THEN** 按 `classes.dex!classes1.dex`、`classes.dex!classes2.dex` 命名，并依次分析成员。
+- **WHEN** 041 包含两个有效成员
+- **THEN** 两者都参与查询，具不同稳定 DexId 和人类可读逻辑名称；不能将第二成员偏移误当切片内相对偏移。
+
+#### Scenario: Broken logical header
+- **WHEN** 成员大小为零、越界、header_offset 或 container_size 矛盾
+- **THEN** 结构验证失败，不静默截取有效前缀。
 
 #### Scenario: Plain or single member
-- **WHEN** 普通 DEX 或只有一个逻辑成员
-- **THEN** 保留原 ZIP entry 名。历史探测对畸形尾部采取停止/回退策略，不能据此认定已验证整个 DEX 041 容器。
+- **WHEN** 普通 DEX 或单成员 041
+- **THEN** 保持原 entry 显示名，仍具有稳定逻辑 ordinal；未通过容器校验不可回退为已支持普通 DEX。
 
 ### Requirement: Defined class lookup
-getclass SHALL 在选中的 DEX 中验证目标类型确实出现在 `class_defs`；只出现在 `type_ids` 中的外部类型不算命中。entries 先按压缩大小排序，多个工作线程并发查找，命中后停止派发并尝试取消其余任务。
-
-#### Scenario: Referenced external class
-- **WHEN** 目标描述符在类型表中但没有 class definition
-- **THEN** 继续查找其他 DEX，最终仍未定义则返回未找到。
+定位器 SHALL 只命中 class_defs；保留不同 DEX 中所有定义，默认按 entry/member/class_def ordinal 选择，允许精确 DexId 选择。早停不改变优先级和错误顺序。
 
 #### Scenario: Repeated class definition across entries
-- **WHEN** 多个 DEX 都定义目标类
-- **THEN** Python 返回并发命中路径选中的一份；该结果受完成顺序影响，不能作为稳定的重复类优先级契约。
+- **WHEN** 更低优先级 DEX 先完成且定义同名类
+- **THEN** 仍等待/检查更高优先级候选，1 与 8 workers 返回相同 ClassId。
 
-## Evidence
+#### Scenario: Referenced external class
+- **WHEN** 类型表有 descriptor 但 class_defs 无定义
+- **THEN** 不判命中，继续查找其他 entry。
 
-固定 main：[`apk_handler.py`](https://github.com/MG1937/ASC/blob/ccc6bae7704f5c5ef1a7271e27314837079621fb/src/asc_client/apk_handler.py) 的 `_parse_cd_dex_entries`、`_inflate_dex`、`_dex_defines_class`、`get_class_dex`；[`dex_container.py`](https://github.com/MG1937/ASC/blob/ccc6bae7704f5c5ef1a7271e27314837079621fb/src/asc_client/dex_container.py) 的 `iter_logical_dex_buffers`。
+### Requirement: Integrity diagnostics
+分析器 SHALL 区分 DEX checksum/signature 不一致和结构无效；前者保留 warning 后继续只读分析，后者返回结构错误。后端 scratch 中的校验字段修正不得修改输入或消除原始诊断。
+
+#### Scenario: Zero checksum DEX
+- **WHEN** G03 fixture 结构合法但完整性字段为零
+- **THEN** 可反编译类并附完整性警告，原字节保持不变。
