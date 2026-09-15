@@ -157,6 +157,112 @@
         "61-case registry, hashes re-verified (5 corpus samples + 32 generated inputs)",
         "4-APK arbitration: string/type/method/field record-level (subset relation with reference; all deltas are reference bucket-misattribution rows, androguard spot-check confirmed)"
       ]
+    },
+    "BACK-01": {
+      "status": "passed",
+      "evidence": [
+        "vendor upstream.json: crates.io 2.0.0 archive sha256 + revision + tree-hash checkpoints (A04)",
+        "PATCHES.md ledger DX-P01..P05 + AX-P01..P04 with per-patch tests and removal conditions",
+        "clean diff vs upstream archive: only parser/mod.rs + analysis.rs + classes.rs + emit.rs changes, all marked PATCHED"
+      ]
+    },
+    "BACK-02": {
+      "status": "passed",
+      "evidence": [
+        "vendor asc_contracts child-probe: 7 DROIDSAW* env switches set, stdout/stderr empty, results option-determined",
+        "grep audit: crates/asc-core has no env/stdio/process calls in analysis paths"
+      ]
+    },
+    "BACK-03": {
+      "status": "passed",
+      "evidence": [
+        "asc_contracts scoped_parse_equivalence + legacy_bridge tests",
+        "checked path defaults to full parse; scoped requires explicit opt-in (DX-P01)"
+      ]
+    },
+    "CORE-01": {
+      "status": "passed",
+      "evidence": [
+        "default-feature build compiles with no droidsaw/axmldecoder in the closure (cargo check -p asc-core)",
+        "public API = Engine/Artifact/Report/model/query/dto only; no vendor types exported"
+      ]
+    },
+    "CORE-02": {
+      "status": "passed",
+      "evidence": [
+        "engine.rs tests: same-bytes reopen identity, cross-engine artifact rejection (Arc ptr_eq), InvalidQuery",
+        "Artifact::drop returns engine-owned bytes (account test)"
+      ]
+    },
+    "CORE-03": {
+      "status": "passed",
+      "evidence": [
+        "Engine Clone shares one Arc<Runtime>; serial admission with cancellable bounded-poll wait",
+        "Admission is RAII; queue waiters honor their own cancel flag/deadline"
+      ]
+    },
+    "CORE-04": {
+      "status": "passed",
+      "evidence": [
+        "contract_input: input/entry/decoded-bytes/limits enforcement tests with actual usage accounting",
+        "Limits/ScanLimits fields public; defaults match interfaces.md §5 table"
+      ]
+    },
+    "CORE-05": {
+      "status": "passed",
+      "evidence": [
+        "cancellation checkpoints: open read loop, per-64KiB inflate/copy, per-method + per-4096-units scan, per serialized item, admission wait",
+        "Cancelled{User|Deadline} mapped to exit 130 with distinct stderr cause (contract_cli)"
+      ]
+    },
+    "CORE-06": {
+      "status": "passed",
+      "evidence": [
+        "crates/asc-cli depends only on the asc-core public API (no zip/dex/manifest internals)",
+        "feature matrix: default / decompile / manifest / all-features all check clean"
+      ]
+    },
+    "DIST-01": {
+      "status": "passed",
+      "evidence": [
+        "verify-distribution step 1+2: derived archives with sha256 + normalized manifests",
+        "staging directory source from lockfile closure (187+ crates)"
+      ]
+    },
+    "DIST-02": {
+      "status": "passed",
+      "evidence": [
+        "verify-distribution steps 3+4: products packaged against staging only (--no-verify recorded as archive-created); outside-workspace offline consumer builds from the archives",
+        "rasc bin also built from its own archive"
+      ]
+    },
+    "DIST-03": {
+      "status": "blocked",
+      "evidence": [
+        "macOS arm64: MSRV 1.93.1 + clippy + tests green (this run)",
+        "Linux x86_64 / Windows x86_64 native smoke: no machines available in this environment - recorded as blocked per acceptance.md honest-coverage rule"
+      ]
+    },
+    "DIST-04": {
+      "status": "passed",
+      "evidence": [
+        "upstream.json + PATCHES.md per derived crate; patch-test targets ship inside the archives (smoke-verified)",
+        "patch replay procedure documented in maintain-patched design §6"
+      ]
+    },
+    "QUAL-03": {
+      "status": "passed",
+      "evidence": [
+        "10-run benchmark on NewPipe 0.29.1: findrefs string median 105.5ms/p95 106.0, method 106.8/107.7, classes 113.1/113.9, manifest 33.6/34.0, getclass 281.2/288.6",
+        "peak RSS: findrefs ~40MB, getclass ~186MB (absolute measurements; no cross-implementation claim)"
+      ]
+    },
+    "QUAL-04": {
+      "status": "passed",
+      "evidence": [
+        "scripts/fuzz-smoke.sh: deterministic mutation over committed fixtures on the release binary",
+        "27984 mutants / 0 crashes (300s window); long campaign + crash minimization documented as follow-up"
+      ]
     }
   },
   "differences_arbitrated": [
