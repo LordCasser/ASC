@@ -956,6 +956,7 @@ impl<'a> ScanDex<'a> {
             let fourth = (units > 3).then(|| read16(6)).transpose()?;
             let mut reads = Vec::new();
             let mut writes = Vec::new();
+            let mut invoke_registers = Vec::new();
             let mut reference = None;
             let mut constant = None;
             let mut branch_targets = Vec::new();
@@ -1279,18 +1280,22 @@ impl<'a> ScanDex<'a> {
                             third.unwrap_or_default()
                         };
                         for reg in 0..count.min(255) {
-                            reads.push(start.saturating_add(reg as u16));
+                            let register = start.saturating_add(reg as u16);
+                            reads.push(register);
+                            invoke_registers.push(register);
                         }
                     } else {
                         let word = third.unwrap_or_default();
                         for reg in 0..count.min(5) {
-                            reads.push(match reg {
+                            let register = match reg {
                                 0 => (word & 0x0f) as u16,
                                 1 => ((word >> 4) & 0x0f) as u16,
                                 2 => ((word >> 8) & 0x0f) as u16,
                                 3 => ((word >> 12) & 0x0f) as u16,
                                 _ => ((first >> 8) & 0x0f) as u16,
-                            });
+                            };
+                            reads.push(register);
+                            invoke_registers.push(register);
                         }
                     }
                     reference = Some(InstructionReference::Method {
@@ -1346,6 +1351,7 @@ impl<'a> ScanDex<'a> {
                 opcode,
                 reads,
                 writes,
+                invoke_registers,
                 reference,
                 method_target,
                 constant,

@@ -1186,6 +1186,7 @@ pub struct InstructionFact {
     opcode: u8,
     reads: Vec<u16>,
     writes: Vec<u16>,
+    invoke_registers: Vec<u16>,
     reference: Option<InstructionReference>,
     method_target: Option<MethodIdentity>,
     constant: Option<InstructionConstant>,
@@ -1204,6 +1205,7 @@ impl InstructionFact {
         opcode: u8,
         reads: Vec<u16>,
         writes: Vec<u16>,
+        invoke_registers: Vec<u16>,
         reference: Option<InstructionReference>,
         method_target: Option<MethodIdentity>,
         constant: Option<InstructionConstant>,
@@ -1219,6 +1221,7 @@ impl InstructionFact {
             opcode,
             reads,
             writes,
+            invoke_registers,
             reference,
             method_target,
             constant,
@@ -1263,6 +1266,13 @@ impl InstructionFact {
 
     pub fn writes(&self) -> &[u16] {
         &self.writes
+    }
+
+    /// Registers supplied to a method invocation, in descriptor argument
+    /// order. The implicit receiver is included for instance calls; an empty
+    /// slice means this instruction is not a method invocation.
+    pub fn invoke_registers(&self) -> &[u16] {
+        &self.invoke_registers
     }
 
     pub fn reference(&self) -> Option<InstructionReference> {
