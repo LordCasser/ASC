@@ -19,6 +19,7 @@ pub mod query;
 
 pub mod bytes;
 pub mod dex;
+pub(crate) mod memory;
 #[cfg(feature = "manifest")]
 pub mod manifest;
 pub(crate) mod zip;
@@ -28,6 +29,7 @@ pub use engine::{ArchiveCopySession, Engine, EngineOptions, InputKind};
 pub use error::Error;
 pub use model::dto;
 pub use model::{
-    ArchiveEntry, ArchiveEntryId, ArchiveEntryQuery, ArtifactId, MethodDeclaration, MethodId,
-    MethodInventory, MethodScope, MethodTarget, Report,
+    ArchiveEntry, ArchiveEntryId, ArchiveEntryQuery, ArtifactId, FieldDeclaration, FieldId,
+    MethodDeclaration, MethodId, MethodInventory, MethodScope, MethodTarget, ReferenceLocation,
+    Report, StringDeclaration,
 };

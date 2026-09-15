@@ -100,6 +100,19 @@ pub(crate) struct ArchiveCatalog {
     pub(crate) entries: Vec<ArchiveEntry>,
 }
 
+impl ArchiveCatalog {
+    /// Conservative owned-memory estimate for the retained central-directory
+    /// records. It covers each record and its owned raw name; transient ZIP
+    /// parser buffers are accounted at their actual phase boundary.
+    pub(crate) fn estimated_bytes(&self) -> u64 {
+        self.entries.iter().fold(0u64, |total, entry| {
+            total
+                .saturating_add(64)
+                .saturating_add(entry.raw_name.len() as u64)
+        })
+    }
+}
+
 /// Display form of a raw ZIP name: valid UTF-8 when possible, otherwise each
 /// byte escaped as `\xNN` — never a lossy key. Control characters are escaped
 /// in both branches: entry names reach diagnostics and stderr verbatim, and a
@@ -377,6 +390,48 @@ pub(crate) fn read_entry(
     let mut output = Vec::new();
     read_entry_to(data, entry, limits, decoded_bytes, control, &mut output)?;
     Ok(output)
+}
+
+/// Cheap content probe used by `MethodScope::AllDetected`. It reads only the
+/// first DEX magic bytes from stored or deflated output and leaves full CRC,
+/// size and structural validation to the selected operation.
+pub(crate) fn entry_starts_with_dex_magic(data: &[u8], entry: &ArchiveEntry) -> bool {
+    let local_offset = entry.local_header_offset as usize;
+    let Some(local) = data.get(local_offset..local_offset.saturating_add(30)) else {
+        return false;
+    };
+    if local.get(..4) != Some(b"PK\x03\x04") {
+        return false;
+    }
+    let name_len = u16::from_le_bytes([local[26], local[27]]) as usize;
+    let extra_len = u16::from_le_bytes([local[28], local[29]]) as usize;
+    let Some(data_start) = local_offset
+        .checked_add(30)
+        .and_then(|offset| offset.checked_add(name_len))
+        .and_then(|offset| offset.checked_add(extra_len))
+    else {
+        return false;
+    };
+    let Some(data_end) = data_start.checked_add(entry.compressed_size as usize) else {
+        return false;
+    };
+    let Some(compressed) = data.get(data_start..data_end) else {
+        return false;
+    };
+    let mut prefix = [0u8; 8];
+    let count = match entry.method {
+        STORED => compressed.len().min(prefix.len()),
+        DEFLATE => {
+            let mut decoder = flate2::read::DeflateDecoder::new(compressed);
+            match std::io::Read::read(&mut decoder, &mut prefix) {
+                Ok(count) => count,
+                Err(_) => return false,
+            }
+        }
+        _ => return false,
+    };
+    let prefix = &prefix[..count];
+    prefix.get(..4) == Some(b"dex\n") || prefix.get(..4) == Some(b"cdex")
 }
 
 /// Decodes one entry into a caller-provided sink under the full IN-02

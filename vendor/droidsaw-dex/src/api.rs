@@ -113,6 +113,21 @@ pub struct MethodSummary {
     pub code_off: u32,
 }
 
+/// Lightweight summary of one declared field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldSummary {
+    /// Index into `dex.fields` (identity).
+    pub field_idx: u32,
+    /// Field name.
+    pub name: String,
+    /// Field type descriptor.
+    pub field_type: String,
+    /// Raw access flags from `class_data`.
+    pub access_flags: u32,
+    /// `true` for `static_fields`, `false` for `instance_fields`.
+    pub is_static: bool,
+}
+
 impl DexFile {
     /// Enumerate every class defined in this DEX file.
     ///
@@ -139,6 +154,56 @@ impl DexFile {
                     .map(|s| s.to_string()),
             })
             .collect()
+    }
+
+    /// Enumerate every field declared by one class, preserving static versus
+    /// instance membership and the global field-table index.
+    pub fn list_fields(
+        &self,
+        class_idx: usize,
+        data: &[u8],
+    ) -> Result<Vec<FieldSummary>> {
+        let class_def = self
+            .class_defs
+            .get(class_idx)
+            .ok_or_else(|| crate::error::DexError::IndexOob {
+                pool: "class_defs",
+                index: u32::try_from(class_idx).unwrap_or(u32::MAX),
+                pool_size: u32::try_from(self.class_defs.len()).unwrap_or(u32::MAX),
+            })?;
+        if class_def.class_data_off == 0 {
+            return Ok(Vec::new());
+        }
+        let class_data = parse_class_data(data, class_def.class_data_off)?;
+        let mut fields = Vec::with_capacity(
+            class_data
+                .static_fields
+                .len()
+                .saturating_add(class_data.instance_fields.len()),
+        );
+        for (is_static, entries) in [
+            (true, class_data.static_fields),
+            (false, class_data.instance_fields),
+        ] {
+            for encoded in entries {
+                let field = self
+                    .fields
+                    .get(encoded.field_idx.0 as usize)
+                    .ok_or_else(|| crate::error::DexError::IndexOob {
+                        pool: "field_ids",
+                        index: encoded.field_idx.0,
+                        pool_size: u32::try_from(self.fields.len()).unwrap_or(u32::MAX),
+                    })?;
+                fields.push(FieldSummary {
+                    field_idx: encoded.field_idx.0,
+                    name: self.get_string(field.name_idx)?.to_owned(),
+                    field_type: self.get_type_descriptor(field.type_idx)?.to_owned(),
+                    access_flags: encoded.access_flags,
+                    is_static,
+                });
+            }
+        }
+        Ok(fields)
     }
 
     /// Find a class by descriptor or name.

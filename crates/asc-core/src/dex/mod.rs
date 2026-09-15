@@ -26,7 +26,7 @@ use crate::error::Error;
 use crate::model::{
     Class, ClassConstraint, ClassDescriptor, ClassId, DexEntry, DexText, MatchOutcome,
     MemberQuery as ContractMemberQuery, MethodId, MethodIdentity, Pattern, Prototype, Reference,
-    ReferenceQuery, TargetId, TargetKind, TargetMatch, TargetValue,
+    ReferenceLocation, ReferenceQuery, TargetId, TargetKind, TargetMatch, TargetValue,
 };
 use filter::Targets;
 use std::collections::BTreeMap;
@@ -146,6 +146,25 @@ pub(crate) fn list_classes(
     Ok(out)
 }
 
+/// Every string-pool row in one logical DEX, including strings that no code
+/// item references. The pool index is part of the returned identity.
+pub(crate) fn list_strings(
+    view: &DexView<'_>,
+    limits: &ScanLimits,
+    control: Option<&ControlProbe<'_>>,
+) -> Result<Vec<(u32, DexText)>, Error> {
+    let dex = ScanDex::parse(view, limits)?;
+    check_control(control)?;
+    let mut out = Vec::with_capacity(dex.header.strings_size);
+    for index in 0..dex.header.strings_size as u32 {
+        if index > 0 && index.is_multiple_of(4096) {
+            check_control(control)?;
+        }
+        out.push((index, dex.string_text(index, limits)?));
+    }
+    Ok(out)
+}
+
 /// The class_def indices of one view whose descriptor equals `descriptor`.
 /// More than one index is legal (a DEX may define the same descriptor
 /// twice); the caller keeps every definition and selects by identity.
@@ -216,7 +235,7 @@ fn unsupported_candidate(what: &str, index: u32, units: &[u16]) -> Error {
 }
 
 /// Per-method hits: target index → instruction start offsets in code units.
-type MethodHits = BTreeMap<u32, Vec<u32>>;
+type MethodHits = BTreeMap<u32, Vec<ReferenceLocation>>;
 type Hits = BTreeMap<u32, MethodHits>;
 
 /// The structured scanner's reader over one view. Table offsets read from the
@@ -759,7 +778,15 @@ impl<'a> ScanDex<'a> {
                         .or_default()
                         .entry(index)
                         .or_default()
-                        .push((pc / 2) as u32);
+                        .push(ReferenceLocation::new(
+                            u32::try_from(code_off).map_err(|_| {
+                                malformed("code item offset exceeds the public u32 range".to_owned())
+                            })?,
+                            u32::try_from(pc / 2).map_err(|_| {
+                                malformed("code-unit pc exceeds the public u32 range".to_owned())
+                            })?,
+                            opcode,
+                        ));
                 }
             }
             pc += units * 2;
@@ -785,7 +812,7 @@ impl<'a> ScanDex<'a> {
             let caller = self.method_identity(entry, method_idx, limits)?;
             let mut matches = Vec::with_capacity(per_target.len());
             for (index, offsets) in per_target {
-                locations += offsets.len() as u64;
+                locations = locations.saturating_add(offsets.len() as u64);
                 if locations > limits.max_reference_locations {
                     return Err(Error::resource_limit(format!(
                         "reference locations reached {locations}, above the {} limit",
@@ -797,7 +824,7 @@ impl<'a> ScanDex<'a> {
                 let value = values.get(&index).cloned().ok_or_else(|| {
                     Error::malformed_input(format!("target {index} lost its resolved value"))
                 })?;
-                matches.push(TargetMatch::new(
+                matches.push(TargetMatch::with_locations(
                     TargetId::new(entry.id(), kind, index),
                     value,
                     offsets,

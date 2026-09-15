@@ -10,6 +10,7 @@
 //! - IDs are private-construction; equality/ordering ride on their parts.
 
 use crate::error::Error;
+use crate::memory::MemoryPermit;
 use fancy_regex::RegexBuilder;
 use std::fmt;
 use std::sync::Arc;
@@ -261,6 +262,33 @@ impl MethodId {
 impl fmt::Debug for MethodId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "MethodId({:?} #{})", self.dex, self.method_idx)
+    }
+}
+
+/// A field table entry inside one logical DEX.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FieldId {
+    dex: DexId,
+    field_idx: u32,
+}
+
+impl FieldId {
+    pub(crate) fn new(dex: DexId, field_idx: u32) -> Self {
+        Self { dex, field_idx }
+    }
+
+    pub fn dex(&self) -> DexId {
+        self.dex
+    }
+
+    pub fn field_idx(&self) -> u32 {
+        self.field_idx
+    }
+}
+
+impl fmt::Debug for FieldId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "FieldId({:?} #{})", self.dex, self.field_idx)
     }
 }
 
@@ -689,18 +717,122 @@ impl MethodDeclaration {
 pub struct MethodInventory {
     requested_scope: MethodScope,
     resolved_dexes: Vec<DexId>,
+    dex_entries: Vec<DexEntry>,
+    fields: Vec<FieldDeclaration>,
     methods: Vec<MethodDeclaration>,
+}
+
+/// One lossless string-pool declaration in a scoped logical DEX. String
+/// declarations are inventory facts, so unreferenced strings remain visible.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StringDeclaration {
+    dex: DexEntry,
+    index: u32,
+    value: DexText,
+}
+
+impl StringDeclaration {
+    pub(crate) fn new(dex: DexEntry, index: u32, value: DexText) -> Self {
+        Self { dex, index, value }
+    }
+
+    pub fn dex(&self) -> &DexEntry {
+        &self.dex
+    }
+
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+
+    pub fn value(&self) -> &DexText {
+        &self.value
+    }
+}
+
+/// One field declaration from class_data, including a static initializer when
+/// the DEX carries one. The field-table identity is retained even when names
+/// or descriptors are duplicated.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldDeclaration {
+    id: FieldId,
+    declaring_class: ClassId,
+    owner: DexText,
+    name: DexText,
+    field_type: DexText,
+    access_flags: u32,
+    is_static: bool,
+    initial_value: Option<EncodedValue>,
+}
+
+impl FieldDeclaration {
+    pub(crate) fn new(
+        id: FieldId,
+        declaring_class: ClassId,
+        owner: DexText,
+        name: DexText,
+        field_type: DexText,
+        access_flags: u32,
+        is_static: bool,
+        initial_value: Option<EncodedValue>,
+    ) -> Self {
+        Self {
+            id,
+            declaring_class,
+            owner,
+            name,
+            field_type,
+            access_flags,
+            is_static,
+            initial_value,
+        }
+    }
+
+    pub fn id(&self) -> FieldId {
+        self.id
+    }
+
+    pub fn declaring_class(&self) -> ClassId {
+        self.declaring_class
+    }
+
+    pub fn owner(&self) -> &DexText {
+        &self.owner
+    }
+
+    pub fn name(&self) -> &DexText {
+        &self.name
+    }
+
+    pub fn field_type(&self) -> &DexText {
+        &self.field_type
+    }
+
+    pub fn access_flags(&self) -> u32 {
+        self.access_flags
+    }
+
+    pub fn is_static(&self) -> bool {
+        self.is_static
+    }
+
+    pub fn initial_value(&self) -> Option<&EncodedValue> {
+        self.initial_value.as_ref()
+    }
 }
 
 impl MethodInventory {
     pub(crate) fn new(
         requested_scope: MethodScope,
         resolved_dexes: Vec<DexId>,
+        dex_entries: Vec<DexEntry>,
+        fields: Vec<FieldDeclaration>,
         methods: Vec<MethodDeclaration>,
     ) -> Self {
         Self {
             requested_scope,
             resolved_dexes,
+            dex_entries,
+            fields,
             methods,
         }
     }
@@ -717,8 +849,18 @@ impl MethodInventory {
         &self.resolved_dexes
     }
 
+    /// Resolved logical DEX entries, including entries with zero class or
+    /// method declarations. The order matches `resolved_dexes()`.
+    pub fn dex_entries(&self) -> &[DexEntry] {
+        &self.dex_entries
+    }
+
     pub fn methods(&self) -> &[MethodDeclaration] {
         &self.methods
+    }
+
+    pub fn fields(&self) -> &[FieldDeclaration] {
+        &self.fields
     }
 }
 
@@ -843,6 +985,38 @@ pub enum TargetValue {
     },
 }
 
+/// One reference call site. `pc` is the code-unit offset from the method's
+/// `insns` array, `code_off` is the DEX file offset of that code item, and
+/// `opcode` is the raw Dalvik opcode byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReferenceLocation {
+    code_off: u32,
+    pc: u32,
+    opcode: u8,
+}
+
+impl ReferenceLocation {
+    pub(crate) fn new(code_off: u32, pc: u32, opcode: u8) -> Self {
+        Self {
+            code_off,
+            pc,
+            opcode,
+        }
+    }
+
+    pub fn code_off(&self) -> u32 {
+        self.code_off
+    }
+
+    pub fn pc(&self) -> u32 {
+        self.pc
+    }
+
+    pub fn opcode(&self) -> u8 {
+        self.opcode
+    }
+}
+
 /// One matched target of a reference query: identity, value and the ascending
 /// deduplicated code-unit offsets where the caller references it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -850,6 +1024,7 @@ pub struct TargetMatch {
     id: TargetId,
     value: TargetValue,
     code_unit_offsets: Vec<u32>,
+    locations: Vec<ReferenceLocation>,
 }
 
 impl TargetMatch {
@@ -860,6 +1035,23 @@ impl TargetMatch {
             id,
             value,
             code_unit_offsets,
+            locations: Vec::new(),
+        }
+    }
+
+    pub(crate) fn with_locations(
+        id: TargetId,
+        value: TargetValue,
+        mut locations: Vec<ReferenceLocation>,
+    ) -> Self {
+        locations.sort_unstable();
+        locations.dedup();
+        let code_unit_offsets = locations.iter().map(|location| location.pc).collect();
+        Self {
+            id,
+            value,
+            code_unit_offsets,
+            locations,
         }
     }
 
@@ -873,6 +1065,10 @@ impl TargetMatch {
 
     pub fn code_unit_offsets(&self) -> &[u32] {
         &self.code_unit_offsets
+    }
+
+    pub fn locations(&self) -> &[ReferenceLocation] {
+        &self.locations
     }
 }
 
@@ -1400,11 +1596,15 @@ pub struct OperationStats {
 
 /// The uniform operation result: the value, everything diagnosed along the
 /// way, and stats. Stats do not participate in fact equality or the payload.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Report<T> {
     pub(crate) value: T,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) stats: OperationStats,
+    /// The measured result allocation remains charged while this report (or
+    /// one of its clones) is alive. Consumer-side serialization is outside
+    /// this core ledger.
+    pub(crate) memory: Option<MemoryPermit>,
 }
 
 impl<T> Report<T> {
@@ -1413,7 +1613,13 @@ impl<T> Report<T> {
             value,
             diagnostics,
             stats,
+            memory: None,
         }
+    }
+
+    pub(crate) fn with_memory(mut self, memory: MemoryPermit) -> Self {
+        self.memory = Some(memory);
+        self
     }
 
     pub fn value(&self) -> &T {
@@ -1434,6 +1640,27 @@ impl<T> Report<T> {
         self.stats
     }
 }
+
+impl<T: Clone> Clone for Report<T> {
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            diagnostics: self.diagnostics.clone(),
+            stats: self.stats,
+            memory: self.memory.clone(),
+        }
+    }
+}
+
+impl<T: PartialEq> PartialEq for Report<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+            && self.diagnostics == other.diagnostics
+            && self.stats == other.stats
+    }
+}
+
+impl<T: Eq> Eq for Report<T> {}
 
 // ---------------------------------------------------------------------------
 // Source and metadata (shapes frozen; population lands with A05/A07)
