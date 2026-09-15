@@ -1587,6 +1587,309 @@ fn is_name_char(character: char) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Document DTO projection (A08; schemas/cli-v1.schema.json $defs.document)
+// ---------------------------------------------------------------------------
+
+/// Writes the ordered manifest document as the frozen CLI JSON DTO: ordered
+/// nodes, attributes with namespace decomposition, namespace scope events,
+/// typed raw values and the string-style metadata. Fixed key order; the
+/// document is the same object `to_xml` renders.
+pub(crate) fn write_document_dto(w: &mut crate::model::dto::Writer, manifest: &Manifest) {
+    w.begin_object();
+    w.key("declaration");
+    match manifest.declaration() {
+        Some(declaration) => {
+            w.begin_object();
+            w.key("version");
+            w.string(&declaration.version);
+            w.key("encoding");
+            match &declaration.encoding {
+                Some(encoding) => w.string(encoding),
+                None => w.null(),
+            }
+            w.key("standalone");
+            match &declaration.standalone {
+                Some(standalone) => w.string(standalone),
+                None => w.null(),
+            }
+            w.end_object();
+        }
+        None => w.null(),
+    }
+    w.key("prolog");
+    w.begin_array();
+    for item in manifest.prolog() {
+        write_misc_dto(w, item);
+    }
+    w.end_array();
+    w.key("root");
+    write_element_dto(w, manifest.root());
+    w.key("epilog");
+    w.begin_array();
+    for item in manifest.epilog() {
+        write_misc_dto(w, item);
+    }
+    w.end_array();
+    w.key("metadata");
+    write_document_metadata_dto(w, manifest.metadata());
+    w.end_object();
+}
+
+fn write_misc_dto(w: &mut crate::model::dto::Writer, item: &Misc) {
+    w.begin_object();
+    match item {
+        Misc::Text(text) => {
+            w.key("kind");
+            w.string("text");
+            w.key("text");
+            crate::model::dto::write_dex_text(w, text);
+        }
+        Misc::Comment(text) => {
+            w.key("kind");
+            w.string("comment");
+            w.key("text");
+            w.string(text);
+        }
+        Misc::Pi { target, data } => {
+            w.key("kind");
+            w.string("pi");
+            w.key("target");
+            w.string(target);
+            w.key("data");
+            w.string(data);
+        }
+    }
+    w.end_object();
+}
+
+fn write_element_dto(w: &mut crate::model::dto::Writer, element: &XmlElement) {
+    w.begin_object();
+    w.key("namespace");
+    write_optional_string(w, element.namespace());
+    w.key("prefix");
+    write_optional_string(w, element.prefix());
+    w.key("local_name");
+    w.string(element.local_name());
+    w.key("attributes");
+    w.begin_array();
+    for attribute in element.attributes() {
+        write_attribute_dto(w, attribute);
+    }
+    w.end_array();
+    w.key("children");
+    w.begin_array();
+    for child in element.children() {
+        write_node_dto(w, child);
+    }
+    w.end_array();
+    w.key("metadata");
+    write_element_metadata_dto(w, element.metadata());
+    w.end_object();
+}
+
+fn write_node_dto(w: &mut crate::model::dto::Writer, node: &XmlNode) {
+    w.begin_object();
+    match node {
+        XmlNode::Text { text } => {
+            w.key("kind");
+            w.string("text");
+            w.key("text");
+            crate::model::dto::write_dex_text(w, text);
+        }
+        XmlNode::Cdata { data } => {
+            w.key("kind");
+            w.string("cdata");
+            w.key("text");
+            crate::model::dto::write_dex_text(w, data);
+        }
+        XmlNode::Comment { text } => {
+            w.key("kind");
+            w.string("comment");
+            w.key("text");
+            w.string(text);
+        }
+        XmlNode::Pi { target, data } => {
+            w.key("kind");
+            w.string("pi");
+            w.key("target");
+            w.string(target);
+            w.key("data");
+            w.string(data);
+        }
+        XmlNode::Element(element) => {
+            w.key("kind");
+            w.string("element");
+            write_element_fields_dto(w, element);
+        }
+    }
+    w.end_object();
+}
+
+/// The element fields without the wrapping object, so `XmlNode::Element` can
+/// nest them under its `kind` tag and the root can carry them directly.
+fn write_element_fields_dto(w: &mut crate::model::dto::Writer, element: &XmlElement) {
+    w.key("namespace");
+    write_optional_string(w, element.namespace());
+    w.key("prefix");
+    write_optional_string(w, element.prefix());
+    w.key("local_name");
+    w.string(element.local_name());
+    w.key("attributes");
+    w.begin_array();
+    for attribute in element.attributes() {
+        write_attribute_dto(w, attribute);
+    }
+    w.end_array();
+    w.key("children");
+    w.begin_array();
+    for child in element.children() {
+        write_node_dto(w, child);
+    }
+    w.end_array();
+    w.key("metadata");
+    write_element_metadata_dto(w, element.metadata());
+}
+
+fn write_attribute_dto(w: &mut crate::model::dto::Writer, attribute: &XmlAttribute) {
+    w.begin_object();
+    w.key("namespace");
+    write_optional_string(w, attribute.namespace());
+    w.key("prefix");
+    write_optional_string(w, attribute.prefix());
+    w.key("local_name");
+    w.string(attribute.local_name());
+    w.key("value");
+    write_manifest_value_dto(w, attribute.value());
+    w.end_object();
+}
+
+fn write_manifest_value_dto(w: &mut crate::model::dto::Writer, value: &ManifestValue) {
+    w.begin_object();
+    match value {
+        ManifestValue::Text(text) => {
+            w.key("kind");
+            w.string("text");
+            w.key("text");
+            crate::model::dto::write_dex_text(w, text);
+        }
+        ManifestValue::Typed(typed) => {
+            w.key("kind");
+            w.string("typed");
+            w.key("type_byte");
+            w.number(u64::from(typed.type_byte));
+            w.key("data");
+            w.hex_bits(u64::from(typed.data), 8);
+            w.key("raw_string");
+            match typed.raw_string.as_ref() {
+                Some(raw) => crate::model::dto::write_dex_text(w, raw),
+                None => w.null(),
+            }
+        }
+    }
+    w.end_object();
+}
+
+fn write_element_metadata_dto(w: &mut crate::model::dto::Writer, metadata: &ElementMetadata) {
+    w.begin_object();
+    w.key("line_number");
+    match metadata.line_number {
+        Some(line) => w.number(u64::from(line)),
+        None => w.null(),
+    }
+    w.key("comment");
+    match &metadata.comment {
+        Some(comment) => w.string(comment),
+        None => w.null(),
+    }
+    w.key("namespace_events");
+    w.begin_array();
+    for event in &metadata.namespace_events {
+        w.begin_object();
+        match event {
+            NamespaceEvent::Start { prefix, uri } => {
+                w.key("event");
+                w.string("start");
+                w.key("prefix");
+                w.string(prefix);
+                w.key("uri");
+                w.string(uri);
+            }
+            NamespaceEvent::End { prefix, uri } => {
+                w.key("event");
+                w.string("end");
+                w.key("prefix");
+                w.string(prefix);
+                w.key("uri");
+                w.string(uri);
+            }
+        }
+        w.end_object();
+    }
+    w.end_array();
+    w.end_object();
+}
+
+fn write_document_metadata_dto(w: &mut crate::model::dto::Writer, metadata: &ManifestMetadata) {
+    w.begin_object();
+    w.key("source");
+    match metadata.source {
+        Some(ManifestSource::BinaryAxml { utf8_pool, string_count }) => {
+            w.begin_object();
+            w.key("kind");
+            w.string("binary-axml");
+            w.key("utf8_pool");
+            w.boolean(utf8_pool);
+            w.key("string_count");
+            w.number(string_count as u64);
+            w.end_object();
+        }
+        Some(ManifestSource::PlainXml) => {
+            w.begin_object();
+            w.key("kind");
+            w.string("plain-xml");
+            w.end_object();
+        }
+        None => w.null(),
+    }
+    w.key("string_styles");
+    w.begin_array();
+    for style in &metadata.string_styles {
+        w.begin_object();
+        w.key("string_index");
+        w.number(style.string_index as u64);
+        w.key("spans");
+        w.begin_array();
+        for span in &style.spans {
+            w.begin_object();
+            w.key("name_index");
+            w.number(span.name_index as u64);
+            w.key("first_char");
+            w.number(span.first_char as u64);
+            w.key("last_char");
+            w.number(span.last_char as u64);
+            w.end_object();
+        }
+        w.end_array();
+        w.end_object();
+    }
+    w.end_array();
+    w.key("resource_map");
+    w.begin_array();
+    for resource in &metadata.resource_map {
+        w.number(*resource as u64);
+    }
+    w.end_array();
+    w.end_object();
+}
+
+fn write_optional_string(w: &mut crate::model::dto::Writer, value: Option<String>) {
+    match value {
+        Some(value) => w.string(&value),
+        None => w.null(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Legacy string bridge (A07 deletes this)
 // ---------------------------------------------------------------------------
 

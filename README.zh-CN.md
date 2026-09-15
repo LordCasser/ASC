@@ -42,10 +42,23 @@ cargo build --release
 rasc getclass app.apk com.example.Main                 # 单个类 → Java 风格源码
 rasc getclass --threads 16 -o Main.java app.apk 'Lcom/example/Main;'
 rasc findrefs app.apk string Authorization             # 在所有根 DEX 中查找引用
+rasc findrefs app.apk string 'tok.n' --regex           # 值按正则表达式匹配
 rasc findrefs app.apk method onCreate --class com.example.Main
 rasc findrefs app.apk field INSTANCE --class example --fuzzy-class
 rasc classes app.apk                                   # 类索引
 rasc manifest app.apk                                  # 二进制 AndroidManifest.xml → XML
+rasc getclass app.apk example.Test --dex 0:1           # 钉选某个逻辑 DEX
 ```
+
+所有命令共用：`--threads/--thread N`（默认 8，必须为正）、`--debug`（stderr
+输出统计，不改变 payload）、`-o/--output FILE`（与 stdout 完全相同的字节，
+经同目录临时文件原子替换写入）、`--format text|json`（默认 `text`；JSON 为
+单个 envelope 对象，含 `schema_version`、`operation`、`artifact_id`、`data`
+与 `diagnostics`）、`--timeout-ms N`（N 毫秒后取消）、可重复的
+`--limit KEY=VALUE`（资源上限表覆盖，十进制正整数，见 `rasc --help`）。
+
+退出码：`0` 完整成功（含空结果），`2` 参数或查询错误，`1` 输入/分析/输出错误
+与不完整反编译，`130` 取消（用户或超时）。`--help`/`--version` 输出到 stdout
+并返回 0；无参数时帮助输出到 stderr 并返回 2。
 
 更多用法见 `rasc --help`，具体命令的参数可通过 `rasc <命令> --help` 查看。

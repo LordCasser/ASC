@@ -34,7 +34,7 @@
           "properties": {
             "class": { "$ref": "#/$defs/class" },
             "source": { "type": "string", "description": "UTF-8, LF endings, exactly one trailing LF." },
-            "metadata": { "type": "object", "description": "Typed SourceMetadata projection; no free-form string maps. Frozen as golden with A07/A08." }
+            "metadata": { "$ref": "#/$defs/source_metadata" }
           }
         },
         {
@@ -42,10 +42,374 @@
           "required": ["xml", "document"],
           "properties": {
             "xml": { "type": "string", "description": "Complete rendered XML; never null when the command succeeded." },
-            "document": { "type": "object", "description": "Ordered nodes, attributes, namespace scopes, typed raw data, string styles. Frozen as golden with A06/A08." }
+            "document": { "$ref": "#/$defs/document" }
           }
         }
       ]
+    },
+    "source_metadata": {
+      "type": "object",
+      "required": ["class", "annotations", "fields", "methods"],
+      "description": "Typed SourceMetadata projection; absent optional data is null, never a fabricated default. Raw typed bits (float/double/long words) are fixed-width hex strings.",
+      "properties": {
+        "class": { "$ref": "#/$defs/source_class_metadata" },
+        "annotations": { "type": "array", "items": { "$ref": "#/$defs/annotation_entry" } },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field_metadata" } },
+        "methods": { "type": "array", "items": { "$ref": "#/$defs/method_metadata" } }
+      }
+    },
+    "source_class_metadata": {
+      "type": "object",
+      "required": ["access_flags", "super_class", "interfaces", "source_file", "generic_signature", "enclosing", "inner_classes"],
+      "properties": {
+        "access_flags": { "type": "integer", "minimum": 0 },
+        "super_class": { "$ref": "#/$defs/dex_text_or_null" },
+        "interfaces": { "type": "array", "items": { "$ref": "#/$defs/dex_text" } },
+        "source_file": { "$ref": "#/$defs/dex_text_or_null" },
+        "generic_signature": { "$ref": "#/$defs/dex_text_or_null" },
+        "enclosing": {
+          "oneOf": [
+            { "$ref": "#/$defs/enclosing_record" },
+            { "type": "null" }
+          ]
+        },
+        "inner_classes": { "type": "array", "items": { "$ref": "#/$defs/inner_class_record" } }
+      }
+    },
+    "dex_text_or_null": {
+      "oneOf": [
+        { "$ref": "#/$defs/dex_text" },
+        { "type": "null" }
+      ]
+    },
+    "enclosing_record": {
+      "type": "object",
+      "required": ["outer_class", "enclosing_method"],
+      "properties": {
+        "outer_class": { "$ref": "#/$defs/dex_text_or_null" },
+        "enclosing_method": {
+          "description": "Positional triple as stored: rendered text, name, prototype.",
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": [
+                { "$ref": "#/$defs/dex_text" },
+                { "$ref": "#/$defs/dex_text" },
+                { "$ref": "#/$defs/prototype" }
+              ]
+            },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "inner_class_record": {
+      "type": "object",
+      "required": ["inner_class", "outer_class", "inner_name", "access_flags"],
+      "properties": {
+        "inner_class": { "$ref": "#/$defs/dex_text" },
+        "outer_class": { "$ref": "#/$defs/dex_text_or_null" },
+        "inner_name": { "$ref": "#/$defs/dex_text_or_null" },
+        "access_flags": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "annotation_entry": {
+      "type": "object",
+      "required": ["target", "annotation"],
+      "properties": {
+        "target": { "$ref": "#/$defs/annotation_target" },
+        "annotation": { "$ref": "#/$defs/annotation_record" }
+      }
+    },
+    "annotation_target": {
+      "type": "object",
+      "required": ["target"],
+      "properties": {
+        "target": { "enum": ["class", "field", "method", "parameter"] },
+        "index": { "type": "integer", "minimum": 0 },
+        "method_index": { "type": "integer", "minimum": 0 },
+        "parameter_index": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "annotation_record": {
+      "type": "object",
+      "required": ["visibility", "type_descriptor", "items", "rendered"],
+      "properties": {
+        "visibility": { "enum": ["build", "runtime", "system"] },
+        "type_descriptor": { "$ref": "#/$defs/dex_text" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "value"],
+            "properties": {
+              "name": { "$ref": "#/$defs/dex_text" },
+              "value": { "$ref": "#/$defs/encoded_value" }
+            }
+          }
+        },
+        "rendered": { "type": "string", "description": "Lossless backend rendering of the element list." }
+      }
+    },
+    "encoded_value": {
+      "type": "object",
+      "required": ["type", "value"],
+      "properties": {
+        "type": {
+          "enum": ["null", "boolean", "byte", "short", "int", "long", "char", "float", "double",
+            "string", "type", "field", "method", "enum", "array", "annotation"]
+        },
+        "value": {},
+        "bits": { "type": "string", "pattern": "^0x[0-9a-f]+$", "description": "Fixed-width raw bits for float (8 hex digits) and double (16 hex digits); value is absent then." }
+      }
+    },
+    "field_metadata": {
+      "type": "object",
+      "required": ["name", "field_type", "access_flags", "generic_signature", "initial_value"],
+      "properties": {
+        "name": { "$ref": "#/$defs/dex_text" },
+        "field_type": { "$ref": "#/$defs/dex_text" },
+        "access_flags": { "type": "integer", "minimum": 0 },
+        "generic_signature": { "$ref": "#/$defs/dex_text_or_null" },
+        "initial_value": {
+          "oneOf": [
+            { "$ref": "#/$defs/encoded_value" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "method_metadata": {
+      "type": "object",
+      "required": ["name", "prototype", "access_flags", "generic_signature", "throws", "annotations", "parameter_signatures", "debug"],
+      "properties": {
+        "name": { "$ref": "#/$defs/dex_text" },
+        "prototype": { "$ref": "#/$defs/prototype" },
+        "access_flags": { "type": "integer", "minimum": 0 },
+        "generic_signature": { "$ref": "#/$defs/dex_text_or_null" },
+        "throws": { "type": "array", "items": { "$ref": "#/$defs/dex_text" } },
+        "annotations": { "type": "array", "items": { "$ref": "#/$defs/annotation_entry" } },
+        "parameter_signatures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/dex_text_or_null" }
+        },
+        "debug": {
+          "oneOf": [
+            { "$ref": "#/$defs/debug_info" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "debug_info": {
+      "type": "object",
+      "required": ["parameter_names", "locals", "lines"],
+      "properties": {
+        "parameter_names": { "type": "array", "items": { "$ref": "#/$defs/dex_text_or_null" } },
+        "locals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "start_code_unit", "end_code_unit", "slot"],
+            "properties": {
+              "name": { "$ref": "#/$defs/dex_text" },
+              "start_code_unit": { "type": "integer", "minimum": 0 },
+              "end_code_unit": { "type": "integer", "minimum": 0 },
+              "slot": { "type": "integer", "minimum": 0, "maximum": 65535 }
+            }
+          }
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["code_unit", "line"],
+            "properties": {
+              "code_unit": { "type": "integer", "minimum": 0 },
+              "line": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "document": {
+      "type": "object",
+      "required": ["declaration", "prolog", "root", "epilog", "metadata"],
+      "description": "Ordered manifest document: nodes, attributes with namespace decomposition, namespace scope events, typed raw values and string styles.",
+      "properties": {
+        "declaration": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["version", "encoding", "standalone"],
+              "properties": {
+                "version": { "type": "string" },
+                "encoding": { "type": ["string", "null"] },
+                "standalone": { "type": ["string", "null"] }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "prolog": { "type": "array", "items": { "$ref": "#/$defs/misc_node" } },
+        "root": { "$ref": "#/$defs/element_node" },
+        "epilog": { "type": "array", "items": { "$ref": "#/$defs/misc_node" } },
+        "metadata": { "$ref": "#/$defs/document_metadata" }
+      }
+    },
+    "misc_node": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["text", "comment", "pi"] },
+        "text": { "$ref": "#/$defs/text_payload" },
+        "target": { "type": "string" },
+        "data": { "type": "string" }
+      }
+    },
+    "element_node": {
+      "type": "object",
+      "required": ["namespace", "prefix", "local_name", "attributes", "children", "metadata"],
+      "properties": {
+        "namespace": { "type": ["string", "null"] },
+        "prefix": { "type": ["string", "null"] },
+        "local_name": { "type": "string" },
+        "attributes": { "type": "array", "items": { "$ref": "#/$defs/attribute_node" } },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/child_node" } },
+        "metadata": { "$ref": "#/$defs/element_metadata" }
+      }
+    },
+    "child_node": {
+      "type": "object",
+      "required": ["kind"],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": { "kind": { "const": "element" } },
+          "allOf": [ { "$ref": "#/$defs/element_node" } ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "enum": ["text", "comment", "pi", "cdata"] },
+            "text": { "$ref": "#/$defs/text_payload" },
+            "target": { "type": "string" },
+            "data": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "text_payload": {
+      "description": "Comment text is a plain string; text/CDATA content is a lossless dex_text object.",
+      "oneOf": [
+        { "type": "string" },
+        { "$ref": "#/$defs/dex_text" },
+        { "type": "null" }
+      ]
+    },
+    "attribute_node": {
+      "type": "object",
+      "required": ["namespace", "prefix", "local_name", "value"],
+      "properties": {
+        "namespace": { "type": ["string", "null"] },
+        "prefix": { "type": ["string", "null"] },
+        "local_name": { "type": "string" },
+        "value": { "$ref": "#/$defs/manifest_value" }
+      }
+    },
+    "manifest_value": {
+      "type": "object",
+      "required": ["kind"],
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "text"],
+          "properties": {
+            "kind": { "const": "text" },
+            "text": { "$ref": "#/$defs/dex_text" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "type_byte", "data", "raw_string"],
+          "properties": {
+            "kind": { "const": "typed" },
+            "type_byte": { "type": "integer", "minimum": 0, "maximum": 255 },
+            "data": { "type": "string", "pattern": "^0x[0-9a-f]{8}$", "description": "Raw 32-bit data word as fixed-width hex." },
+            "raw_string": { "$ref": "#/$defs/dex_text_or_null" }
+          }
+        }
+      ]
+    },
+    "element_metadata": {
+      "type": "object",
+      "required": ["line_number", "comment", "namespace_events"],
+      "properties": {
+        "line_number": { "type": ["integer", "null"], "minimum": 0 },
+        "comment": { "type": ["string", "null"] },
+        "namespace_events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["event", "prefix", "uri"],
+            "properties": {
+              "event": { "enum": ["start", "end"] },
+              "prefix": { "type": "string" },
+              "uri": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "document_metadata": {
+      "type": "object",
+      "required": ["source", "string_styles", "resource_map"],
+      "properties": {
+        "source": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["kind", "utf8_pool", "string_count"],
+              "properties": {
+                "kind": { "const": "binary-axml" },
+                "utf8_pool": { "type": "boolean" },
+                "string_count": { "type": "integer", "minimum": 0 }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["kind"],
+              "properties": { "kind": { "const": "plain-xml" } }
+            },
+            { "type": "null" }
+          ]
+        },
+        "string_styles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["string_index", "spans"],
+            "properties": {
+              "string_index": { "type": "integer", "minimum": 0 },
+              "spans": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["name_index", "first_char", "last_char"],
+                  "properties": {
+                    "name_index": { "type": "integer", "minimum": 0 },
+                    "first_char": { "type": "integer", "minimum": 0 },
+                    "last_char": { "type": "integer", "minimum": 0 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "resource_map": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+      }
     },
     "artifact_id_object_base": {
       "type": "object",

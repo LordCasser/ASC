@@ -19,7 +19,7 @@
 
 use crate::bytes::ControlProbe;
 use crate::dex::container::{self, ValidatedDexView};
-use crate::dex::{self, ScanLimits, ScanOptions};
+use crate::dex::{self, ScanOptions};
 use crate::error::{Error, ErrorKind};
 use crate::manifest::OperationControl;
 use crate::model::{
@@ -35,9 +35,43 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-/// Per-open input budget: the owned snapshot may not exceed this
-/// (interfaces.md §5 `max_input_bytes`).
-const MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
+/// Per-open and per-operation resource limits the CLI can override
+/// (interfaces.md §5 keys enforced by this layer). Unlisted keys (engine
+/// bytes, archive/logical entry counts, depth, AXML nodes/attributes, code
+/// units) keep their internal defaults until A11/A12 expose them.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    /// `input-bytes`: the owned snapshot may not exceed this.
+    pub(crate) max_input_bytes: u64,
+    /// `entry-bytes`: one entry's actual decoded bytes.
+    pub(crate) max_entry_bytes: u64,
+    /// `decoded-bytes`: per-operation accumulated decoded bytes.
+    pub(crate) max_total_decoded_bytes: u64,
+    /// `table-items`/`string-units`/`result-items`/`locations`/`result-bytes`.
+    pub(crate) scan: crate::dex::ScanLimits,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_input_bytes: 512 * 1024 * 1024,
+            max_entry_bytes: crate::zip::InputLimits::DEFAULT.max_entry_bytes,
+            max_total_decoded_bytes: crate::zip::InputLimits::DEFAULT.max_total_decoded_bytes,
+            scan: crate::dex::ScanLimits::DEFAULT,
+        }
+    }
+}
+
+impl Limits {
+    fn input(&self) -> crate::zip::InputLimits {
+        crate::zip::InputLimits {
+            max_entry_bytes: self.max_entry_bytes,
+            max_total_decoded_bytes: self.max_total_decoded_bytes,
+            max_archive_entries: crate::zip::InputLimits::DEFAULT.max_archive_entries,
+        }
+    }
+}
+
 /// `AndroidManifest.xml`, matched on raw entry-name bytes (last wins).
 const MANIFEST_NAME: &[u8] = b"AndroidManifest.xml";
 
@@ -80,11 +114,12 @@ pub struct Artifact {
     /// Duplicate-entry-name warnings observed at open time, attached to
     /// every operation's report.
     open_diagnostics: Vec<Diagnostic>,
+    /// The resource limits this artifact's operations enforce.
+    limits: Limits,
 }
 
 impl Artifact {
-    /// A08 prints the artifact id in the JSON envelope.
-    #[allow(dead_code)]
+    /// The content identity printed in the JSON envelope.
     pub fn id(&self) -> ArtifactId {
         self.id
     }
@@ -92,7 +127,11 @@ impl Artifact {
 
 /// Opens `path` as an APK: bounded owned snapshot, content id, archive
 /// catalog, root DEX selection.
-pub fn open_path(path: &Path, control: &OperationControl) -> Result<Artifact, Error> {
+pub fn open_path(
+    path: &Path,
+    limits: &Limits,
+    control: &OperationControl,
+) -> Result<Artifact, Error> {
     let mut file = File::open(path)
         .map_err(|error| Error::new(ErrorKind::NotFound).with_context(format!("open {path:?}: {error}")))?;
     let metadata = file
@@ -102,10 +141,11 @@ pub fn open_path(path: &Path, control: &OperationControl) -> Result<Artifact, Er
         return Err(Error::new(ErrorKind::UnsupportedFormat)
             .with_context(format!("{path:?} is not a regular file")));
     }
-    if metadata.len() > MAX_INPUT_BYTES {
+    if metadata.len() > limits.max_input_bytes {
         return Err(Error::resource_limit(format!(
-            "{path:?} is {} bytes, above the {MAX_INPUT_BYTES} input limit",
-            metadata.len()
+            "{path:?} is {} bytes, above the {} input limit",
+            metadata.len(),
+            limits.max_input_bytes
         )));
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
@@ -120,7 +160,8 @@ pub fn open_path(path: &Path, control: &OperationControl) -> Result<Artifact, Er
         }
         bytes.extend_from_slice(&buffer[..read]);
     }
-    open_bytes(Arc::from(bytes.into_boxed_slice()), control)
+    let artifact = open_bytes(Arc::from(bytes.into_boxed_slice()), control)?;
+    Ok(Artifact { limits: *limits, ..artifact })
 }
 
 /// Opens an already-owned input snapshot (the raw-bytes host path and tests).
@@ -143,7 +184,7 @@ pub fn open_bytes(bytes: Arc<[u8]>, control: &OperationControl) -> Result<Artifa
         ));
     }
     let roots = selection.selected.into_iter().cloned().collect();
-    Ok(Artifact { id, bytes, catalog, roots, open_diagnostics })
+    Ok(Artifact { id, bytes, catalog, roots, open_diagnostics, limits: Limits::default() })
 }
 
 impl Artifact {
@@ -158,12 +199,13 @@ impl Artifact {
     ) -> Result<(Vec<T>, Vec<Diagnostic>), Error> {
         let guard = ControlGuard::new(control);
         let probe = guard.probe();
+        let input_limits = self.limits.input();
         let mut decoded = 0u64;
         let mut results = Vec::new();
         let mut integrity = Vec::new();
         for entry in &self.roots {
             probe.check()?;
-            let data = zip::read_entry(&self.bytes, entry, &InputLimits::DEFAULT, &mut decoded, &probe)?;
+            let data = zip::read_entry(&self.bytes, entry, &input_limits, &mut decoded, &probe)?;
             let (views, entry_integrity) =
                 container::validate_dex_entry(self.id, entry.ordinal, &entry.raw_name, &data, &probe)?;
             integrity.extend(entry_integrity);
@@ -209,12 +251,13 @@ pub fn classes(
     artifact.require_roots()?;
     // Duplicate detection counts every definition, before the filter: a
     // filtered-out duplicate is still a duplicate definition.
+    let scan_limits = artifact.limits.scan;
     let mut descriptor_counts: std::collections::BTreeMap<String, usize> = Default::default();
     let (rows, mut diagnostics) = artifact.fold_roots(control, |_entry, views, probe| {
         let mut rows = Vec::new();
         for (logical, view) in views.views.iter().enumerate() {
             let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
-            let listed = dex::list_classes(&dex_view, &ScanLimits::DEFAULT, Some(probe))?;
+            let listed = dex::list_classes(&dex_view, &scan_limits, Some(probe))?;
             for class in listed {
                 *descriptor_counts
                     .entry(class.descriptor().as_str().to_owned())
@@ -255,12 +298,13 @@ pub fn references(
     control: &OperationControl,
 ) -> Result<Report<Vec<crate::model::Reference>>, Error> {
     artifact.require_roots()?;
+    let scan_limits = artifact.limits.scan;
     let (rows, diagnostics) = artifact.fold_roots(control, |_entry, views, probe| {
         let mut rows = Vec::new();
         for (logical, view) in views.views.iter().enumerate() {
             let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
             let options =
-                ScanOptions { limits: ScanLimits::DEFAULT, control: Some(probe), prefilter: true };
+                ScanOptions { limits: scan_limits, control: Some(probe), prefilter: true };
             rows.extend(dex::scan_references(&dex_view, query, &options)?);
         }
         Ok(rows)
@@ -300,7 +344,7 @@ pub fn decompile(
     let mut integrity = Vec::new();
     for (entry_index, entry) in artifact.roots.iter().enumerate() {
         probe.check()?;
-        let data = zip::read_entry(&artifact.bytes, entry, &InputLimits::DEFAULT, &mut decoded, &probe)?;
+        let data = zip::read_entry(&artifact.bytes, entry, &artifact.limits.input(), &mut decoded, &probe)?;
         let (views, entry_integrity) =
             container::validate_dex_entry(artifact.id, entry.ordinal, &entry.raw_name, &data, &probe)?;
         integrity.extend(entry_integrity);
@@ -314,7 +358,7 @@ pub fn decompile(
                     }
                     let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
                     let hits =
-                        dex::locate_class(&dex_view, descriptor, &ScanLimits::DEFAULT, Some(&probe))?;
+                        dex::locate_class(&dex_view, descriptor, &artifact.limits.scan, Some(&probe))?;
                     if let Some(&class_def_idx) = hits.first() {
                         resolution = Some(Resolved {
                             entry_index,
@@ -376,7 +420,7 @@ pub fn decompile(
     // Backend parse + checked decompile over the resolved entry's bytes
     // (041 members go through the operation-local scratch normalization).
     let entry = &artifact.roots[resolved.entry_index];
-    let data = zip::read_entry(&artifact.bytes, entry, &InputLimits::DEFAULT, &mut decoded, &probe)?;
+    let data = zip::read_entry(&artifact.bytes, entry, &artifact.limits.input(), &mut decoded, &probe)?;
     let (views, entry_integrity) =
         container::validate_dex_entry(artifact.id, entry.ordinal, &entry.raw_name, &data, &probe)?;
     diagnostics.extend(entry_integrity);
@@ -462,7 +506,7 @@ pub fn manifest(
     let guard = ControlGuard::new(control);
     let probe = guard.probe();
     let mut decoded = 0u64;
-    let bytes = zip::read_entry(&artifact.bytes, entry, &InputLimits::DEFAULT, &mut decoded, &probe)?;
+    let bytes = zip::read_entry(&artifact.bytes, entry, &artifact.limits.input(), &mut decoded, &probe)?;
     let report = crate::manifest::decode_manifest_entry(
         &bytes,
         &crate::manifest::XmlDecodeLimits::default(),
@@ -680,7 +724,7 @@ mod tests {
             ("AndroidManifest.xml", b"<manifest/>".as_slice(), false),
         ]);
         let path = temp_apk("a07-refs", &zip);
-        let artifact = open_path(&path, &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
         let query = query::string_query("Authorization", MatchMode::Literal, &Default::default())
             .unwrap();
         let report = references(&artifact, &query, &no_control()).unwrap();
@@ -704,7 +748,7 @@ mod tests {
     fn dexless_archives_split_success_and_notfound_by_operation() {
         let zip = build_zip(&[("AndroidManifest.xml", b"<manifest/>".as_slice(), false)]);
         let path = temp_apk("a07-dexless", &zip);
-        let artifact = open_path(&path, &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
         let dex_rows = dexes(&artifact, &no_control()).unwrap();
         assert!(dex_rows.value().is_empty(), "dexes on a dex-less APK is an empty catalog");
         let query =
@@ -721,7 +765,7 @@ mod tests {
         let dex = g02_dex();
         let zip = build_zip(&[("classes.dex", &dex, true)]);
         let path = temp_apk("a07-g02", &zip);
-        let artifact = open_path(&path, &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
         let selector = ClassSelector::Descriptor(
             ClassDescriptor::from_normalized("Lexample/Statics;".to_owned()).unwrap(),
             None,
@@ -742,7 +786,7 @@ mod tests {
         dex[8..32].fill(0);
         let zip = build_zip(&[("classes.dex", &dex, true)]);
         let path = temp_apk("a07-g03", &zip);
-        let artifact = open_path(&path, &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
         let selector = ClassSelector::Descriptor(
             ClassDescriptor::from_normalized("Lexample/Statics;".to_owned()).unwrap(),
             None,
@@ -761,7 +805,7 @@ mod tests {
         let first = const_string_fixture(1);
         let zip = build_zip(&[("classes.dex", &first, true), ("classes2.dex", &first, true)]);
         let path = temp_apk("a07-dup-classes", &zip);
-        let artifact = open_path(&path, &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
         let report = classes(&artifact, &ClassFilter::none(), &no_control()).unwrap();
         assert_eq!(report.value().len(), 2, "both definitions are listed");
         let ids: Vec<u32> = report.value().iter().map(|class| class.id().class_def_idx()).collect();
@@ -784,7 +828,7 @@ mod tests {
             ("classes.dex", &dex, true),
         ]);
         let path = temp_apk("a07-manifest", &zip);
-        let artifact = open_path(&path, &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
         let report = manifest(&artifact, &no_control()).unwrap();
         let xml = report
             .value()
@@ -801,7 +845,7 @@ mod tests {
         let second = const_string_fixture(2);
         let zip = build_zip(&[("classes.dex", &first, true), ("classes2.dex", &second, true)]);
         let path = temp_apk("a07-pin", &zip);
-        let artifact = open_path(&path, &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
         let catalog = dexes(&artifact, &no_control()).unwrap();
         assert_eq!(catalog.value().len(), 2);
         let pinned = catalog.value()[1].id();
@@ -834,7 +878,7 @@ mod tests {
         let good = const_string_fixture(1);
         let zip = build_zip(&[("app.dex", &good, true), ("classes.dex", &good, true)]);
         let path = temp_apk("a07-named", &zip);
-        let artifact = open_path(&path, &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
         let query =
             query::string_query("Authorization", MatchMode::Literal, &Default::default()).unwrap();
         let report = references(&artifact, &query, &no_control()).unwrap();
@@ -852,7 +896,7 @@ mod tests {
             ("classes2.dex", &good, true),
         ]);
         let path = temp_apk("a07-junk", &junk);
-        let artifact = open_path(&path, &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
         let error = references(&artifact, &query, &no_control()).unwrap_err();
         assert_eq!(*error.kind(), ErrorKind::MalformedInput);
         fs::remove_file(&path).unwrap();

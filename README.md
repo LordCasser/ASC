@@ -111,10 +111,26 @@ cargo build --release
 rasc getclass app.apk com.example.Main                 # one class -> Java-like source
 rasc getclass --threads 16 -o Main.java app.apk 'Lcom/example/Main;'
 rasc findrefs app.apk string Authorization             # references across every root DEX
+rasc findrefs app.apk string 'tok.n' --regex           # value as a regular expression
 rasc findrefs app.apk method onCreate --class com.example.Main
 rasc findrefs app.apk field INSTANCE --class example --fuzzy-class
 rasc classes app.apk                                   # class index
 rasc manifest app.apk                                  # binary AndroidManifest.xml -> XML
+rasc getclass app.apk example.Test --dex 0:1           # pin one logical DEX
 ```
+
+Every command accepts `--threads/--thread N` (default 8, positive), `--debug`
+(extra stats on stderr; never changes the payload), `-o/--output FILE` (the
+same bytes as stdout, written through a same-directory temporary file and an
+atomic replacement), `--format text|json` (default `text`; JSON is one
+envelope object with `schema_version`, `operation`, `artifact_id`, `data` and
+`diagnostics`), `--timeout-ms N` (cancel after N milliseconds) and repeatable
+`--limit KEY=VALUE` overrides for the resource-limit table (decimal positive
+integers; see `rasc --help`).
+
+Exit codes: `0` complete success (including empty results), `2` invalid
+arguments or queries, `1` input/analysis/output errors and incomplete
+decompilations, `130` cancellation (user or deadline). `--help`/`--version`
+print to stdout and exit 0; a bare `rasc` prints help to stderr and exits 2.
 
 See `rasc --help` for more usage information, or `rasc <command> --help` for command-specific options.

@@ -467,3 +467,139 @@ fn supports_json_check(document: &str) -> bool {
     stack.is_empty() && !in_string && !escaped
 }
 
+
+// ---------------------------------------------------------------------------
+// A08 DTO goldens: getclass `metadata` projection and writer budget
+// ---------------------------------------------------------------------------
+
+fn sample_source_metadata() -> model::SourceMetadata {
+    use model::{
+        AnnotationEntry, AnnotationRecord, AnnotationTarget, AnnotationVisibility, ClassMetadata,
+        DebugInfo, EnclosingRecord, EncodedValue, FieldMetadata, InnerClassRecord,
+        LineNumberEntry, LocalVariable, MethodMetadata,
+    };
+    let text = DexText::from_str_lossless;
+    model::SourceMetadata {
+        class: ClassMetadata {
+            access_flags: 0x11,
+            super_class: Some(text("Ljava/lang/Object;")),
+            interfaces: vec![text("Lcom/example/A;"), text("Lcom/example/B;")],
+            source_file: Some(text("Statics.java")),
+            generic_signature: Some(text("<T:Ljava/lang/Object;>Ljava/lang/Object;")),
+            enclosing: Some(EnclosingRecord {
+                outer_class: Some(text("Lcom/example/Outer;")),
+                enclosing_method: Some((
+                    text("handle(Ljava/lang/String;)V"),
+                    text(""),
+                    Prototype::default(),
+                )),
+            }),
+            inner_classes: vec![InnerClassRecord {
+                inner_class: text("Lcom/example/Outer$Inner;"),
+                outer_class: Some(text("Lcom/example/Outer;")),
+                inner_name: Some(text("Inner")),
+                access_flags: 0x1c,
+            }],
+        },
+        annotations: vec![AnnotationEntry {
+            target: AnnotationTarget::Class,
+            annotation: AnnotationRecord::new(
+                AnnotationVisibility::Runtime,
+                text("Lcom/example/Anno;"),
+                vec![(
+                    text("value"),
+                    EncodedValue::Array(vec![
+                        EncodedValue::String(text("hello")),
+                        EncodedValue::Long(-2),
+                    ]),
+                )],
+                "value = {\"hello\", -2L}".to_owned(),
+            ),
+        }],
+        fields: vec![
+            FieldMetadata {
+                name: text("FIRST"),
+                field_type: text("I"),
+                access_flags: 0x19,
+                generic_signature: None,
+                initial_value: Some(EncodedValue::Int(11)),
+            },
+            FieldMetadata {
+                name: text("RATE"),
+                field_type: text("D"),
+                access_flags: 0x1a,
+                generic_signature: None,
+                initial_value: Some(EncodedValue::Double(0x4008_0000_0000_0000)),
+            },
+        ],
+        methods: vec![MethodMetadata {
+            name: text("getSecond"),
+            prototype: Prototype::new(vec![text("I"), text("J")], text("V")),
+            access_flags: 0x9,
+            generic_signature: Some(text("(TT;)V")),
+            throws: vec![text("Ljava/io/IOException;")],
+            annotations: vec![AnnotationEntry {
+                target: AnnotationTarget::Parameter { method_index: 1, parameter_index: 0 },
+                annotation: AnnotationRecord::new(
+                    AnnotationVisibility::Build,
+                    text("Lcom/example/Id;"),
+                    vec![
+                        (text("f"), EncodedValue::Float(0x3fc0_0000)),
+                        (text("e"), EncodedValue::Enum {
+                            owner: text("Lcom/example/Kind;"),
+                            name: text("ONE"),
+                        }),
+                        (text("n"), EncodedValue::Annotation(AnnotationRecord::new(
+                            AnnotationVisibility::System,
+                            text("Lcom/example/Inner;"),
+                            Vec::new(),
+                            String::new(),
+                        ))),
+                    ],
+                    "f = 1.5f, e = Kind.ONE, n = @Inner".to_owned(),
+                ),
+            }],
+            parameter_signatures: vec![Some(text("TT;")), None],
+            debug: Some(DebugInfo {
+                parameter_names: vec![Some(text("value")), None],
+                locals: vec![LocalVariable {
+                    name: text("i"),
+                    start_code_unit: 0,
+                    end_code_unit: 5,
+                    slot: 1,
+                }],
+                lines: vec![LineNumberEntry { code_unit: 0, line: 12 }],
+            }),
+        }],
+    }
+}
+
+#[test]
+fn golden_source_metadata_dto_bytes_are_frozen() {
+    let mut writer = dto::Writer::new();
+    dto::write_source_metadata(&mut writer, &sample_source_metadata());
+    let json = writer.finish();
+    let expected =
+        std::fs::read_to_string("schemas/goldens/source-metadata.json").expect("golden file");
+    assert_eq!(json, expected.trim_end());
+}
+
+#[test]
+fn writer_budget_freezes_output_and_reports_resource_limit() {
+    let mut writer = dto::Writer::new();
+    writer.set_budget(16);
+    dto::write_reference(&mut writer, &sample_reference(artifact()));
+    assert!(writer.over_budget(), "a full reference exceeds 16 bytes");
+    let error = writer.try_finish().unwrap_err();
+    assert_eq!(*error.kind(), ErrorKind::ResourceLimit);
+    // A budget that fits leaves the bytes byte-identical to the unbudgeted
+    // writer.
+    let mut writer = dto::Writer::new();
+    dto::write_dex_text(&mut writer, &DexText::from_str_lossless("token"));
+    let unbudgeted = writer.finish();
+    let mut writer = dto::Writer::new();
+    writer.set_budget(unbudgeted.len());
+    dto::write_dex_text(&mut writer, &DexText::from_str_lossless("token"));
+    assert!(!writer.over_budget());
+    assert_eq!(writer.try_finish().unwrap(), unbudgeted);
+}

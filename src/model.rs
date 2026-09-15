@@ -1305,15 +1305,23 @@ pub(crate) mod dto {
 
     /// Minimal JSON writer: fixed key order is call-ordered, control
     /// characters are `\u00xx`-escaped, non-ASCII characters are emitted raw.
+    ///
+    /// The writer carries an optional byte budget: once a push would grow the
+    /// output past it, the push is refused and the writer freezes (never
+    /// allocates beyond the budget), so a bounded serialization cannot grow
+    /// without limit. `finish` keeps the historical unbounded behaviour for
+    /// the golden tests; the CLI completes through `try_finish`.
     pub(crate) struct Writer {
         out: String,
         /// Per open container: whether a comma must precede the next element.
         need_comma: Vec<bool>,
+        budget: usize,
+        over: bool,
     }
 
     impl Writer {
         pub(crate) fn new() -> Self {
-            Self { out: String::new(), need_comma: vec![false] }
+            Self { out: String::new(), need_comma: vec![false], budget: usize::MAX, over: false }
         }
 
         pub(crate) fn raw(value: &str) -> String {
@@ -1322,24 +1330,75 @@ pub(crate) mod dto {
             writer.finish()
         }
 
+        /// Freezes the output once growth would exceed `max` bytes.
+        pub(crate) fn set_budget(&mut self, max: usize) {
+            self.budget = max;
+        }
+
+        /// Bytes written so far (frozen at the budget once over).
+        pub(crate) fn len(&self) -> usize {
+            self.out.len()
+        }
+
+        /// True once a push was refused for exceeding the budget.
+        pub(crate) fn over_budget(&self) -> bool {
+            self.over
+        }
+
+        /// The bounded completion: a writer that crossed its budget is a
+        /// `ResourceLimit`, never a truncated payload.
+        pub(crate) fn try_finish(self) -> Result<String, Error> {
+            if self.over {
+                return Err(Error::resource_limit(format!(
+                    "serialized payload exceeds the {} byte result-bytes limit",
+                    self.budget
+                )));
+            }
+            Ok(self.out)
+        }
+
+        /// Single funnel for all output growth: refuses (and freezes) the
+        /// push that would cross the budget, before allocating for it.
+        fn push_raw(&mut self, text: &str) {
+            if self.over {
+                return;
+            }
+            if self.out.len() + text.len() > self.budget {
+                self.over = true;
+                return;
+            }
+            self.out.push_str(text);
+        }
+
+        fn push_char(&mut self, character: char) {
+            if self.over {
+                return;
+            }
+            if self.out.len() + character.len_utf8() > self.budget {
+                self.over = true;
+                return;
+            }
+            self.out.push(character);
+        }
+
         fn prefix(&mut self) {
-            if let Some(flag) = self.need_comma.last_mut()
-                && *flag
-            {
-                self.out.push(',');
-                *flag = false;
+            if *self.need_comma.last().unwrap_or(&false) {
+                self.push_raw(",");
+                if let Some(flag) = self.need_comma.last_mut() {
+                    *flag = false;
+                }
             }
         }
 
         pub(crate) fn begin_object(&mut self) {
             self.prefix();
-            self.out.push('{');
+            self.push_raw("{");
             self.need_comma.push(false);
         }
 
         pub(crate) fn end_object(&mut self) {
             self.need_comma.pop();
-            self.out.push('}');
+            self.push_raw("}");
             if let Some(flag) = self.need_comma.last_mut() {
                 *flag = true;
             }
@@ -1347,13 +1406,13 @@ pub(crate) mod dto {
 
         pub(crate) fn begin_array(&mut self) {
             self.prefix();
-            self.out.push('[');
+            self.push_raw("[");
             self.need_comma.push(false);
         }
 
         pub(crate) fn end_array(&mut self) {
             self.need_comma.pop();
-            self.out.push(']');
+            self.push_raw("]");
             if let Some(flag) = self.need_comma.last_mut() {
                 *flag = true;
             }
@@ -1363,7 +1422,7 @@ pub(crate) mod dto {
         pub(crate) fn key(&mut self, key: &str) {
             self.prefix();
             self.string_unprefixed(key);
-            self.out.push(':');
+            self.push_raw(":");
         }
 
         pub(crate) fn string(&mut self, value: &str) {
@@ -1375,28 +1434,47 @@ pub(crate) mod dto {
         }
 
         fn string_unprefixed(&mut self, value: &str) {
-            self.out.push('"');
+            self.push_raw("\"");
             for character in value.chars() {
                 match character {
-                    '"' => self.out.push_str("\\\""),
-                    '\\' => self.out.push_str("\\\\"),
-                    '\n' => self.out.push_str("\\n"),
-                    '\r' => self.out.push_str("\\r"),
-                    '\t' => self.out.push_str("\\t"),
-                    '\u{08}' => self.out.push_str("\\b"),
-                    '\u{0c}' => self.out.push_str("\\f"),
+                    '"' => self.push_raw("\\\""),
+                    '\\' => self.push_raw("\\\\"),
+                    '\n' => self.push_raw("\\n"),
+                    '\r' => self.push_raw("\\r"),
+                    '\t' => self.push_raw("\\t"),
+                    '\u{08}' => self.push_raw("\\b"),
+                    '\u{0c}' => self.push_raw("\\f"),
                     character if (character as u32) < 0x20 => {
-                        self.out.push_str(&format!("\\u{:04x}", character as u32));
+                        self.push_raw(&format!("\\u{:04x}", character as u32));
                     }
-                    character => self.out.push(character),
+                    character => self.push_char(character),
                 }
             }
-            self.out.push('"');
+            self.push_raw("\"");
         }
 
         pub(crate) fn number(&mut self, value: u64) {
             self.prefix();
-            self.out.push_str(&value.to_string());
+            self.push_raw(&value.to_string());
+            if let Some(flag) = self.need_comma.last_mut() {
+                *flag = true;
+            }
+        }
+
+        /// Writes a signed integer without going through a u64 cast.
+        pub(crate) fn signed(&mut self, value: i64) {
+            self.prefix();
+            self.push_raw(&value.to_string());
+            if let Some(flag) = self.need_comma.last_mut() {
+                *flag = true;
+            }
+        }
+
+        /// Fixed-width lowercase hex string for raw typed bits (float/double/
+        /// long words), so no JS consumer can lose precision on them.
+        pub(crate) fn hex_bits(&mut self, bits: u64, width: usize) {
+            self.prefix();
+            self.push_raw(&format!("\"0x{bits:0width$x}\""));
             if let Some(flag) = self.need_comma.last_mut() {
                 *flag = true;
             }
@@ -1404,7 +1482,7 @@ pub(crate) mod dto {
 
         pub(crate) fn boolean(&mut self, value: bool) {
             self.prefix();
-            self.out.push_str(if value { "true" } else { "false" });
+            self.push_raw(if value { "true" } else { "false" });
             if let Some(flag) = self.need_comma.last_mut() {
                 *flag = true;
             }
@@ -1412,7 +1490,7 @@ pub(crate) mod dto {
 
         pub(crate) fn null(&mut self) {
             self.prefix();
-            self.out.push_str("null");
+            self.push_raw("null");
             if let Some(flag) = self.need_comma.last_mut() {
                 *flag = true;
             }
@@ -1534,6 +1612,25 @@ pub(crate) mod dto {
         }
     }
 
+    /// One `targets` entry: `{"id":…,"kind":…,"value":…,"code_unit_offsets":[…]}`.
+    /// Shared by `write_reference` and the CLI's text-mode targets-json column.
+    pub(crate) fn write_target_match(w: &mut Writer, target: &TargetMatch) {
+        w.begin_object();
+        w.key("id");
+        write_target_id(w, &target.id());
+        w.key("kind");
+        w.string(target.id().kind().as_str());
+        w.key("value");
+        write_target_value(w, target.value());
+        w.key("code_unit_offsets");
+        w.begin_array();
+        for offset in target.code_unit_offsets() {
+            w.number(*offset as u64);
+        }
+        w.end_array();
+        w.end_object();
+    }
+
     pub(crate) fn write_reference(w: &mut Writer, reference: &Reference) {
         w.begin_object();
         w.key("caller");
@@ -1552,20 +1649,7 @@ pub(crate) mod dto {
         w.key("targets");
         w.begin_array();
         for target in reference.targets() {
-            w.begin_object();
-            w.key("id");
-            write_target_id(w, &target.id());
-            w.key("kind");
-            w.string(target.id().kind().as_str());
-            w.key("value");
-            write_target_value(w, target.value());
-            w.key("code_unit_offsets");
-            w.begin_array();
-            for offset in target.code_unit_offsets() {
-                w.number(*offset as u64);
-            }
-            w.end_array();
-            w.end_object();
+            write_target_match(w, target);
         }
         w.end_array();
         w.end_object();
@@ -1626,6 +1710,22 @@ pub(crate) mod dto {
         diagnostics: &[Diagnostic],
         write_data: impl FnOnce(&mut Writer),
     ) -> String {
+        write_envelope_result(operation, artifact, diagnostics, |writer| {
+            write_data(writer);
+            Ok(())
+        })
+        .expect("unbudgeted envelope cannot fail")
+    }
+
+    /// Same envelope, but the data writer may fail (budget/cancel checks) and
+    /// the completion refuses a writer that crossed its byte budget. The CLI's
+    /// bounded serialization path drives this variant.
+    pub(crate) fn write_envelope_result(
+        operation: &str,
+        artifact: &ArtifactId,
+        diagnostics: &[Diagnostic],
+        write_data: impl FnOnce(&mut Writer) -> Result<(), Error>,
+    ) -> Result<String, Error> {
         let mut w = Writer::new();
         w.begin_object();
         w.key("schema_version");
@@ -1635,7 +1735,7 @@ pub(crate) mod dto {
         w.key("artifact_id");
         w.string(&artifact.hex());
         w.key("data");
-        write_data(&mut w);
+        write_data(&mut w)?;
         w.key("diagnostics");
         w.begin_array();
         for diagnostic in diagnostics {
@@ -1643,7 +1743,7 @@ pub(crate) mod dto {
         }
         w.end_array();
         w.end_object();
-        w.finish()
+        w.try_finish()
     }
 
     /// The error object: `{"code":"…","context":[…],"diagnostics":[…]}`.
@@ -1666,5 +1766,377 @@ pub(crate) mod dto {
         w.end_array();
         w.end_object();
         w.finish()
+    }
+
+    // -- SourceMetadata projection (getclass `metadata`) --------------------
+    //
+    // Frozen shapes for schemas/cli-v1.schema.json $defs.source_metadata;
+    // absent optional data serializes as null, never a fabricated default.
+    // Raw typed bits (float/double/long words) use fixed-width hex strings.
+
+    pub(crate) fn write_source_metadata(w: &mut Writer, metadata: &SourceMetadata) {
+        w.begin_object();
+        w.key("class");
+        write_class_metadata(w, &metadata.class);
+        w.key("annotations");
+        w.begin_array();
+        for entry in &metadata.annotations {
+            write_annotation_entry(w, entry);
+        }
+        w.end_array();
+        w.key("fields");
+        w.begin_array();
+        for field in &metadata.fields {
+            write_field_metadata(w, field);
+        }
+        w.end_array();
+        w.key("methods");
+        w.begin_array();
+        for method in &metadata.methods {
+            write_method_metadata(w, method);
+        }
+        w.end_array();
+        w.end_object();
+    }
+
+    fn write_class_metadata(w: &mut Writer, class: &ClassMetadata) {
+        w.begin_object();
+        w.key("access_flags");
+        w.number(class.access_flags as u64);
+        w.key("super_class");
+        write_optional_text(w, class.super_class.as_ref());
+        w.key("interfaces");
+        w.begin_array();
+        for interface in &class.interfaces {
+            write_dex_text(w, interface);
+        }
+        w.end_array();
+        w.key("source_file");
+        write_optional_text(w, class.source_file.as_ref());
+        w.key("generic_signature");
+        write_optional_text(w, class.generic_signature.as_ref());
+        w.key("enclosing");
+        match &class.enclosing {
+            Some(enclosing) => write_enclosing_record(w, enclosing),
+            None => w.null(),
+        }
+        w.key("inner_classes");
+        w.begin_array();
+        for inner in &class.inner_classes {
+            write_inner_class_record(w, inner);
+        }
+        w.end_array();
+        w.end_object();
+    }
+
+    fn write_enclosing_record(w: &mut Writer, enclosing: &EnclosingRecord) {
+        w.begin_object();
+        w.key("outer_class");
+        write_optional_text(w, enclosing.outer_class.as_ref());
+        w.key("enclosing_method");
+        match &enclosing.enclosing_method {
+            // The model keeps a positional triple (rendered text, name,
+            // prototype); serialized positionally until A12 types it.
+            Some((first, second, prototype)) => {
+                w.begin_array();
+                write_dex_text(w, first);
+                write_dex_text(w, second);
+                write_prototype(w, prototype);
+                w.end_array();
+            }
+            None => w.null(),
+        }
+        w.end_object();
+    }
+
+    fn write_inner_class_record(w: &mut Writer, inner: &InnerClassRecord) {
+        w.begin_object();
+        w.key("inner_class");
+        write_dex_text(w, &inner.inner_class);
+        w.key("outer_class");
+        write_optional_text(w, inner.outer_class.as_ref());
+        w.key("inner_name");
+        write_optional_text(w, inner.inner_name.as_ref());
+        w.key("access_flags");
+        w.number(inner.access_flags as u64);
+        w.end_object();
+    }
+
+    fn write_annotation_entry(w: &mut Writer, entry: &AnnotationEntry) {
+        w.begin_object();
+        w.key("target");
+        write_annotation_target(w, &entry.target);
+        w.key("annotation");
+        write_annotation_record(w, &entry.annotation);
+        w.end_object();
+    }
+
+    fn write_annotation_target(w: &mut Writer, target: &AnnotationTarget) {
+        w.begin_object();
+        match target {
+            AnnotationTarget::Class => {
+                w.key("target");
+                w.string("class");
+            }
+            AnnotationTarget::Field { index } => {
+                w.key("target");
+                w.string("field");
+                w.key("index");
+                w.number(*index as u64);
+            }
+            AnnotationTarget::Method { index } => {
+                w.key("target");
+                w.string("method");
+                w.key("index");
+                w.number(*index as u64);
+            }
+            AnnotationTarget::Parameter { method_index, parameter_index } => {
+                w.key("target");
+                w.string("parameter");
+                w.key("method_index");
+                w.number(*method_index as u64);
+                w.key("parameter_index");
+                w.number(*parameter_index as u64);
+            }
+        }
+        w.end_object();
+    }
+
+    fn write_annotation_record(w: &mut Writer, annotation: &AnnotationRecord) {
+        w.begin_object();
+        w.key("visibility");
+        let visibility = match annotation.visibility() {
+            AnnotationVisibility::Build => "build",
+            AnnotationVisibility::Runtime => "runtime",
+            AnnotationVisibility::System => "system",
+        };
+        w.string(visibility);
+        w.key("type_descriptor");
+        write_dex_text(w, annotation.type_descriptor());
+        w.key("items");
+        w.begin_array();
+        for (name, value) in annotation.items() {
+            w.begin_object();
+            w.key("name");
+            write_dex_text(w, name);
+            w.key("value");
+            write_encoded_value(w, value);
+            w.end_object();
+        }
+        w.end_array();
+        w.key("rendered");
+        w.string(annotation.rendered());
+        w.end_object();
+    }
+
+    fn write_encoded_value(w: &mut Writer, value: &EncodedValue) {
+        w.begin_object();
+        w.key("type");
+        match value {
+            EncodedValue::Null => {
+                w.string("null");
+                w.key("value");
+                w.null();
+            }
+            EncodedValue::Boolean(inner) => {
+                w.string("boolean");
+                w.key("value");
+                w.boolean(*inner);
+            }
+            EncodedValue::Byte(inner) => {
+                w.string("byte");
+                w.key("value");
+                w.signed(i64::from(*inner));
+            }
+            EncodedValue::Short(inner) => {
+                w.string("short");
+                w.key("value");
+                w.signed(i64::from(*inner));
+            }
+            EncodedValue::Int(inner) => {
+                w.string("int");
+                w.key("value");
+                w.signed(i64::from(*inner));
+            }
+            // 64-bit words keep their exact bit pattern in a fixed-width hex
+            // string; a JSON number would lose precision in JS consumers.
+            EncodedValue::Long(inner) => {
+                w.string("long");
+                w.key("value");
+                w.hex_bits(*inner as u64, 16);
+            }
+            EncodedValue::Char(inner) => {
+                w.string("char");
+                w.key("value");
+                w.number(u64::from(*inner));
+            }
+            EncodedValue::Float(bits) => {
+                w.string("float");
+                w.key("bits");
+                w.hex_bits(u64::from(*bits), 8);
+            }
+            EncodedValue::Double(bits) => {
+                w.string("double");
+                w.key("bits");
+                w.hex_bits(*bits, 16);
+            }
+            EncodedValue::String(inner) => {
+                w.string("string");
+                w.key("value");
+                write_dex_text(w, inner);
+            }
+            EncodedValue::Type(inner) => {
+                w.string("type");
+                w.key("value");
+                write_dex_text(w, inner);
+            }
+            EncodedValue::Field { owner, name, field_type } => {
+                w.string("field");
+                w.key("value");
+                w.begin_object();
+                w.key("owner");
+                write_dex_text(w, owner);
+                w.key("name");
+                write_dex_text(w, name);
+                w.key("field_type");
+                write_dex_text(w, field_type);
+                w.end_object();
+            }
+            EncodedValue::Method { owner, name, prototype } => {
+                w.string("method");
+                w.key("value");
+                w.begin_object();
+                w.key("owner");
+                write_dex_text(w, owner);
+                w.key("name");
+                write_dex_text(w, name);
+                w.key("prototype");
+                write_prototype(w, prototype);
+                w.end_object();
+            }
+            EncodedValue::Enum { owner, name } => {
+                w.string("enum");
+                w.key("value");
+                w.begin_object();
+                w.key("owner");
+                write_dex_text(w, owner);
+                w.key("name");
+                write_dex_text(w, name);
+                w.end_object();
+            }
+            EncodedValue::Array(inner) => {
+                w.string("array");
+                w.key("value");
+                w.begin_array();
+                for element in inner {
+                    write_encoded_value(w, element);
+                }
+                w.end_array();
+            }
+            EncodedValue::Annotation(inner) => {
+                w.string("annotation");
+                w.key("value");
+                write_annotation_record(w, inner);
+            }
+        }
+        w.end_object();
+    }
+
+    fn write_field_metadata(w: &mut Writer, field: &FieldMetadata) {
+        w.begin_object();
+        w.key("name");
+        write_dex_text(w, &field.name);
+        w.key("field_type");
+        write_dex_text(w, &field.field_type);
+        w.key("access_flags");
+        w.number(field.access_flags as u64);
+        w.key("generic_signature");
+        write_optional_text(w, field.generic_signature.as_ref());
+        w.key("initial_value");
+        match &field.initial_value {
+            Some(value) => write_encoded_value(w, value),
+            None => w.null(),
+        }
+        w.end_object();
+    }
+
+    fn write_method_metadata(w: &mut Writer, method: &MethodMetadata) {
+        w.begin_object();
+        w.key("name");
+        write_dex_text(w, &method.name);
+        w.key("prototype");
+        write_prototype(w, &method.prototype);
+        w.key("access_flags");
+        w.number(method.access_flags as u64);
+        w.key("generic_signature");
+        write_optional_text(w, method.generic_signature.as_ref());
+        w.key("throws");
+        w.begin_array();
+        for throws in &method.throws {
+            write_dex_text(w, throws);
+        }
+        w.end_array();
+        w.key("annotations");
+        w.begin_array();
+        for entry in &method.annotations {
+            write_annotation_entry(w, entry);
+        }
+        w.end_array();
+        w.key("parameter_signatures");
+        w.begin_array();
+        for signature in &method.parameter_signatures {
+            write_optional_text(w, signature.as_ref());
+        }
+        w.end_array();
+        w.key("debug");
+        match &method.debug {
+            Some(debug) => write_debug_info(w, debug),
+            None => w.null(),
+        }
+        w.end_object();
+    }
+
+    fn write_debug_info(w: &mut Writer, debug: &DebugInfo) {
+        w.begin_object();
+        w.key("parameter_names");
+        w.begin_array();
+        for name in &debug.parameter_names {
+            write_optional_text(w, name.as_ref());
+        }
+        w.end_array();
+        w.key("locals");
+        w.begin_array();
+        for local in &debug.locals {
+            w.begin_object();
+            w.key("name");
+            write_dex_text(w, &local.name);
+            w.key("start_code_unit");
+            w.number(local.start_code_unit as u64);
+            w.key("end_code_unit");
+            w.number(local.end_code_unit as u64);
+            w.key("slot");
+            w.number(u64::from(local.slot));
+            w.end_object();
+        }
+        w.end_array();
+        w.key("lines");
+        w.begin_array();
+        for line in &debug.lines {
+            w.begin_object();
+            w.key("code_unit");
+            w.number(line.code_unit as u64);
+            w.key("line");
+            w.number(line.line as u64);
+            w.end_object();
+        }
+        w.end_array();
+        w.end_object();
+    }
+
+    fn write_optional_text(w: &mut Writer, text: Option<&DexText>) {
+        match text {
+            Some(text) => write_dex_text(w, text),
+            None => w.null(),
+        }
     }
 }

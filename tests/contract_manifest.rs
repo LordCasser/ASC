@@ -669,3 +669,97 @@ fn regenerate_manifest_fixture_inputs_when_explicitly_requested() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// A08 DTO golden: manifest `document` projection
+// ---------------------------------------------------------------------------
+
+fn sample_document() -> Manifest {
+    use manifest::{
+        ElementMetadata, ManifestMetadata, ManifestSource, ManifestValue, Misc, NamespaceEvent,
+        StringStyle, StringStyleSpan, TypedValue, XmlAttribute, XmlDeclaration, XmlElement,
+        XmlNode,
+    };
+    use model::DexText;
+    let text = DexText::from_str_lossless;
+    let android = "http://schemas.android.com/apk/res/android".to_owned();
+    Manifest {
+        declaration: Some(XmlDeclaration {
+            version: "1.0".to_owned(),
+            encoding: Some("utf-8".to_owned()),
+            standalone: None,
+        }),
+        prolog: vec![
+            Misc::Comment("built by hand".to_owned()),
+            Misc::Pi { target: "tool".to_owned(), data: "mode=gen".to_owned() },
+        ],
+        root: XmlElement {
+            namespace: Some(android.clone()),
+            prefix: Some("android".to_owned()),
+            local_name: "matrix".to_owned(),
+            attributes: vec![
+                XmlAttribute {
+                    namespace: Some(android.clone()),
+                    prefix: Some("android".to_owned()),
+                    local_name: "versionCode".to_owned(),
+                    value: ManifestValue::Typed(TypedValue {
+                        type_byte: 0x10,
+                        data: 33,
+                        raw_string: None,
+                    }),
+                },
+                XmlAttribute {
+                    namespace: None,
+                    prefix: None,
+                    local_name: "package".to_owned(),
+                    value: ManifestValue::Text(text("com.example")),
+                },
+            ],
+            children: vec![
+                XmlNode::Text { text: text("hello") },
+                XmlNode::Cdata { data: text("raw <> &") },
+                XmlNode::Comment { text: "inner".to_owned() },
+                XmlNode::Pi { target: "p".to_owned(), data: "d".to_owned() },
+                XmlNode::Element(XmlElement {
+                    namespace: None,
+                    prefix: None,
+                    local_name: "activity".to_owned(),
+                    attributes: Vec::new(),
+                    children: Vec::new(),
+                    metadata: ElementMetadata {
+                        line_number: Some(7),
+                        comment: Some("activity comment".to_owned()),
+                        namespace_events: vec![
+                            NamespaceEvent::Start {
+                                prefix: "android".to_owned(),
+                                uri: android.clone(),
+                            },
+                            NamespaceEvent::End { prefix: "android".to_owned(), uri: android },
+                        ],
+                    },
+                }),
+            ],
+            metadata: ElementMetadata::default(),
+        },
+        epilog: vec![Misc::Pi { target: "epilog".to_owned(), data: String::new() }],
+        metadata: ManifestMetadata {
+            source: Some(ManifestSource::BinaryAxml { utf8_pool: true, string_count: 42 }),
+            string_styles: vec![StringStyle {
+                string_index: 3,
+                spans: vec![StringStyleSpan { name_index: 1, first_char: 0, last_char: 4 }],
+            }],
+            resource_map: vec![0x7f0d_0001, 0x0103_0007],
+        },
+        raw_bytes: None,
+    }
+}
+
+#[test]
+fn golden_manifest_document_dto_bytes_are_frozen() {
+    let mut writer = model::dto::Writer::new();
+    manifest::write_document_dto(&mut writer, &sample_document());
+    let json = writer.finish();
+    let expected =
+        std::fs::read_to_string("schemas/goldens/manifest-document.json").expect("golden file");
+    assert_eq!(json, expected.trim_end());
+}

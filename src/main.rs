@@ -1,13 +1,15 @@
-//! CLI entry point: argument parsing, dispatch, output.
+//! CLI entry point: argument parsing, dispatch, rendering, output commitment.
 //!
 //! stdout carries a command's payload and nothing else: every diagnostic,
-//! including `--debug` timing, goes to stderr, so redirecting a result can
-//! never capture debug lines. An `-o` file receives exactly the bytes
-//! stdout received.
+//! warning and `--debug` line goes to stderr, so `--debug` can never change
+//! the payload bytes. One serialization of the result is committed first to
+//! the `-o` file (atomic replacement) and then to stdout.
 //!
-//! The rendering here is the A07 integration's minimal projection of the
-//! structured reports; the frozen text/JSON output protocol with bounded
-//! writers and atomic file replacement is A08's.
+//! Exit codes (interfaces.md §6): 0 complete success (including empty
+//! results), 2 argument/query construction errors, 1 input/analysis/output
+//! errors and incomplete decompilations, 130 cancellation (user flag or
+//! deadline). Error lines on stderr carry the stable code first:
+//! `Error: <code>: <context chain>`.
 
 mod apk;
 mod bytes;
@@ -16,24 +18,20 @@ mod dex;
 mod error;
 mod manifest;
 mod model;
+mod output;
 mod query;
+mod render;
 mod zip;
 
-use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, Command};
-use query::{ClassSpec, MatchMode, MemberSpec};
-use std::fs;
-use std::io::{self, Write};
-use std::path::Path;
-use std::time::Instant;
+use cli::{Cli, Command, CommonArgs, Format};
+use error::{Error, ErrorKind};
+use model::OperationStats;
+use std::time::{Duration, Instant};
 
 fn main() {
     restore_default_sigpipe();
-    if let Err(error) = run() {
-        eprintln!("Error: {error:#}");
-        std::process::exit(1);
-    }
+    std::process::exit(run());
 }
 
 /// Restore the default `SIGPIPE` disposition so that piping into `head`,
@@ -56,202 +54,291 @@ fn restore_default_sigpipe() {
 #[cfg(not(unix))]
 fn restore_default_sigpipe() {}
 
-/// Writes a command's payload to stdout and, when `output` is set, to that
-/// file as well.
-fn emit(payload: &str, output: Option<&Path>) -> Result<()> {
-    if let Some(path) = output {
-        fs::write(path, payload).with_context(|| format!("write {}", path.display()))?;
+/// A command failure with its exit code.
+enum Failure {
+    /// Analysis/query errors with their stable kind strings.
+    Analysis(Error),
+    /// Output commitment errors (exit 1).
+    Output(output::OutputError),
+}
+
+impl Failure {
+    fn exit_code(&self) -> i32 {
+        match self {
+            Failure::Analysis(error) => match error.kind() {
+                ErrorKind::InvalidQuery => 2,
+                ErrorKind::Cancelled { .. } => 130,
+                _ => 1,
+            },
+            Failure::Output(_) => 1,
+        }
     }
-    let mut stdout = io::BufWriter::new(io::stdout().lock());
-    stdout.write_all(payload.as_bytes())?;
-    stdout.flush()?;
-    Ok(())
 }
 
-/// This is the only place the CLI reports timing, so `--debug` reads the same
-/// for every subcommand.
-fn debug_timing(started: Instant) {
-    eprintln!(
-        "[DEBUG] Total Execution Time: {:.2} us",
-        started.elapsed().as_secs_f64() * 1_000_000.0
-    );
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Failure::Analysis(error) => write!(f, "{error}"),
+            Failure::Output(error) => write!(f, "{error}"),
+        }
+    }
 }
 
-fn run() -> Result<()> {
-    let started = Instant::now();
+fn usage_error(message: impl Into<String>) -> Failure {
+    Failure::Analysis(Error::invalid_query(message))
+}
+
+fn run() -> i32 {
+    // No arguments at all: help goes to stderr and the exit code is 2.
+    // (`--help`/`--version` print to stdout and exit 0 via clap below.)
+    if std::env::args_os().count() <= 1 {
+        use clap::CommandFactory;
+        let _ = Cli::command().write_help(&mut std::io::stderr());
+        return 2;
+    }
     let args = Cli::parse();
-    let control = manifest::OperationControl::new();
-    match &args.command {
-        Command::Findrefs(args) => {
-            cli::validate_threads(args.threads).map_err(|message| anyhow::anyhow!(message))?;
-            let limits = model::PatternLimits::default();
-            let reference_query = match &args.kind {
-                cli::FindKind::String(q) => {
-                    query::string_query(&q.value, MatchMode::Literal, &limits)?
-                }
-                cli::FindKind::Type(q) => {
-                    query::type_query(&q.value, MatchMode::Literal, &limits)?
-                }
-                cli::FindKind::Method(q) => {
-                    query::member_query(false, member_spec(q, MatchMode::Literal), &limits)?
-                }
-                cli::FindKind::Field(q) => {
-                    query::member_query(true, member_spec(q, MatchMode::Literal), &limits)?
-                }
-            };
-            let artifact = apk::open_path(&args.apk_path, &control)?;
-            let report = apk::references(&artifact, &reference_query, &control)?;
-            print_diagnostics(report.diagnostics());
-            let mut payload = String::new();
-            for reference in report.value() {
-                payload.push_str(&render_reference(reference));
-            }
-            emit(&payload, args.output_path().map(|path| path.as_path()))?;
-            if args.debug {
-                debug_timing(started);
-            }
-        }
-        Command::Classes(args) => {
-            cli::validate_threads(args.threads).map_err(|message| anyhow::anyhow!(message))?;
-            let filter = model::ClassFilter::new(args.filter.as_deref().unwrap_or(""));
-            let artifact = apk::open_path(&args.apk_path, &control)?;
-            let report = apk::classes(&artifact, &filter, &control)?;
-            print_diagnostics(report.diagnostics());
-            let mut payload = String::new();
-            for class in report.value() {
-                let id = class.id();
-                payload.push_str(&format!(
-                    "{}:{} | {} | {} | {}\n",
-                    id.dex().entry_ordinal(),
-                    id.dex().logical_ordinal(),
-                    class.descriptor().as_str(),
-                    class.java_name().as_str().unwrap_or_default(),
-                    class.package().as_str().unwrap_or_default(),
-                ));
-            }
-            emit(&payload, args.output.as_deref())?;
-            if args.debug {
-                debug_timing(started);
-            }
-        }
-        Command::Manifest(args) => {
-            let artifact = apk::open_path(&args.apk_path, &control)?;
-            let report = apk::manifest(&artifact, &control)?;
-            let options = manifest::XmlRenderOptions::default();
-            let xml = report.value().to_xml(&options, &control)?;
-            emit(&xml, args.output.as_deref())?;
-        }
-        Command::Getclass(args) => {
-            cli::validate_threads(args.threads).map_err(|message| anyhow::anyhow!(message))?;
-            let descriptor = query::exact_descriptor(&args.dalvik_class)?;
-            let artifact = apk::open_path(&args.apk_path, &control)?;
-            // `--dex` resolves through the artifact's catalog: the ordinals
-            // must name a DEX the catalog actually selected, or the query is
-            // invalid (interfaces.md §1).
-            let selector = match &args.dex {
-                Some(text) => {
-                    let (entry_ordinal, logical_ordinal) = query::parse_dex_selector(text)?;
-                    let pinned = apk::dexes(&artifact, &control)?
-                        .value()
-                        .iter()
-                        .map(|entry| entry.id())
-                        .find(|id| {
-                            id.entry_ordinal() == entry_ordinal
-                                && id.logical_ordinal() == logical_ordinal
-                        })
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "InvalidQuery: --dex {entry_ordinal}:{logical_ordinal} does not \
-                                 name a selected DEX in this archive"
-                            )
-                        })?;
-                    model::ClassSelector::Descriptor(descriptor, Some(pinned))
-                }
-                None => model::ClassSelector::Descriptor(descriptor, None),
-            };
-            let report = apk::decompile(&artifact, &selector, &control)?;
-            print_diagnostics(report.diagnostics());
-            emit(report.value().text(), args.output.as_deref())?;
-            if args.debug {
-                debug_timing(started);
-            }
+    match dispatch(args.command) {
+        Ok(()) => 0,
+        Err(failure) => {
+            eprintln!("Error: {failure}");
+            failure.exit_code()
         }
     }
-    Ok(())
 }
 
-fn member_spec<'a>(q: &'a cli::MemberArgs, mode: MatchMode) -> MemberSpec<'a> {
-    let class = match q.class_name.as_deref() {
-        Some(text) if q.fuzzy_class => Some(ClassSpec::Fuzzy(text)),
-        Some(text) => Some(ClassSpec::Exact(text)),
-        None => None,
+fn dispatch(command: Command) -> Result<(), Failure> {
+    match command {
+        Command::Findrefs(args) => findrefs(args),
+        Command::Classes(args) => classes(args),
+        Command::Manifest(args) => manifest(args),
+        Command::Getclass(args) => getclass(args),
+    }
+}
+
+/// Everything the handlers resolved once, before any input is read.
+struct Run {
+    debug: bool,
+    output: Option<std::path::PathBuf>,
+    format: Format,
+    control: manifest::OperationControl,
+    limits: cli::EffectiveLimits,
+    started: Instant,
+}
+
+fn prepare(common: &CommonArgs) -> Result<Run, Failure> {
+    let threads = common.threads.unwrap_or(8);
+    cli::validate_threads(threads).map_err(usage_error)?;
+    if let Some(timeout_ms) = common.timeout_ms {
+        cli::validate_timeout_ms(timeout_ms).map_err(usage_error)?;
+    }
+    let parsed_limits = cli::parse_limits(&common.limits).map_err(usage_error)?;
+    for limit in &parsed_limits {
+        if !limit.key.enforced() {
+            eprintln!(
+                "[debug] --limit {} is accepted but not enforced by this build; the internal \
+                 default stays in effect",
+                limit.key.as_key()
+            );
+        }
+    }
+    let limits = cli::EffectiveLimits::new(&parsed_limits);
+    let control = match common.timeout_ms {
+        Some(timeout_ms) => {
+            let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+            manifest::OperationControl::new().with_deadline(deadline)
+        }
+        None => manifest::OperationControl::new(),
     };
-    MemberSpec { name: q.name.as_deref(), mode, class }
-}
-
-/// Interim A07 projection of a structured reference: dex key, display name,
-/// method index, full caller identity and per-target offsets. The frozen
-/// escaping/ordering protocol is A08's.
-fn render_reference(reference: &model::Reference) -> String {
-    let caller = reference.caller();
-    let dex = caller.id().dex();
-    let mut line = format!(
-        "{}:{} | {} | {} | ",
-        dex.entry_ordinal(),
-        dex.logical_ordinal(),
-        caller.dex().display_name().as_str().unwrap_or_default(),
-        caller.id().method_idx(),
-    );
-    line.push_str(&render_text(caller.owner()));
-    line.push_str("->");
-    line.push_str(&render_text(caller.name()));
-    line.push_str(&render_prototype(caller.prototype()));
-    for target in reference.targets() {
-        line.push_str(" | ");
-        line.push_str(target.id().kind().as_str());
-        line.push(':');
-        match target.value() {
-            model::TargetValue::String(text) | model::TargetValue::Type(text) => {
-                line.push_str(&render_text(text));
-            }
-            model::TargetValue::Field { owner, name, .. }
-            | model::TargetValue::Method { owner, name, .. } => {
-                line.push_str(&render_text(owner));
-                line.push_str("->");
-                line.push_str(&render_text(name));
-            }
-        }
-        let offsets: Vec<String> =
-            target.code_unit_offsets().iter().map(|offset| offset.to_string()).collect();
-        line.push_str(&format!(" @{}", offsets.join(",")));
-    }
-    line.push('\n');
-    line
-}
-
-fn render_text(text: &model::DexText) -> String {
-    text.as_str().unwrap_or_else(|| {
-        // Unpaired surrogates escape as \uXXXX in display order.
-        text.utf16_units()
-            .iter()
-            .map(|unit| {
-                if (0xD800..=0xDFFF).contains(unit) {
-                    format!("\\u{unit:04x}")
-                } else {
-                    char::from_u32(*unit as u32).map(String::from).unwrap_or_default()
-                }
-            })
-            .collect()
+    Ok(Run {
+        debug: common.debug,
+        output: common.output.clone(),
+        format: common.format.unwrap_or(Format::Text),
+        control,
+        limits,
+        started: Instant::now(),
     })
 }
 
-fn render_prototype(prototype: &model::Prototype) -> String {
-    let params: Vec<String> = prototype.parameters().iter().map(render_text).collect();
-    format!("({}){}", params.join(""), render_text(prototype.return_type()))
-}
-
-fn print_diagnostics(diagnostics: &[model::Diagnostic]) {
+/// Prints the report's warnings on stderr (success warnings are visible both
+/// in the JSON diagnostics and here), commits the payload and reports debug
+/// stats.
+fn finish(
+    run: &Run,
+    operation: &str,
+    input: &std::path::Path,
+    artifact: &apk::Artifact,
+    diagnostics: &[model::Diagnostic],
+    stats: OperationStats,
+    data: render::CommandData<'_>,
+) -> Result<(), Failure> {
     for diagnostic in diagnostics {
         eprintln!("[{}] {}", diagnostic.severity().as_str(), diagnostic.message());
+    }
+    let payload = match run.format {
+        Format::Text => {
+            render::text(&data, run.limits.max_result_bytes, &run.control)
+        }
+        Format::Json => render::json(
+            operation,
+            &artifact.id(),
+            diagnostics,
+            &data,
+            run.limits.max_result_bytes,
+            &run.control,
+        ),
+    }
+    .map_err(Failure::Analysis)?;
+    match output::commit(&payload, run.output.as_deref(), input).map_err(Failure::Output)? {
+        output::WriteOutcome::Committed => {}
+        // A closed stdout consumer is a quiet success; on Unix the default
+        // SIGPIPE disposition usually terminates us before this.
+        output::WriteOutcome::BrokenPipe => return Ok(()),
+    }
+    if run.debug {
+        eprintln!(
+            "[DEBUG] stats: selected_dexes={} scanned_methods={} matched_targets={} \
+             result_items={}",
+            stats.selected_dexes, stats.scanned_methods, stats.matched_targets, stats.result_items
+        );
+        eprintln!(
+            "[DEBUG] Total Execution Time: {:.2} us",
+            run.started.elapsed().as_secs_f64() * 1_000_000.0
+        );
+    }
+    Ok(())
+}
+
+fn findrefs(args: cli::FindRefsArgs) -> Result<(), Failure> {
+    let common = CommonArgs::merge(&args.common, args.kind_common());
+    let run = prepare(&common)?;
+    let mode = match (&args.kind, common_has_regex(&args.kind)) {
+        (_, true) => query::MatchMode::Regex,
+        (_, false) => query::MatchMode::Literal,
+    };
+    let pattern_limits = run.limits.pattern;
+    // `--fuzzy-class` without `--class` has nothing to fuzz: reject it here
+    // instead of letting the query silently drop the flag (interfaces.md §6).
+    if let cli::FindKind::Method(member) | cli::FindKind::Field(member) = &args.kind
+        && member.fuzzy_class
+        && member.class_name.is_none()
+    {
+        return Err(usage_error("--fuzzy-class requires --class"));
+    }
+    let reference_query = match &args.kind {
+        cli::FindKind::String(query) => {
+            query::string_query(&query.value, mode, &pattern_limits)
+        }
+        cli::FindKind::Type(query) => query::type_query(&query.value, mode, &pattern_limits),
+        cli::FindKind::Method(member) => {
+            query::member_query(false, member_spec(member, mode), &pattern_limits)
+        }
+        cli::FindKind::Field(member) => {
+            query::member_query(true, member_spec(member, mode), &pattern_limits)
+        }
+    }
+    .map_err(Failure::Analysis)?;
+    let artifact =
+        apk::open_path(&args.apk_path, &apk_limits(&run), &run.control).map_err(Failure::Analysis)?;
+    let report = apk::references(&artifact, &reference_query, &run.control)
+        .map_err(Failure::Analysis)?;
+    let stats = report.stats();
+    let diagnostics = report.diagnostics().to_vec();
+    let data = render::CommandData::Findrefs(report.value());
+    finish(&run, "findrefs", &args.apk_path, &artifact, &diagnostics, stats, data)
+}
+
+fn common_has_regex(kind: &cli::FindKind) -> bool {
+    match kind {
+        cli::FindKind::String(query) | cli::FindKind::Type(query) => query.regex,
+        cli::FindKind::Method(member) | cli::FindKind::Field(member) => member.regex,
+    }
+}
+
+fn member_spec<'a>(q: &'a cli::MemberArgs, mode: query::MatchMode) -> query::MemberSpec<'a> {
+    let class = match q.class_name.as_deref() {
+        Some(text) if q.fuzzy_class => Some(query::ClassSpec::Fuzzy(text)),
+        Some(text) => Some(query::ClassSpec::Exact(text)),
+        None => None,
+    };
+    query::MemberSpec { name: q.name.as_deref(), mode, class }
+}
+
+fn classes(args: cli::ClassesArgs) -> Result<(), Failure> {
+    let run = prepare(&args.common)?;
+    let filter = model::ClassFilter::new(args.filter.as_deref().unwrap_or(""));
+    let artifact =
+        apk::open_path(&args.apk_path, &apk_limits(&run), &run.control).map_err(Failure::Analysis)?;
+    let report = apk::classes(&artifact, &filter, &run.control).map_err(Failure::Analysis)?;
+    let stats = report.stats();
+    let diagnostics = report.diagnostics().to_vec();
+    let data = render::CommandData::Classes(report.value());
+    finish(&run, "classes", &args.apk_path, &artifact, &diagnostics, stats, data)
+}
+
+fn manifest(args: cli::ManifestArgs) -> Result<(), Failure> {
+    let run = prepare(&args.common)?;
+    let artifact =
+        apk::open_path(&args.apk_path, &apk_limits(&run), &run.control).map_err(Failure::Analysis)?;
+    let report = apk::manifest(&artifact, &run.control).map_err(Failure::Analysis)?;
+    let stats = report.stats();
+    let diagnostics = report.diagnostics().to_vec();
+    let data = render::CommandData::Manifest(report.value());
+    finish(&run, "manifest", &args.apk_path, &artifact, &diagnostics, stats, data)
+}
+
+fn getclass(args: cli::GetClassArgs) -> Result<(), Failure> {
+    let run = prepare(&args.common)?;
+    // Query construction happens before the input is read; a syntax error in
+    // `--dex` or the class name exits 2 without opening the file.
+    let descriptor = query::exact_descriptor(&args.dalvik_class).map_err(Failure::Analysis)?;
+    let pinned_dex = match &args.dex {
+        Some(text) => Some(query::parse_dex_selector(text).map_err(Failure::Analysis)?),
+        None => None,
+    };
+    let artifact =
+        apk::open_path(&args.apk_path, &apk_limits(&run), &run.control).map_err(Failure::Analysis)?;
+    // `--dex` resolves through the artifact's catalog: the ordinals must name
+    // a DEX the catalog actually selected, or the query is invalid
+    // (interfaces.md §1).
+    let selector = match pinned_dex {
+        Some((entry_ordinal, logical_ordinal)) => {
+            let pinned = apk::dexes(&artifact, &run.control)
+                .map_err(Failure::Analysis)?
+                .value()
+                .iter()
+                .map(|entry| entry.id())
+                .find(|id| {
+                    id.entry_ordinal() == entry_ordinal && id.logical_ordinal() == logical_ordinal
+                })
+                .ok_or_else(|| {
+                    usage_error(format!(
+                        "--dex {entry_ordinal}:{logical_ordinal} does not name a selected DEX \
+                         in this archive"
+                    ))
+                })?;
+            model::ClassSelector::Descriptor(descriptor, Some(pinned))
+        }
+        None => model::ClassSelector::Descriptor(descriptor, None),
+    };
+    let report = apk::decompile(&artifact, &selector, &run.control).map_err(Failure::Analysis)?;
+    let stats = report.stats();
+    let diagnostics = report.diagnostics().to_vec();
+    let data = render::CommandData::Getclass(report.value());
+    finish(&run, "getclass", &args.apk_path, &artifact, &diagnostics, stats, data)
+}
+
+/// The apk-layer projection of the resolved limits.
+fn apk_limits(run: &Run) -> apk::Limits {
+    apk::Limits {
+        max_input_bytes: run.limits.max_input_bytes,
+        max_entry_bytes: run.limits.max_entry_bytes,
+        max_total_decoded_bytes: run.limits.max_total_decoded_bytes,
+        scan: crate::dex::ScanLimits {
+            max_result_items: run.limits.max_result_items,
+            max_reference_locations: run.limits.max_reference_locations,
+            max_string_units: run.limits.max_string_units,
+            max_table_items: run.limits.max_table_items,
+            max_result_bytes: run.limits.max_result_bytes,
+        },
     }
 }
