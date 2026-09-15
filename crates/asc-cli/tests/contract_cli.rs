@@ -410,11 +410,22 @@ fn atomic_replacement_leaves_no_temporary_files_behind() {
     let output = run(&["classes", apk.to_str().unwrap(), "-o", out.to_str().unwrap()]);
     assert_eq!(status(&output), 0);
     // Only the final file exists: the hidden temp file was renamed over it.
-    let leftovers: Vec<_> = snap(&parent)
-        .difference(&before)
-        .filter(|name| name.contains(".rasc-") && name.ends_with(".tmp"))
-        .cloned()
-        .collect();
+    // Sibling tests run concurrently in the same temp dir, so a diff hit
+    // must settle: a concurrent test's in-flight temp disappears within a
+    // moment, a real leak persists. Three settling rounds, then report.
+    let mut leftovers: Vec<String> = Vec::new();
+    for _ in 0..3 {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let now = snap(&parent);
+        leftovers = now
+            .difference(&before)
+            .filter(|name| name.contains(".rasc-") && name.ends_with(".tmp"))
+            .cloned()
+            .collect();
+        if leftovers.is_empty() {
+            break;
+        }
+    }
     assert!(leftovers.is_empty(), "temporary files leaked: {leftovers:?}");
     let _ = fs::remove_file(&out);
 }
