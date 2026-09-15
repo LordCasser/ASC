@@ -30,6 +30,6 @@ pub use error::Error;
 pub use model::dto;
 pub use model::{
     ArchiveEntry, ArchiveEntryId, ArchiveEntryQuery, ArtifactId, FieldDeclaration, FieldId,
-    MethodDeclaration, MethodId, MethodInventory, MethodScope, MethodTarget, ReferenceLocation,
-    Report, StringDeclaration,
+    InstructionConstant, InstructionFact, InstructionReference, MethodDeclaration, MethodId,
+    MethodInventory, MethodScope, MethodTarget, ReferenceLocation, Report, StringDeclaration,
 };

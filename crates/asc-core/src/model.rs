@@ -1124,6 +1124,151 @@ impl Reference {
 }
 
 // ---------------------------------------------------------------------------
+// Typed instruction facts
+// ---------------------------------------------------------------------------
+
+/// A table operand retained by one decoded Dalvik instruction.
+///
+/// The index is local to the logical DEX identified by [`InstructionFact::dex`];
+/// consumers resolve it through the corresponding public inventory.  Keeping
+/// this as a typed value prevents adapters from re-decoding instruction bytes
+/// or guessing a table from an opcode-shaped integer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum InstructionReference {
+    String { index: u32 },
+    Type { index: u32 },
+    Field { index: u32 },
+    Method { index: u32 },
+}
+
+impl InstructionReference {
+    pub fn index(&self) -> u32 {
+        match self {
+            Self::String { index }
+            | Self::Type { index }
+            | Self::Field { index }
+            | Self::Method { index } => *index,
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::String { .. } => "string",
+            Self::Type { .. } => "type",
+            Self::Field { .. } => "field",
+            Self::Method { .. } => "method",
+        }
+    }
+}
+
+/// A scalar constant proved by an instruction encoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum InstructionConstant {
+    Int(i64),
+    String { index: u32 },
+}
+
+/// One structurally decoded instruction in a selected logical DEX.
+///
+/// `pc` and branch targets are code-unit offsets from the start of `insns`;
+/// `code_off` is the DEX file offset of the containing code item.  Register
+/// sets are conservative operand facts: an empty set means the opcode does
+/// not expose that class of operand (or the operand is outside this public
+/// summary), never that a value is known to be unused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstructionFact {
+    dex: DexEntry,
+    method: MethodId,
+    code_off: u32,
+    pc: u32,
+    opcode: u8,
+    reads: Vec<u16>,
+    writes: Vec<u16>,
+    reference: Option<InstructionReference>,
+    method_target: Option<MethodIdentity>,
+    constant: Option<InstructionConstant>,
+    branch_targets: Vec<u32>,
+}
+
+impl InstructionFact {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        dex: DexEntry,
+        method: MethodId,
+        code_off: u32,
+        pc: u32,
+        opcode: u8,
+        reads: Vec<u16>,
+        writes: Vec<u16>,
+        reference: Option<InstructionReference>,
+        method_target: Option<MethodIdentity>,
+        constant: Option<InstructionConstant>,
+        branch_targets: Vec<u32>,
+    ) -> Self {
+        Self {
+            dex,
+            method,
+            code_off,
+            pc,
+            opcode,
+            reads,
+            writes,
+            reference,
+            method_target,
+            constant,
+            branch_targets,
+        }
+    }
+
+    pub fn dex(&self) -> &DexEntry {
+        &self.dex
+    }
+
+    pub fn method(&self) -> MethodId {
+        self.method
+    }
+
+    pub fn code_off(&self) -> u32 {
+        self.code_off
+    }
+
+    pub fn pc(&self) -> u32 {
+        self.pc
+    }
+
+    pub fn opcode(&self) -> u8 {
+        self.opcode
+    }
+
+    pub fn reads(&self) -> &[u16] {
+        &self.reads
+    }
+
+    pub fn writes(&self) -> &[u16] {
+        &self.writes
+    }
+
+    pub fn reference(&self) -> Option<InstructionReference> {
+        self.reference
+    }
+
+    /// Full symbolic identity when `reference` is a method-table operand.
+    /// External methods that are not declarations in the selected DEX still
+    /// resolve here because the provider reads the method table directly.
+    pub fn method_target(&self) -> Option<&MethodIdentity> {
+        self.method_target.as_ref()
+    }
+
+    pub fn constant(&self) -> Option<InstructionConstant> {
+        self.constant
+    }
+
+    pub fn branch_targets(&self) -> &[u32] {
+        &self.branch_targets
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Patterns and queries
 // ---------------------------------------------------------------------------
 

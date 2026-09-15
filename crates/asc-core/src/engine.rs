@@ -34,7 +34,7 @@ use crate::model::{
 };
 use crate::model::{
     ArchiveEntry as ArchiveEntryFact, ArchiveEntryId, ArchiveEntryQuery, MethodScope,
-    MemoryPermit, StringDeclaration,
+    InstructionFact, MemoryPermit, StringDeclaration,
 };
 use crate::memory::MemoryAccount;
 #[cfg(not(feature = "decompile"))]
@@ -893,6 +893,56 @@ fn strings_in_scope(
         diagnostics,
         OperationStats {
             selected_dexes: rows.iter().map(|row| row.dex().id()).collect::<std::collections::BTreeSet<_>>().len() as u32,
+            result_items: rows.len() as u64,
+            ..Default::default()
+        },
+    )
+    .with_memory(memory))
+}
+
+fn instruction_fact_size(row: &InstructionFact) -> (usize, usize, u64) {
+    let bytes = 128usize
+        .saturating_add(row.reads().len().saturating_mul(2))
+        .saturating_add(row.writes().len().saturating_mul(2))
+        .saturating_add(row.branch_targets().len().saturating_mul(4));
+    (1, bytes, 0)
+}
+
+/// Typed instruction facts over an explicit DEX scope.  The provider validates
+/// instruction widths and bounds with the same scanner walk used by reference
+/// queries, while exposing only bounded operands and no borrowed input bytes.
+pub(crate) fn instructions_in_scope(
+    artifact: &Artifact,
+    scope: &MethodScope,
+    control: &OperationControl,
+) -> Result<Report<Vec<InstructionFact>>, Error> {
+    let scan_limits = artifact.limits.scan;
+    let (rows, diagnostics) = fold_scope(
+        artifact,
+        scope,
+        control,
+        instruction_fact_size,
+        |views, logical, probe| {
+            let view = &views.views[logical];
+            let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
+            dex::list_instructions(&dex_view, &scan_limits, Some(probe))
+        },
+    )?;
+    let bytes = rows
+        .iter()
+        .map(instruction_fact_size)
+        .map(|(_, bytes, _)| bytes)
+        .fold(0usize, usize::saturating_add);
+    let memory = reserve_report_memory(artifact, bytes, &diagnostics, "instruction fact report")?;
+    Ok(Report::new(
+        rows.clone(),
+        diagnostics,
+        OperationStats {
+            selected_dexes: rows
+                .iter()
+                .map(|row| row.dex().id())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len() as u32,
             result_items: rows.len() as u64,
             ..Default::default()
         },
@@ -3937,6 +3987,23 @@ impl Engine {
         self.runtime
             .pool
             .install(|| strings_in_scope(artifact, scope, control))
+    }
+
+    /// Returns checked, typed instruction operands over an explicit DEX scope.
+    /// The result contains no borrowed bytes and is intended for bounded
+    /// adapter-side value propagation (for example `const-string` followed by
+    /// `System.loadLibrary`).
+    pub fn instructions_in_scope(
+        &self,
+        artifact: &Artifact,
+        scope: &MethodScope,
+        control: &OperationControl,
+    ) -> Result<Report<Vec<InstructionFact>>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        self.runtime
+            .pool
+            .install(|| instructions_in_scope(artifact, scope, control))
     }
 
     /// Lists every method declared by the selected DEX scope, including

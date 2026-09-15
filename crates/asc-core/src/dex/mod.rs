@@ -26,7 +26,8 @@ use crate::error::Error;
 use crate::model::{
     Class, ClassConstraint, ClassDescriptor, ClassId, DexEntry, DexText, MatchOutcome,
     MemberQuery as ContractMemberQuery, MethodId, MethodIdentity, Pattern, Prototype, Reference,
-    ReferenceLocation, ReferenceQuery, TargetId, TargetKind, TargetMatch, TargetValue,
+    InstructionConstant, InstructionFact, InstructionReference, ReferenceLocation,
+    ReferenceQuery, TargetId, TargetKind, TargetMatch, TargetValue,
 };
 use filter::Targets;
 use std::collections::BTreeMap;
@@ -189,6 +190,57 @@ pub(crate) fn list_strings(
             check_control(control)?;
         }
         out.push((index, dex.string_text(index, limits)?));
+    }
+    Ok(out)
+}
+
+/// Every structurally decoded instruction in one logical DEX.  This is the
+/// small typed provider used by adapters that need bounded value propagation;
+/// it shares the scanner's checked width walk and never exposes the borrowed
+/// DEX bytes.
+pub(crate) fn list_instructions(
+    view: &DexView<'_>,
+    limits: &ScanLimits,
+    control: Option<&ControlProbe<'_>>,
+) -> Result<Vec<InstructionFact>, Error> {
+    let dex = ScanDex::parse(view, limits)?;
+    check_control(control)?;
+    let mut out = Vec::new();
+    for class_index in 0..dex.header.classes_size {
+        let class_def = dex.header.classes_off + class_index * 32;
+        let class_data_off = dex.u32(class_def + 24)? as usize;
+        if class_data_off == 0 {
+            continue;
+        }
+        let mut cursor = class_data_off;
+        let static_fields = dex.uleb(&mut cursor)? as usize;
+        let instance_fields = dex.uleb(&mut cursor)? as usize;
+        let direct_methods = dex.uleb(&mut cursor)? as usize;
+        let virtual_methods = dex.uleb(&mut cursor)? as usize;
+        for _ in 0..static_fields.saturating_add(instance_fields) {
+            dex.uleb(&mut cursor)?;
+            dex.uleb(&mut cursor)?;
+        }
+        let mut method_idx = 0u32;
+        for method_count in [direct_methods, virtual_methods] {
+            for _ in 0..method_count {
+                method_idx = method_idx
+                    .checked_add(dex.uleb(&mut cursor)?)
+                    .ok_or_else(|| Error::malformed_input("method index overflow in class data"))?;
+                dex.uleb(&mut cursor)?; // access flags
+                let code_off = dex.uleb(&mut cursor)? as usize;
+                if code_off != 0 {
+                    dex.list_code_instructions(
+                        method_idx,
+                        code_off,
+                        view.entry().clone(),
+                        limits,
+                        control,
+                        &mut out,
+                    )?;
+                }
+            }
+        }
     }
     Ok(out)
 }
@@ -817,6 +869,392 @@ impl<'a> ScanDex<'a> {
                         ));
                 }
             }
+            pc += units * 2;
+        }
+        Ok(())
+    }
+
+    /// Decode one method's code item into typed operand facts.  The width and
+    /// payload checks intentionally share the scanner's opcode table; operand
+    /// details are additive and can never make malformed code appear valid.
+    fn list_code_instructions(
+        &self,
+        method_idx: u32,
+        code_off: usize,
+        entry: DexEntry,
+        limits: &ScanLimits,
+        control: Option<&ControlProbe<'_>>,
+        out: &mut Vec<InstructionFact>,
+    ) -> Result<(), Error> {
+        check_control(control)?;
+        let malformed = |message: String| {
+            Error::malformed_input(format!("method #{method_idx}: {message}"))
+        };
+        let insns_size = self.u32(code_off + 12)? as usize;
+        let start = code_off
+            .checked_add(16)
+            .ok_or_else(|| malformed("code item offset overflow".to_owned()))?;
+        let end = start
+            .checked_add(
+                insns_size
+                    .checked_mul(2)
+                    .ok_or_else(|| malformed("code size overflow".to_owned()))?,
+            )
+            .ok_or_else(|| malformed(format!("code range of {insns_size} units overflows")))?;
+        let code = self.data.get(start..end).ok_or_else(|| {
+            malformed(format!(
+                "code item at 0x{code_off:x} ({insns_size} units) outside the DEX"
+            ))
+        })?;
+        let mut pc = 0usize;
+        let mut next_check = 2 * CHECK_EVERY_CODE_UNITS;
+        while pc + 2 <= code.len() {
+            if pc >= next_check {
+                check_control(control)?;
+                next_check = pc + 2 * CHECK_EVERY_CODE_UNITS;
+            }
+            let opcode = code[pc];
+            let units = opcodes::OPCODE_UNITS[opcode as usize] as usize;
+            let units = if units == 0 {
+                opcodes::instruction_units(code, pc).map_err(|error| {
+                    malformed(format!("code unit {}: {error}", pc / 2))
+                })?
+            } else {
+                units
+            };
+            if units == 0 || pc + units * 2 > code.len() {
+                return Err(malformed(format!(
+                    "code unit {}: invalid instruction width {units}",
+                    pc / 2
+                )));
+            }
+            let read16 = |offset: usize| -> Result<u16, Error> {
+                read_u16(code, pc + offset)
+                    .map_err(|_| malformed(format!("code unit {}: operand outside code item", pc / 2)))
+            };
+            let read32 = |offset: usize| -> Result<u32, Error> {
+                read_u32(code, pc + offset)
+                    .map_err(|_| malformed(format!("code unit {}: operand outside code item", pc / 2)))
+            };
+            let first = read16(0)?;
+            let second = (units > 1).then(|| read16(2)).transpose()?;
+            let third = (units > 2).then(|| read16(4)).transpose()?;
+            let fourth = (units > 3).then(|| read16(6)).transpose()?;
+            let mut reads = Vec::new();
+            let mut writes = Vec::new();
+            let mut reference = None;
+            let mut constant = None;
+            let mut branch_targets = Vec::new();
+            let a = ((first >> 8) & 0x0f) as u16;
+            let b = ((first >> 12) & 0x0f) as u16;
+            let aa = (first >> 8) as u16;
+            let add_branch = |delta: i64, branches: &mut Vec<u32>| {
+                let target = (pc / 2) as i64 + delta;
+                if (0..=u32::MAX as i64).contains(&target) {
+                    branches.push(target as u32);
+                }
+            };
+            match opcode {
+                // 12x register moves and unary arithmetic.
+                0x01 | 0x04 | 0x07 | 0x7b..=0x8f => {
+                    writes.push(a);
+                    reads.push(b);
+                }
+                // 22x move/from16, and the 22c forms that have register
+                // effects handled below.
+                0x02 | 0x05 | 0x08 => {
+                    writes.push(aa);
+                    reads.push(second.unwrap_or_default());
+                }
+                // 32x move/16.
+                0x03 | 0x06 | 0x09 => {
+                    writes.push(second.unwrap_or_default());
+                    reads.push(third.unwrap_or_default());
+                }
+                // move-result* and move-exception.
+                0x0a..=0x0d => writes.push(aa),
+                // return*; return-void has no register.
+                0x0f..=0x11 => reads.push(aa),
+                // const/4, const/16, const, const/high16 and wide forms.
+                0x12 => {
+                    writes.push(a);
+                    constant = Some(InstructionConstant::Int(((first as i8) >> 4) as i64));
+                }
+                0x13 | 0x16 => {
+                    writes.push(aa);
+                    constant = Some(InstructionConstant::Int(
+                        second.unwrap_or_default() as i16 as i64,
+                    ));
+                }
+                0x14 => {
+                    writes.push(aa);
+                    let low = u32::from(second.unwrap_or_default());
+                    let high = u32::from(third.unwrap_or_default());
+                    constant = Some(InstructionConstant::Int(((high << 16) | low) as i32 as i64));
+                }
+                0x15 => {
+                    writes.push(aa);
+                    constant = Some(InstructionConstant::Int(
+                        (second.unwrap_or_default() as i16 as i32 as i64) << 16,
+                    ));
+                }
+                0x17 => {
+                    writes.push(aa);
+                    let low = u32::from(second.unwrap_or_default());
+                    let high = u32::from(third.unwrap_or_default());
+                    constant = Some(InstructionConstant::Int(
+                        i32::from_le_bytes([
+                            low as u8,
+                            (low >> 8) as u8,
+                            high as u8,
+                            (high >> 8) as u8,
+                        ]) as i64,
+                    ));
+                }
+                0x18 => {
+                    writes.push(aa);
+                    let words = [
+                        u64::from(second.unwrap_or_default()),
+                        u64::from(third.unwrap_or_default()),
+                        u64::from(fourth.unwrap_or_default()),
+                        u64::from(read16(8)?),
+                    ];
+                    let value = words
+                        .into_iter()
+                        .enumerate()
+                        .fold(0u64, |value, (index, word)| value | (word << (index * 16)));
+                    constant = Some(InstructionConstant::Int(value as i64));
+                }
+                0x19 => {
+                    writes.push(aa);
+                    constant = Some(InstructionConstant::Int(
+                        (second.unwrap_or_default() as i16 as i64) << 48,
+                    ));
+                }
+                // const-string and type references.
+                0x1a => {
+                    writes.push(aa);
+                    let index = u32::from(second.unwrap_or_default());
+                    reference = Some(InstructionReference::String { index });
+                    constant = Some(InstructionConstant::String { index });
+                }
+                0x1b => {
+                    writes.push(aa);
+                    let index = read32(2)?;
+                    reference = Some(InstructionReference::String { index });
+                    constant = Some(InstructionConstant::String { index });
+                }
+                0x1c => {
+                    writes.push(aa);
+                    reference = Some(InstructionReference::Type {
+                        index: u32::from(second.unwrap_or_default()),
+                    });
+                }
+                0x1d | 0x1e | 0x27 => reads.push(aa),
+                0x1f => {
+                    reads.push(aa);
+                    writes.push(aa);
+                    reference = Some(InstructionReference::Type {
+                        index: u32::from(second.unwrap_or_default()),
+                    });
+                }
+                0x20 => {
+                    reads.push(b);
+                    writes.push(a);
+                    reference = Some(InstructionReference::Type {
+                        index: u32::from(second.unwrap_or_default()),
+                    });
+                }
+                0x21 => {
+                    reads.push(b);
+                    writes.push(a);
+                }
+                0x22 => {
+                    writes.push(aa);
+                    reference = Some(InstructionReference::Type {
+                        index: u32::from(second.unwrap_or_default()),
+                    });
+                }
+                0x23 => {
+                    reads.push(b);
+                    writes.push(a);
+                    reference = Some(InstructionReference::Type {
+                        index: u32::from(second.unwrap_or_default()),
+                    });
+                }
+                0x24 | 0x25 => {
+                    let count = ((first >> 8) & 0xff) as usize;
+                    let word = third.unwrap_or_default();
+                    for index in 0..count.min(5) {
+                        reads.push(match index {
+                            0 => (word & 0x0f) as u16,
+                            1 => ((word >> 4) & 0x0f) as u16,
+                            2 => ((word >> 8) & 0x0f) as u16,
+                            3 => ((word >> 12) & 0x0f) as u16,
+                            _ => ((first >> 12) & 0x0f) as u16,
+                        });
+                    }
+                    reference = Some(InstructionReference::Type {
+                        index: u32::from(second.unwrap_or_default()),
+                    });
+                }
+                // unconditional and conditional branches
+                0x28 => add_branch((first >> 8) as i8 as i64, &mut branch_targets),
+                0x29 => add_branch(second.unwrap_or_default() as i16 as i64, &mut branch_targets),
+                0x2a => {
+                    let low = second.unwrap_or_default();
+                    let high = third.unwrap_or_default();
+                    let delta = i32::from_le_bytes([
+                        low as u8,
+                        (low >> 8) as u8,
+                        high as u8,
+                        (high >> 8) as u8,
+                    ]);
+                    add_branch(i64::from(delta), &mut branch_targets);
+                }
+                0x2b | 0x2c => {
+                    reads.push(aa);
+                    let low = second.unwrap_or_default();
+                    let high = third.unwrap_or_default();
+                    let delta = i32::from_le_bytes([
+                        low as u8,
+                        (low >> 8) as u8,
+                        high as u8,
+                        (high >> 8) as u8,
+                    ]);
+                    add_branch(i64::from(delta), &mut branch_targets);
+                }
+                0x2d..=0x31 => {
+                    writes.push(a);
+                    reads.push(b);
+                    reads.push((second.unwrap_or_default() >> 8) as u16);
+                }
+                0x32..=0x37 => {
+                    reads.push(a);
+                    reads.push(b);
+                    add_branch(second.unwrap_or_default() as i16 as i64, &mut branch_targets);
+                }
+                0x38..=0x3d => {
+                    reads.push(aa);
+                    add_branch(second.unwrap_or_default() as i16 as i64, &mut branch_targets);
+                }
+                // array get/put: A is the result for get and the value for put;
+                // B is the array and C is the index.
+                0x44..=0x4a => {
+                    writes.push(a);
+                    reads.push(b);
+                    reads.push((second.unwrap_or_default() >> 8) as u16);
+                }
+                0x4b..=0x51 => {
+                    reads.push(a);
+                    reads.push(b);
+                    reads.push((second.unwrap_or_default() >> 8) as u16);
+                }
+                // field references and their register effects
+                0x52..=0x58 => {
+                    writes.push(a);
+                    reads.push(b);
+                    reference = Some(InstructionReference::Field {
+                        index: u32::from(second.unwrap_or_default()),
+                    });
+                }
+                0x59..=0x5f => {
+                    reads.push(a);
+                    reads.push(b);
+                    reference = Some(InstructionReference::Field {
+                        index: u32::from(second.unwrap_or_default()),
+                    });
+                }
+                0x60..=0x66 => {
+                    writes.push(a);
+                    reference = Some(InstructionReference::Field {
+                        index: u32::from(second.unwrap_or_default()),
+                    });
+                }
+                0x67..=0x6d => {
+                    reads.push(a);
+                    reference = Some(InstructionReference::Field {
+                        index: u32::from(second.unwrap_or_default()),
+                    });
+                }
+                // invoke {vA..}, method@idx; both 35c and 3rc families
+                0x6e..=0x72 | 0x74..=0x78 | 0xfa | 0xfb => {
+                    let count = if opcode == 0xfa || opcode == 0xfb {
+                        ((first >> 8) & 0xff) as usize
+                    } else {
+                        ((first >> 12) & 0x0f) as usize
+                    };
+                    if (0x74..=0x78).contains(&opcode) || opcode == 0xfb {
+                        let start = if opcode == 0xfb {
+                            fourth.unwrap_or_default()
+                        } else {
+                            third.unwrap_or_default()
+                        };
+                        for reg in 0..count.min(255) {
+                            reads.push(start.saturating_add(reg as u16));
+                        }
+                    } else {
+                        let word = third.unwrap_or_default();
+                        for reg in 0..count.min(5) {
+                            reads.push(match reg {
+                                0 => (word & 0x0f) as u16,
+                                1 => ((word >> 4) & 0x0f) as u16,
+                                2 => ((word >> 8) & 0x0f) as u16,
+                                3 => ((word >> 12) & 0x0f) as u16,
+                                _ => ((first >> 8) & 0x0f) as u16,
+                            });
+                        }
+                    }
+                    reference = Some(InstructionReference::Method {
+                        index: u32::from(second.unwrap_or_default()),
+                    });
+                }
+                // 23x binary arithmetic and comparisons.
+                0x90..=0xaf => {
+                    writes.push(a);
+                    reads.push(b);
+                    reads.push((second.unwrap_or_default() >> 8) as u16);
+                }
+                // 2addr arithmetic.
+                0xb0..=0xcf => {
+                    writes.push(a);
+                    reads.push(a);
+                    reads.push(b);
+                }
+                // 22s/22b literal arithmetic.
+                0xd0..=0xe2 => {
+                    writes.push(a);
+                    reads.push(b);
+                }
+                _ => {}
+            }
+            reads.sort_unstable();
+            reads.dedup();
+            writes.sort_unstable();
+            writes.dedup();
+            branch_targets.sort_unstable();
+            branch_targets.dedup();
+            let method_target = match reference {
+                Some(InstructionReference::Method { index }) => {
+                    Some(self.method_identity(&entry, index, limits)?)
+                }
+                _ => None,
+            };
+            out.push(InstructionFact::new(
+                entry.clone(),
+                MethodId::new(entry.id(), method_idx),
+                u32::try_from(code_off)
+                    .map_err(|_| malformed("code item offset exceeds u32".to_owned()))?,
+                u32::try_from(pc / 2)
+                    .map_err(|_| malformed("code-unit pc exceeds u32".to_owned()))?,
+                opcode,
+                reads,
+                writes,
+                reference,
+                method_target,
+                constant,
+                branch_targets,
+            ));
             pc += units * 2;
         }
         Ok(())
