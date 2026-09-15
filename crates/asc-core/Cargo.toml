@@ -12,8 +12,8 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1.0"
-droidsaw-dex = { version = "2.0.0", path = "../../vendor/droidsaw-dex", optional = true }
-axmldecoder = { version = "0.5.0", path = "../../vendor/axmldecoder", optional = true }
+droidsaw-dex = { package = "asc-droidsaw-dex", version = "0.1.0", path = "../../vendor/droidsaw-dex", optional = true }
+axmldecoder = { package = "asc-axmldecoder", version = "0.1.0", path = "../../vendor/axmldecoder", optional = true }
 flate2 = { version = "1", default-features = false, features = ["zlib"] }
 libdeflater = "1.26"
 fancy-regex = "0.19"

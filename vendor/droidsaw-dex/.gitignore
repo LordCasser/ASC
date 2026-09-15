@@ -11,3 +11,4 @@ droidsaw-semgrep-*/
 /fuzz/target
 /fuzz/Cargo.lock
 /orchestration
+!tests/fixtures/g02-static-initializers.dex

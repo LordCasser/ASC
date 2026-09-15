@@ -12,13 +12,17 @@
 [package]
 edition = "2024"
 rust-version = "1.93"
-name = "droidsaw-dex"
-version = "2.0.0"
+name = "asc-droidsaw-dex"
+version = "0.1.0"
 build = "build.rs"
+# PATCHED (asc, A13): /tests ships (the patch-contract test targets are part
+# of the derived archive per dependencies.md); only the upstream-only
+# orchestration/fuzz trees and the reserved vcs file stay out.
 exclude = [
-    "/tests",
     "/orchestration",
     "/fuzz",
+    ".cargo_vcs_info.json",
+    "Cargo.toml.orig",
 ]
 autolib = false
 autobins = false

@@ -11,8 +11,8 @@
 
 [package]
 edition = "2021"
-name = "axmldecoder"
-version = "0.5.0"
+name = "asc-axmldecoder"
+version = "0.1.0"
 authors = ["Terry Chia <terry@ayrx.me>"]
 exclude = [
     "examples/**",

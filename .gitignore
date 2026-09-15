@@ -8,3 +8,4 @@
 
 # Contract fixtures and corpus samples are tracked test data.
 !tests/fixtures/contracts/**
+!vendor/droidsaw-dex/tests/fixtures/**

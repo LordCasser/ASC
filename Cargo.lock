@@ -100,12 +100,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "asc-axmldecoder"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "deku",
+ "indexmap 1.9.3",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "asc-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "axmldecoder",
- "droidsaw-dex",
+ "asc-axmldecoder",
+ "asc-droidsaw-dex",
  "fancy-regex",
  "flate2",
  "libdeflater",
@@ -115,20 +125,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "asc-droidsaw-dex"
+version = "0.1.0"
+dependencies = [
+ "adler2",
+ "droidsaw-common",
+ "proguard",
+ "proptest",
+ "rayon",
+ "rustc-hash",
+ "scroll",
+ "serde",
+ "sha1 0.11.0",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.20",
+ "toml",
+ "zip",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
-
-[[package]]
-name = "axmldecoder"
-version = "0.5.0"
-dependencies = [
- "byteorder",
- "deku",
- "indexmap 1.9.3",
- "thiserror 1.0.69",
-]
 
 [[package]]
 name = "base64"
@@ -528,26 +548,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "droidsaw-dex"
-version = "2.0.0"
-dependencies = [
- "adler2",
- "droidsaw-common",
- "proguard",
- "proptest",
- "rayon",
- "rustc-hash",
- "scroll",
- "serde",
- "sha1 0.11.0",
- "sha2",
- "tempfile",
- "thiserror 2.0.20",
- "toml",
- "zip",
 ]
 
 [[package]]

@@ -29,7 +29,7 @@ use droidsaw_dex::analysis::decompile_checked;
 use droidsaw_dex::DexFile;
 
 const G02: &[u8] =
-    include_bytes!("../../../tests/fixtures/contracts/inputs/g02-static-initializers.dex");
+    include_bytes!("fixtures/g02-static-initializers.dex");
 const G02_DESCRIPTOR: &str = "Lexample/Statics;";
 
 const CHILD_ENV_SWITCHES: [(&str, &str); 7] = [
