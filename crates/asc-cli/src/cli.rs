@@ -285,6 +285,7 @@ impl LimitKey {
         matches!(
             self,
             LimitKey::InputBytes
+                | LimitKey::EngineBytes
                 | LimitKey::EntryBytes
                 | LimitKey::DecodedBytes
                 | LimitKey::TableItems
@@ -346,6 +347,7 @@ pub fn parse_limits(raw: &[String]) -> Result<Vec<ParsedLimit>, String> {
 #[derive(Clone, Copy, Debug)]
 pub struct EffectiveLimits {
     pub max_input_bytes: u64,
+    pub max_engine_owned_bytes: u64,
     pub max_entry_bytes: u64,
     pub max_total_decoded_bytes: u64,
     pub max_result_items: usize,
@@ -362,6 +364,7 @@ impl EffectiveLimits {
     pub fn new(limits: &[ParsedLimit]) -> Self {
         let mut resolved = Self {
             max_input_bytes: 512 * 1024 * 1024,
+            max_engine_owned_bytes: 2 * 1024 * 1024 * 1024,
             max_entry_bytes: 256 * 1024 * 1024,
             max_total_decoded_bytes: 1024 * 1024 * 1024,
             max_result_items: 250_000,
@@ -385,8 +388,8 @@ impl EffectiveLimits {
                 LimitKey::PatternBytes => resolved.pattern.max_pattern_bytes = value,
                 LimitKey::RegexBytes => resolved.pattern.regex_compile_bytes = value,
                 LimitKey::RegexSteps => resolved.pattern.regex_backtrack_limit = value,
-                LimitKey::EngineBytes
-                | LimitKey::Entries
+                LimitKey::EngineBytes => resolved.max_engine_owned_bytes = value as u64,
+                LimitKey::Entries
                 | LimitKey::Dexes
                 | LimitKey::Depth
                 | LimitKey::XmlNodes

@@ -139,6 +139,7 @@ fn make_context(
     };
     let core_limits = Limits {
         max_input_bytes: limits.max_input_bytes,
+        max_engine_owned_bytes: limits.max_engine_owned_bytes,
         max_entry_bytes: limits.max_entry_bytes,
         max_total_decoded_bytes: limits.max_total_decoded_bytes,
         scan: dex::ScanLimits {

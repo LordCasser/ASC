@@ -575,10 +575,15 @@ fn enforced_and_accepted_limit_keys_behave_as_declared() {
     assert_eq!(status(&output), 1);
     assert!(stderr_text(&output).contains("ResourceLimit"));
     // A key this build accepts but does not enforce: success with a stderr
-    // note, never a silent drop.
-    let output = run(&["classes", apk.to_str().unwrap(), "--limit", "engine-bytes=99"]);
+    // note, never a silent drop. (engine-bytes became enforced in A11; the
+    // xml-nodes key still waits on the A06 limits setter.)
+    let output = run(&["classes", apk.to_str().unwrap(), "--limit", "xml-nodes=99"]);
     assert_eq!(status(&output), 0, "stderr: {}", stderr_text(&output));
     assert!(stderr_text(&output).contains("not enforced"));
+    // engine-bytes is now enforced: a tiny engine budget refuses the open.
+    let output = run(&["classes", apk.to_str().unwrap(), "--limit", "engine-bytes=99"]);
+    assert_eq!(status(&output), 1);
+    assert!(stderr_text(&output).contains("ResourceLimit"));
 }
 
 #[test]

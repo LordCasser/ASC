@@ -32,8 +32,10 @@ use crate::zip::{self, ArchiveEntry, InputLimits};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use rayon::prelude::*;
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::time::Duration;
 
 /// Per-open and per-operation resource limits the CLI can override
 /// (interfaces.md §5 keys enforced by this layer). Unlisted keys (engine
@@ -43,6 +45,9 @@ use std::sync::Arc;
 pub struct Limits {
     /// `input-bytes`: the owned snapshot may not exceed this.
     pub max_input_bytes: u64,
+    /// `engine-bytes`: the engine-owned active bytes (inputs of artifacts
+    /// opened through this engine, dropped with them).
+    pub max_engine_owned_bytes: u64,
     /// `entry-bytes`: one entry's actual decoded bytes.
     pub max_entry_bytes: u64,
     /// `decoded-bytes`: per-operation accumulated decoded bytes.
@@ -55,6 +60,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             max_input_bytes: 512 * 1024 * 1024,
+            max_engine_owned_bytes: 2 * 1024 * 1024 * 1024,
             max_entry_bytes: crate::zip::InputLimits::DEFAULT.max_entry_bytes,
             max_total_decoded_bytes: crate::zip::InputLimits::DEFAULT.max_total_decoded_bytes,
             scan: crate::dex::ScanLimits::DEFAULT,
@@ -74,6 +80,12 @@ impl Limits {
 
 /// `AndroidManifest.xml`, matched on raw entry-name bytes (last wins).
 const MANIFEST_NAME: &[u8] = b"AndroidManifest.xml";
+
+/// RAII admission ticket: released on drop, so cancellation or an error
+/// path never wedges the engine's top-level queue.
+struct Admission<'a> {
+    _guard: MutexGuard<'a, ()>,
+}
 
 /// Bridges the domain [`OperationControl`] onto the layer-specific probes
 /// (zip/scan) and the backend's control token. The dummy flag keeps the
@@ -126,6 +138,9 @@ pub struct Artifact {
     bytes: Arc<[u8]>,
     catalog: Option<zip::ArchiveCatalog>,
     roots: Vec<Root>,
+    /// The engine runtime this artifact belongs to; operations on a foreign
+    /// artifact are rejected (interfaces.md §2).
+    runtime: Arc<Runtime>,
     /// Duplicate-entry-name warnings observed at open time, attached to
     /// every operation's report.
     open_diagnostics: Vec<Diagnostic>,
@@ -138,13 +153,28 @@ impl Artifact {
     pub fn id(&self) -> ArtifactId {
         self.id
     }
+
+    fn byte_len(&self) -> u64 {
+        u64::try_from(self.bytes.len()).unwrap_or(u64::MAX)
+    }
+}
+
+impl Drop for Artifact {
+    fn drop(&mut self) {
+        // The engine-owned account returns the input bytes; the artifact's
+        // other members drop normally.
+        self.runtime
+            .active_bytes
+            .fetch_sub(self.byte_len(), Ordering::Relaxed);
+    }
 }
 
 /// Opens `path` as an APK: bounded owned snapshot, content id, archive
 /// catalog, root DEX selection.
-pub fn open_path(
+pub(crate) fn open_path(
     path: &Path,
     limits: &Limits,
+    runtime: &Arc<Runtime>,
     control: &OperationControl,
 ) -> Result<Artifact, Error> {
     let mut file = File::open(path)
@@ -175,13 +205,44 @@ pub fn open_path(
         }
         bytes.extend_from_slice(&buffer[..read]);
     }
-    let artifact = open_bytes(Arc::from(bytes.into_boxed_slice()), control)?;
-    Ok(Artifact { limits: *limits, ..artifact })
+    // Engine-owned budget: the snapshot reserves its full length until the
+    // artifact drops (interfaces.md §2: no waiting on another artifact's
+    // drop - insufficient budget fails immediately).
+    if runtime.active_bytes.load(Ordering::Relaxed) + bytes.len() as u64
+        > limits.max_engine_owned_bytes
+    {
+        return Err(Error::resource_limit(format!(
+            "engine-owned bytes {} + {} would exceed the {} limit",
+            runtime.active_bytes.load(Ordering::Relaxed),
+            bytes.len(),
+            limits.max_engine_owned_bytes
+        )));
+    }
+    let artifact = open_bytes(Arc::from(bytes.into_boxed_slice()), limits, runtime, control)?;
+    let mut artifact = artifact;
+    artifact.limits = *limits;
+    Ok(artifact)
 }
 
 /// Opens an already-owned input snapshot (the raw-bytes host path and tests).
-pub fn open_bytes(bytes: Arc<[u8]>, control: &OperationControl) -> Result<Artifact, Error> {
+pub(crate) fn open_bytes(
+    bytes: Arc<[u8]>,
+    limits: &Limits,
+    runtime: &Arc<Runtime>,
+    control: &OperationControl,
+) -> Result<Artifact, Error> {
     let _ = control;
+    // Engine-owned budget: the snapshot reserves its full length until the
+    // artifact drops (interfaces.md §2: no waiting on another artifact's
+    // drop - insufficient budget fails immediately).
+    let live = runtime.active_bytes.load(Ordering::Relaxed);
+    if live + bytes.len() as u64 > limits.max_engine_owned_bytes {
+        return Err(Error::resource_limit(format!(
+            "engine-owned bytes {live} + {} would exceed the {} limit",
+            bytes.len(),
+            limits.max_engine_owned_bytes
+        )));
+    }
     let id = ArtifactId::from_digest(crate::bytes::sha256(&bytes));
     let catalog = zip::parse_catalog(&bytes, &InputLimits::DEFAULT)?;
     let selection = zip::select_root_dexes(&catalog);
@@ -207,7 +268,17 @@ pub fn open_bytes(bytes: Arc<[u8]>, control: &OperationControl) -> Result<Artifa
             source: RootSource::Archive(entry.clone()),
         })
         .collect();
-    Ok(Artifact { id, bytes, catalog: Some(catalog), roots, open_diagnostics, limits: Limits::default() })
+    let artifact = Artifact {
+        id,
+        bytes,
+        catalog: Some(catalog),
+        roots,
+        runtime: Arc::clone(runtime),
+        open_diagnostics,
+        limits: *limits,
+    };
+    runtime.active_bytes.fetch_add(artifact.byte_len(), Ordering::Relaxed);
+    Ok(artifact)
 }
 
 impl Artifact {
@@ -215,29 +286,47 @@ impl Artifact {
     /// is fully inflated (shared decode budget) and validated before its
     /// operation runs; the first failing entry aborts with its error — rows
     /// computed from earlier entries do not turn that into a success.
-    fn fold_roots<T>(
+    fn fold_roots<T: Send>(
         &self,
         control: &OperationControl,
-        mut op: impl FnMut(&Root, &container::DexEntryViews<'_>, &ControlProbe<'_>) -> Result<Vec<T>, Error>,
+        op: impl Fn(&Root, &container::DexEntryViews<'_>, &ControlProbe<'_>) -> Result<Vec<T>, Error>
+            + Sync,
     ) -> Result<(Vec<T>, Vec<Diagnostic>), Error> {
         let guard = ControlGuard::new(control);
         let probe = guard.probe();
         let input_limits = self.limits.input();
-        let mut decoded = 0u64;
+        let decoded = AtomicU64::new(0);
+        // Parallel across entries; results and errors are merged in ordinal
+        // order, so the lowest ordinal decides the operation's error and the
+        // merged output never depends on scheduling (interfaces.md §4).
+        #[allow(clippy::type_complexity)]
+        let per_root: Vec<Result<(Vec<T>, Vec<Diagnostic>), Error>> = self
+            .roots
+            .par_iter()
+            .map(|root| {
+                let data: &[u8] = match &root.source {
+                    RootSource::Archive(entry) => {
+                        &zip::read_entry(&self.bytes, entry, &input_limits, &decoded, &probe)?
+                    }
+                    RootSource::Raw => &self.bytes,
+                };
+                let (views, entry_integrity) = container::validate_dex_entry(
+                    self.id,
+                    root.ordinal,
+                    &root.raw_name,
+                    data,
+                    &probe,
+                )?;
+                let rows = op(root, &views, &probe)?;
+                Ok((rows, entry_integrity))
+            })
+            .collect();
         let mut results = Vec::new();
         let mut integrity = Vec::new();
-        for root in &self.roots {
-            probe.check()?;
-            let data: &[u8] = match &root.source {
-                RootSource::Archive(entry) => {
-                    &zip::read_entry(&self.bytes, entry, &input_limits, &mut decoded, &probe)?
-                }
-                RootSource::Raw => &self.bytes,
-            };
-            let (views, entry_integrity) =
-                container::validate_dex_entry(self.id, root.ordinal, &root.raw_name, data, &probe)?;
+        for entry in per_root {
+            let (rows, entry_integrity) = entry?;
+            results.extend(rows);
             integrity.extend(entry_integrity);
-            results.extend(op(root, &views, &probe)?);
         }
         let diagnostics =
             self.open_diagnostics.iter().cloned().chain(integrity.iter().cloned()).collect();
@@ -277,26 +366,29 @@ pub fn classes(
     control: &OperationControl,
 ) -> Result<Report<Vec<Class>>, Error> {
     artifact.require_roots()?;
-    // Duplicate detection counts every definition, before the filter: a
-    // filtered-out duplicate is still a duplicate definition.
     let scan_limits = artifact.limits.scan;
-    let mut descriptor_counts: std::collections::BTreeMap<String, usize> = Default::default();
-    let (rows, mut diagnostics) = artifact.fold_roots(control, |_entry, views, probe| {
-        let mut rows = Vec::new();
+    // (class, descriptor) pairs: duplicates are counted across every
+    // definition before the filter (a filtered-out duplicate is still a
+    // duplicate definition).
+    let (pairs, mut diagnostics) = artifact.fold_roots(control, |_entry, views, probe| {
+        let mut pairs = Vec::new();
         for (logical, view) in views.views.iter().enumerate() {
             let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
-            let listed = dex::list_classes(&dex_view, &scan_limits, Some(probe))?;
-            for class in listed {
-                *descriptor_counts
-                    .entry(class.descriptor().as_str().to_owned())
-                    .or_insert(0) += 1;
-                if filter.matches(class.java_name()) {
-                    rows.push(class);
-                }
+            for class in dex::list_classes(&dex_view, &scan_limits, Some(probe))? {
+                let descriptor = class.descriptor().as_str().to_owned();
+                pairs.push((class, descriptor));
             }
         }
-        Ok(rows)
+        Ok(pairs)
     })?;
+    let mut descriptor_counts: std::collections::BTreeMap<String, usize> = Default::default();
+    let mut rows = Vec::with_capacity(pairs.len());
+    for (class, descriptor) in pairs {
+        *descriptor_counts.entry(descriptor).or_insert(0) += 1;
+        if filter.matches(class.java_name()) {
+            rows.push(class);
+        }
+    }
     for (descriptor, count) in descriptor_counts {
         if count > 1 {
             diagnostics.push(Diagnostic::new(
@@ -311,7 +403,6 @@ pub fn classes(
         }
     }
     // Rows ordered by their (entry, logical, class_def) identity.
-    let mut rows = rows;
     rows.sort_by_key(|class| class.id());
     let stats = OperationStats { result_items: rows.len() as u64, ..Default::default() };
     Ok(Report::new(rows, diagnostics, stats))
@@ -368,7 +459,7 @@ pub fn decompile(
     }
     let guard = ControlGuard::new(control);
     let probe = guard.probe();
-    let mut decoded = 0u64;
+    let decoded = AtomicU64::new(0);
     let mut resolution: Option<Resolved> = None;
     let mut integrity = Vec::new();
     for (entry_index, root) in artifact.roots.iter().enumerate() {
@@ -382,7 +473,7 @@ pub fn decompile(
                     &artifact.bytes,
                     entry,
                     &artifact.limits.input(),
-                    &mut decoded,
+                    &decoded,
                     &probe,
                 )?);
                 data_buffer.as_deref().expect("just assigned")
@@ -472,7 +563,7 @@ pub fn decompile(
                 &artifact.bytes,
                 entry,
                 &artifact.limits.input(),
-                &mut decoded,
+                &decoded,
                 &probe,
             )?);
             data_buffer.as_deref().expect("just assigned")
@@ -566,8 +657,8 @@ pub fn manifest(
         })?;
     let guard = ControlGuard::new(control);
     let probe = guard.probe();
-    let mut decoded = 0u64;
-    let bytes = zip::read_entry(&artifact.bytes, entry, &artifact.limits.input(), &mut decoded, &probe)?;
+    let decoded = AtomicU64::new(0);
+    let bytes = zip::read_entry(&artifact.bytes, entry, &artifact.limits.input(), &decoded, &probe)?;
     let report = crate::manifest::decode_manifest_entry(
         &bytes,
         &crate::manifest::XmlDecodeLimits::default(),
@@ -773,6 +864,11 @@ mod tests {
         OperationControl::new()
     }
 
+    /// A fresh engine runtime for tests (each call = its own account).
+    fn test_runtime() -> Arc<Runtime> {
+        Arc::new(Runtime::default())
+    }
+
     /// G02 bytes (static initial values), copied from the contract fixtures.
     fn g02_dex() -> Vec<u8> {
         std::fs::read(concat!(
@@ -792,7 +888,7 @@ mod tests {
             ("AndroidManifest.xml", b"<manifest/>".as_slice(), false),
         ]);
         let path = temp_apk("a07-refs", &zip);
-        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let query = query::string_query("Authorization", MatchMode::Literal, &Default::default())
             .unwrap();
         let report = references(&artifact, &query, &no_control()).unwrap();
@@ -816,7 +912,7 @@ mod tests {
     fn dexless_archives_split_success_and_notfound_by_operation() {
         let zip = build_zip(&[("AndroidManifest.xml", b"<manifest/>".as_slice(), false)]);
         let path = temp_apk("a07-dexless", &zip);
-        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let dex_rows = dexes(&artifact, &no_control()).unwrap();
         assert!(dex_rows.value().is_empty(), "dexes on a dex-less APK is an empty catalog");
         let query =
@@ -834,7 +930,7 @@ mod tests {
         let dex = g02_dex();
         let zip = build_zip(&[("classes.dex", &dex, true)]);
         let path = temp_apk("a07-g02", &zip);
-        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let selector = ClassSelector::Descriptor(
             ClassDescriptor::from_normalized("Lexample/Statics;".to_owned()).unwrap(),
             None,
@@ -856,7 +952,7 @@ mod tests {
         dex[8..32].fill(0);
         let zip = build_zip(&[("classes.dex", &dex, true)]);
         let path = temp_apk("a07-g03", &zip);
-        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let selector = ClassSelector::Descriptor(
             ClassDescriptor::from_normalized("Lexample/Statics;".to_owned()).unwrap(),
             None,
@@ -875,7 +971,7 @@ mod tests {
         let first = const_string_fixture(1);
         let zip = build_zip(&[("classes.dex", &first, true), ("classes2.dex", &first, true)]);
         let path = temp_apk("a07-dup-classes", &zip);
-        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let report = classes(&artifact, &ClassFilter::none(), &no_control()).unwrap();
         assert_eq!(report.value().len(), 2, "both definitions are listed");
         let ids: Vec<u32> = report.value().iter().map(|class| class.id().class_def_idx()).collect();
@@ -898,7 +994,7 @@ mod tests {
             ("classes.dex", &dex, true),
         ]);
         let path = temp_apk("a07-manifest", &zip);
-        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let report = manifest(&artifact, &no_control()).unwrap();
         let xml = report
             .value()
@@ -906,6 +1002,69 @@ mod tests {
             .unwrap();
         assert!(xml.contains("<manifest"), "rendered manifest: {xml}");
         fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn cross_engine_artifacts_are_rejected() {
+        let apk_path = {
+            let dex = const_string_fixture(1);
+            let zip = build_zip(&[("classes.dex", &dex, true)]);
+            temp_apk("a11-cross-engine", &zip)
+        };
+        let engine_a = Engine::new(EngineOptions::default()).unwrap();
+        let engine_b = Engine::new(EngineOptions::default()).unwrap();
+        let artifact = engine_a
+            .open_path(&apk_path, InputKind::Apk, &no_control())
+            .expect("open on engine A");
+        let query = query::string_query("Authorization", MatchMode::Literal, &Default::default())
+            .expect("query");
+        let error = match engine_b.references(&artifact, &query, &no_control()) {
+            Err(error) => error,
+            Ok(_) => panic!("foreign artifact must be rejected"),
+        };
+        assert!(matches!(error.kind(), ErrorKind::InvalidQuery));
+        // The owning engine still works.
+        assert!(engine_a.references(&artifact, &query, &no_control()).is_ok());
+        std::fs::remove_file(&apk_path).unwrap();
+    }
+
+    #[test]
+    fn engine_owned_bytes_account_tracks_and_releases() {
+        let runtime = test_runtime();
+        let dex = const_string_fixture(1);
+        let zip = build_zip(&[("classes.dex", &dex, true)]);
+        let limits = Limits {
+            max_input_bytes: u64::MAX,
+            max_engine_owned_bytes: 64,
+            ..Limits::default()
+        };
+        // 64-byte engine budget: opening the (larger) APK fails immediately.
+        let error = match open_bytes(
+            Arc::from(zip.clone().into_boxed_slice()),
+            &limits,
+            &runtime,
+            &no_control(),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("open must fail the engine-owned budget"),
+        };
+        assert!(matches!(error.kind(), ErrorKind::ResourceLimit));
+        assert_eq!(runtime.active_bytes.load(Ordering::Relaxed), 0, "nothing retained");
+        // A generous budget opens and retains; dropping releases.
+        let artifact = open_bytes(
+            Arc::from(zip.into_boxed_slice()),
+            &Limits::default(),
+            &runtime,
+            &no_control(),
+        )
+        .unwrap();
+        assert_eq!(
+            runtime.active_bytes.load(Ordering::Relaxed),
+            artifact.byte_len(),
+            "retained input bytes are accounted"
+        );
+        drop(artifact);
+        assert_eq!(runtime.active_bytes.load(Ordering::Relaxed), 0, "drop releases");
     }
 
     #[cfg(feature = "decompile")]
@@ -916,7 +1075,7 @@ mod tests {
         let second = const_string_fixture(2);
         let zip = build_zip(&[("classes.dex", &first, true), ("classes2.dex", &second, true)]);
         let path = temp_apk("a07-pin", &zip);
-        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let catalog = dexes(&artifact, &no_control()).unwrap();
         assert_eq!(catalog.value().len(), 2);
         let pinned = catalog.value()[1].id();
@@ -949,7 +1108,7 @@ mod tests {
         let good = const_string_fixture(1);
         let zip = build_zip(&[("app.dex", &good, true), ("classes.dex", &good, true)]);
         let path = temp_apk("a07-named", &zip);
-        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let query =
             query::string_query("Authorization", MatchMode::Literal, &Default::default()).unwrap();
         let report = references(&artifact, &query, &no_control()).unwrap();
@@ -967,7 +1126,7 @@ mod tests {
             ("classes2.dex", &good, true),
         ]);
         let path = temp_apk("a07-junk", &junk);
-        let artifact = open_path(&path, &Limits::default(), &no_control()).unwrap();
+        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
         let error = references(&artifact, &query, &no_control()).unwrap_err();
         assert_eq!(*error.kind(), ErrorKind::MalformedInput);
         fs::remove_file(&path).unwrap();
@@ -993,17 +1152,50 @@ pub struct EngineOptions {
     pub limits: Limits,
 }
 
+/// Shared engine runtime: serial top-level admission plus the engine-owned
+/// active-bytes account. Clones share one runtime (interfaces.md §2: the
+/// Engine is a cloneable handle over one private runtime).
+#[derive(Debug, Default)]
+pub(crate) struct Runtime {
+    /// Serial top-level admission: held for the duration of one operation.
+    /// Waiters poll with a bounded condvar timeout so a cancelled or
+    /// deadline-expired host never queues forever (interfaces.md §5).
+    admission: Mutex<()>,
+    /// Engine-owned active bytes (inputs + catalogs of artifacts opened
+    /// through this engine, dropped with the artifact).
+    active_bytes: AtomicU64,
+}
+
 /// A long-lived analysis engine: holds the runtime limits and hands out
-/// [`Artifact`] handles. Cloning shares one runtime (A11); today the engine
-/// is stateless beyond its options and every operation is sequential.
-#[derive(Clone, Debug, Default)]
+/// [`Artifact`] handles. Cloning shares one runtime and one admission.
+#[derive(Clone, Debug)]
 pub struct Engine {
     options: EngineOptions,
+    runtime: Arc<Runtime>,
 }
 
 impl Engine {
     pub fn new(options: EngineOptions) -> Result<Engine, Error> {
-        Ok(Engine { options })
+        Ok(Engine { options, runtime: Arc::new(Runtime::default()) })
+    }
+
+    /// Serial top-level admission (interfaces.md §5): a caller waits for the
+    /// admission lock with a bounded poll so its own cancel flag and deadline
+    /// are honored while queued. FIFO order is explicitly not promised.
+    fn admit(&self, control: &OperationControl) -> Result<Admission<'_>, Error> {
+        loop {
+            control.check()?;
+            match self.runtime.admission.try_lock() {
+                Ok(guard) => return Ok(Admission { _guard: guard }),
+                Err(TryLockError::WouldBlock) => {
+                    std::thread::sleep(Duration::from_millis(8));
+                }
+                Err(TryLockError::Poisoned(_)) => {
+                    return Err(Error::new(ErrorKind::MalformedInput)
+                        .with_context("engine runtime poisoned by a panic in another operation"));
+                }
+            }
+        }
     }
 
     /// Opens an APK archive or a raw DEX byte stream from the filesystem.
@@ -1014,8 +1206,12 @@ impl Engine {
         control: &OperationControl,
     ) -> Result<Artifact, Error> {
         match kind {
-            InputKind::Apk => open_path(path.as_ref(), &self.options.limits, control),
-            InputKind::Dex => open_dex_path(path.as_ref(), &self.options.limits, control),
+            InputKind::Apk => {
+                open_path(path.as_ref(), &self.options.limits, &self.runtime, control)
+            }
+            InputKind::Dex => {
+                open_dex_path(path.as_ref(), &self.options.limits, &self.runtime, control)
+            }
         }
     }
 
@@ -1027,9 +1223,18 @@ impl Engine {
         control: &OperationControl,
     ) -> Result<Artifact, Error> {
         match kind {
-            InputKind::Apk => open_bytes(bytes, control),
-            InputKind::Dex => open_dex_bytes(bytes, control),
+            InputKind::Apk => open_bytes(bytes, &self.options.limits, &self.runtime, control),
+            InputKind::Dex => open_dex_bytes(bytes, &self.runtime, control),
         }
+    }
+
+    fn check_ownership(&self, artifact: &Artifact) -> Result<(), Error> {
+        if !Arc::ptr_eq(&self.runtime, &artifact.runtime) {
+            return Err(Error::invalid_query(
+                "this artifact belongs to a different engine; reopen it with the same engine",
+            ));
+        }
+        Ok(())
     }
 
     pub fn dexes(
@@ -1037,6 +1242,8 @@ impl Engine {
         artifact: &Artifact,
         control: &OperationControl,
     ) -> Result<Report<Vec<DexEntry>>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
         dexes(artifact, control)
     }
 
@@ -1046,6 +1253,8 @@ impl Engine {
         filter: &ClassFilter,
         control: &OperationControl,
     ) -> Result<Report<Vec<Class>>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
         classes(artifact, filter, control)
     }
 
@@ -1055,6 +1264,8 @@ impl Engine {
         query: &crate::model::ReferenceQuery,
         control: &OperationControl,
     ) -> Result<Report<Vec<crate::model::Reference>>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
         references(artifact, query, control)
     }
 
@@ -1065,6 +1276,8 @@ impl Engine {
         selector: &ClassSelector,
         control: &OperationControl,
     ) -> Result<Report<Source>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
         decompile(artifact, selector, control)
     }
 
@@ -1074,6 +1287,8 @@ impl Engine {
         artifact: &Artifact,
         control: &OperationControl,
     ) -> Result<Report<crate::manifest::Manifest>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
         manifest(artifact, control)
     }
 }
@@ -1082,6 +1297,7 @@ impl Engine {
 fn open_dex_path(
     path: &Path,
     limits: &Limits,
+    runtime: &Arc<Runtime>,
     control: &OperationControl,
 ) -> Result<Artifact, Error> {
     let mut file =
@@ -1111,21 +1327,28 @@ fn open_dex_path(
         }
         bytes.extend_from_slice(&buffer[..read]);
     }
-    open_dex_bytes(Arc::from(bytes.into_boxed_slice()), control)
+    open_dex_bytes(Arc::from(bytes.into_boxed_slice()), runtime, control)
 }
 
 /// Opens an owned raw DEX byte stream: entry ordinal 0, display name
 /// `<memory.dex>` (interfaces.md §1).
-fn open_dex_bytes(bytes: Arc<[u8]>, control: &OperationControl) -> Result<Artifact, Error> {
+fn open_dex_bytes(
+    bytes: Arc<[u8]>,
+    runtime: &Arc<Runtime>,
+    control: &OperationControl,
+) -> Result<Artifact, Error> {
     let _ = control;
     let id = ArtifactId::from_digest(crate::bytes::sha256(&bytes));
     let roots = vec![Root { ordinal: 0, raw_name: b"<memory.dex>".to_vec(), source: RootSource::Raw }];
-    Ok(Artifact {
+    let artifact = Artifact {
         id,
         bytes,
         catalog: None,
         roots,
+        runtime: Arc::clone(runtime),
         open_diagnostics: Vec::new(),
         limits: Limits::default(),
-    })
+    };
+    runtime.active_bytes.fetch_add(artifact.byte_len(), Ordering::Relaxed);
+    Ok(artifact)
 }

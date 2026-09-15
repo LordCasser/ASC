@@ -25,6 +25,7 @@
 #![allow(dead_code)]
 
 use crate::bytes::{read_u16, read_u32, Checkpoints, ControlProbe, CHECKPOINT_SPACING};
+use std::sync::atomic::{AtomicU64, Ordering};
 use crate::error::{Error, ErrorKind};
 use anyhow::{Context, Result, bail};
 use libdeflater::{DecompressionError, Decompressor};
@@ -341,7 +342,7 @@ pub(crate) fn read_entry(
     data: &[u8],
     entry: &ArchiveEntry,
     limits: &InputLimits,
-    decoded_bytes: &mut u64,
+    decoded_bytes: &AtomicU64,
     control: &ControlProbe<'_>,
 ) -> Result<Vec<u8>, Error> {
     control.check()?;
@@ -447,12 +448,12 @@ pub(crate) fn read_entry(
     };
 
     let produced = output.len() as u64;
-    *decoded_bytes = decoded_bytes.saturating_add(produced);
-    if *decoded_bytes > limits.max_total_decoded_bytes {
+    let decoded_now = decoded_bytes.fetch_add(produced, Ordering::Relaxed) + produced;
+    if decoded_now > limits.max_total_decoded_bytes {
         return Err(Error::resource_limit(format!(
-            "decoded bytes reach {} across entries, above the {} per-operation limit \
+            "decoded bytes reach {decoded_now} across entries, above the {} per-operation limit \
              (while reading {name})",
-            *decoded_bytes, limits.max_total_decoded_bytes
+            limits.max_total_decoded_bytes
         )));
     }
 

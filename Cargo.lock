@@ -111,6 +111,7 @@ dependencies = [
  "libdeflater",
  "memchr",
  "quick-xml",
+ "rayon",
 ]
 
 [[package]]

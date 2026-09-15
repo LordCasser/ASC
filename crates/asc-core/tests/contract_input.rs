@@ -25,6 +25,7 @@ mod container;
 
 use bytes::ControlProbe;
 use container::{backend_scratch, validate_dex_entry};
+use std::sync::atomic::AtomicU64;
 use error::{CancelCause, ErrorKind};
 use model::{ArtifactId, DiagnosticCode, Severity, Stage};
 use std::fs;
@@ -856,12 +857,12 @@ fn open_apk(
     let selection = select_root_dexes(&catalog);
     let artifact = artifact_of(apk);
     let control = never_cancel();
-    let mut decoded_total = 0u64;
+    let decoded_total = AtomicU64::new(0);
     let mut entries = Vec::new();
     let mut diagnostics = Vec::new();
     for entry in &selection.selected {
         let bytes =
-            read_entry(apk, entry, &InputLimits::DEFAULT, &mut decoded_total, &control)
+            read_entry(apk, entry, &InputLimits::DEFAULT, &decoded_total, &control)
                 .unwrap_or_else(|error| panic!("read {}: {error}", entry.display()));
         let (views, entry_diagnostics) =
             validate_dex_entry(artifact, entry.ordinal, &entry.raw_name, &bytes, &control)
@@ -965,11 +966,11 @@ fn in02_decodes_stored_deflate_empty_streams_and_both_descriptor_spellings() {
     let apk = read_input("in02-entry-decoding-matrix.apk");
     let catalog = parse_catalog(&apk, &InputLimits::DEFAULT).unwrap();
     let control = never_cancel();
-    let mut decoded_total = 0u64;
+    let decoded_total = AtomicU64::new(0);
     let base_dex = support::dex::make_dex();
     for entry in &catalog.entries {
         let bytes =
-            read_entry(&apk, entry, &InputLimits::DEFAULT, &mut decoded_total, &control)
+            read_entry(&apk, entry, &InputLimits::DEFAULT, &decoded_total, &control)
                 .unwrap_or_else(|error| panic!("read {}: {error}", entry.display()));
         let expected: &[u8] = if entry.raw_name.starts_with(b"classes") {
             &base_dex
@@ -988,11 +989,11 @@ fn in02_decodes_stored_deflate_empty_streams_and_both_descriptor_spellings() {
 #[test]
 fn in02_local_header_disagreements_are_rejected() {
     let base_dex = support::dex::make_dex();
-    let mut total = 0u64;
+    let total = AtomicU64::new(0);
 
-    let mut read_first = |apk: &[u8]| {
+    let read_first = |apk: &[u8]| {
         let catalog = parse_catalog(apk, &InputLimits::DEFAULT).unwrap();
-        read_entry(apk, &catalog.entries[0], &InputLimits::DEFAULT, &mut total, &never_cancel())
+        read_entry(apk, &catalog.entries[0], &InputLimits::DEFAULT, &total, &never_cancel())
             .unwrap_err()
     };
 
@@ -1068,12 +1069,12 @@ fn in02_selected_entry_crc_mismatch_fails_with_entry_and_offset() {
     assert_eq!(catalog.entries.len(), 2);
     let selection = select_root_dexes(&catalog);
     assert_eq!(selection.selected.len(), 1, "only the DEX entry is selected");
-    let mut total = 0u64;
+    let total = AtomicU64::new(0);
     let error = read_entry(
         &apk,
         selection.selected[0],
         &InputLimits::DEFAULT,
-        &mut total,
+        &total,
         &never_cancel(),
     )
     .unwrap_err();
@@ -1086,9 +1087,9 @@ fn in02_selected_entry_crc_mismatch_fails_with_entry_and_offset() {
 fn in02_actual_size_and_trailing_stream_are_rejected() {
     let base_dex = support::dex::make_dex();
     let control = never_cancel();
-    let mut total = 0u64;
+    let total = AtomicU64::new(0);
 
-    let read_first = |apk: &[u8], total: &mut u64| {
+    let read_first = |apk: &[u8], total: &AtomicU64| {
         let catalog = parse_catalog(apk, &InputLimits::DEFAULT).unwrap();
         read_entry(apk, &catalog.entries[0], &InputLimits::DEFAULT, total, &control)
             .unwrap_err()
@@ -1098,7 +1099,7 @@ fn in02_actual_size_and_trailing_stream_are_rejected() {
     let mut apk = build_contract_zip(&[EntrySpec::deflated("classes.dex", &base_dex)]);
     let at = cd_record(&apk, 0) + CD_UNCOMPRESSED;
     write_u32(&mut apk, at, base_dex.len() as u32 + 64);
-    let error = read_first(&apk, &mut total);
+    let error = read_first(&apk, &total);
     assert!(error.to_string().contains("decoded"), "{error}");
 
     // Declared uncompressed size below the actual decoded bytes (decoded
@@ -1106,14 +1107,14 @@ fn in02_actual_size_and_trailing_stream_are_rejected() {
     let mut apk = build_contract_zip(&[EntrySpec::deflated("classes.dex", &base_dex)]);
     let at = cd_record(&apk, 0) + CD_UNCOMPRESSED;
     write_u32(&mut apk, at, 64);
-    let error = read_first(&apk, &mut total);
+    let error = read_first(&apk, &total);
     assert!(error.to_string().contains("exceed the declared"), "{error}");
 
     // Stored entry whose sizes disagree.
     let mut apk = build_contract_zip(&[EntrySpec::stored("classes.dex", &base_dex)]);
     let at = cd_record(&apk, 0) + CD_COMPRESSED;
     write_u32(&mut apk, at, 3);
-    let error = read_first(&apk, &mut total);
+    let error = read_first(&apk, &total);
     assert!(error.to_string().contains("stored sizes disagree"), "{error}");
 
     // Junk compressed bytes after the deflate stream end, inside the declared
@@ -1131,7 +1132,7 @@ fn in02_actual_size_and_trailing_stream_are_rejected() {
     write_u32(&mut apk, local + 14, crc32(&base_dex));
     write_u32(&mut apk, local + 18, stream.len() as u32);
     write_u32(&mut apk, local + 22, base_dex.len() as u32);
-    let error = read_first(&apk, &mut total);
+    let error = read_first(&apk, &total);
     assert!(error.to_string().contains("follow the end"), "{error}");
 
     // Truncated deflate stream.
@@ -1148,7 +1149,7 @@ fn in02_actual_size_and_trailing_stream_are_rejected() {
     write_u32(&mut apk, local + 14, crc32(&base_dex));
     write_u32(&mut apk, local + 18, stream.len() as u32);
     write_u32(&mut apk, local + 22, base_dex.len() as u32);
-    let error = read_first(&apk, &mut total);
+    let error = read_first(&apk, &total);
     assert!(error.to_string().contains("truncated") || error.to_string().contains("declared"), "{error}");
 }
 
@@ -1156,14 +1157,14 @@ fn in02_actual_size_and_trailing_stream_are_rejected() {
 fn in02_descriptor_values_must_match_the_actual_stream() {
     let base_dex = support::dex::make_dex();
     let control = never_cancel();
-    let mut total = 0u64;
+    let total = AtomicU64::new(0);
 
     for spelling in [Descriptor::WithSignature, Descriptor::WithoutSignature] {
         let deflate = spelling == Descriptor::WithSignature;
         let apk = build_contract_zip(&[EntrySpec::streamed("classes.dex", &base_dex, deflate, !deflate)]);
         let catalog = parse_catalog(&apk, &InputLimits::DEFAULT).unwrap();
         let bytes =
-            read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &mut total, &control)
+            read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &total, &control)
                 .unwrap_or_else(|error| panic!("{spelling:?}: {error}"));
         assert_eq!(bytes, base_dex);
     }
@@ -1180,7 +1181,7 @@ fn in02_descriptor_values_must_match_the_actual_stream() {
     write_u32(&mut apk, descriptor_at + 8, 1); // wrong uncompressed size
     let catalog = parse_catalog(&apk, &InputLimits::DEFAULT).unwrap();
     let error =
-        read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &mut total, &control)
+        read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &total, &control)
             .unwrap_err();
     assert!(error.to_string().contains("data descriptor"), "{error}");
 
@@ -1206,7 +1207,7 @@ fn in02_descriptor_values_must_match_the_actual_stream() {
     }
     let catalog = parse_catalog(&apk, &InputLimits::DEFAULT).unwrap();
     let error =
-        read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &mut total, &control)
+        read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &total, &control)
             .unwrap_err();
     assert!(error.to_string().contains("descriptor"), "{error}");
 }
@@ -1215,7 +1216,7 @@ fn in02_descriptor_values_must_match_the_actual_stream() {
 fn in02_zip64_encryption_multivolume_and_unknown_methods_are_unsupported() {
     let base_dex = support::dex::make_dex();
     let control = never_cancel();
-    let mut total = 0u64;
+    let total = AtomicU64::new(0);
 
     // 0xFFFF entry-count placeholder.
     let mut apk = build_contract_zip(&[EntrySpec::stored("classes.dex", &base_dex)]);
@@ -1281,7 +1282,7 @@ fn in02_zip64_encryption_multivolume_and_unknown_methods_are_unsupported() {
     write_u16(&mut apk, local_at, 99);
     let catalog = parse_catalog(&apk, &InputLimits::DEFAULT).unwrap();
     let error =
-        read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &mut total, &control)
+        read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &total, &control)
             .unwrap_err();
     assert_kind(&error, &ErrorKind::UnsupportedFormat, "method 99");
 }
@@ -1304,9 +1305,9 @@ fn in02_resource_limits_are_enforced_with_actual_usage() {
     let small_entry = InputLimits { max_entry_bytes: 16, ..InputLimits::DEFAULT };
     let apk = build_contract_zip(&[EntrySpec::stored("classes.dex", &base_dex)]);
     let catalog = parse_catalog(&apk, &InputLimits::DEFAULT).unwrap();
-    let mut total = 0u64;
+    let total = AtomicU64::new(0);
     let error =
-        read_entry(&apk, &catalog.entries[0], &small_entry, &mut total, &control).unwrap_err();
+        read_entry(&apk, &catalog.entries[0], &small_entry, &total, &control).unwrap_err();
     assert_kind(&error, &ErrorKind::ResourceLimit, "above the 16 single-entry limit");
 
     // Accumulated decoded bytes across entries over a small override.
@@ -1319,9 +1320,9 @@ fn in02_resource_limits_are_enforced_with_actual_usage() {
         EntrySpec::stored("classes2.dex", &base_dex),
     ]);
     let catalog = parse_catalog(&apk, &InputLimits::DEFAULT).unwrap();
-    let mut total = 0u64;
-    read_entry(&apk, &catalog.entries[0], &small_total, &mut total, &control).unwrap();
-    let error = read_entry(&apk, &catalog.entries[1], &small_total, &mut total, &control).unwrap_err();
+    let total = AtomicU64::new(0);
+    read_entry(&apk, &catalog.entries[0], &small_total, &total, &control).unwrap();
+    let error = read_entry(&apk, &catalog.entries[1], &small_total, &total, &control).unwrap_err();
     assert!(error.to_string().contains("across entries"), "{error}");
 }
 
@@ -1330,13 +1331,13 @@ fn in02_read_paths_observe_cancellation_and_deadlines() {
     let base_dex = support::dex::make_dex();
     let apk = build_contract_zip(&[EntrySpec::stored("classes.dex", &base_dex)]);
     let catalog = parse_catalog(&apk, &InputLimits::DEFAULT).unwrap();
-    let mut total = 0u64;
+    let total = AtomicU64::new(0);
 
     // User cancellation is visible before any work.
     let cancelled = AtomicBool::new(true);
     let probe = ControlProbe { cancelled: &cancelled, deadline: None };
     let error =
-        read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &mut total, &probe)
+        read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &total, &probe)
             .unwrap_err();
     assert!(matches!(error.kind(), ErrorKind::Cancelled { cause: CancelCause::User }));
 
@@ -1345,7 +1346,7 @@ fn in02_read_paths_observe_cancellation_and_deadlines() {
     let probe =
         ControlProbe { cancelled: &flag, deadline: Some(Instant::now() - Duration::from_millis(1)) };
     let error =
-        read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &mut total, &probe)
+        read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &total, &probe)
             .unwrap_err();
     assert!(matches!(error.kind(), ErrorKind::Cancelled { cause: CancelCause::Deadline }));
 
@@ -1361,8 +1362,8 @@ fn in02_read_paths_observe_cancellation_and_deadlines() {
             std::thread::sleep(Duration::from_millis(1));
             flag.store(true, Ordering::Relaxed);
         });
-        let mut total = 0u64;
-        read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &mut total, &probe)
+        let total = AtomicU64::new(0);
+        read_entry(&apk, &catalog.entries[0], &InputLimits::DEFAULT, &total, &probe)
     });
     assert!(
         matches!(result.unwrap_err().kind(), ErrorKind::Cancelled { cause: CancelCause::User }),
@@ -1519,11 +1520,11 @@ fn in03_compactdex_odex_and_unknown_versions_are_unsupported() {
         let apk = read_input(input);
         let catalog = parse_catalog(&apk, &InputLimits::DEFAULT).unwrap();
         let control = never_cancel();
-        let mut total = 0u64;
+        let total = AtomicU64::new(0);
         let mut checked = 0;
         for entry in &catalog.entries {
             let bytes =
-                read_entry(&apk, entry, &InputLimits::DEFAULT, &mut total, &control).unwrap();
+                read_entry(&apk, entry, &InputLimits::DEFAULT, &total, &control).unwrap();
             let error = validate_dex_entry(
                 artifact_of(&apk),
                 entry.ordinal,
@@ -1544,11 +1545,11 @@ fn in03_broken_containers_are_structural_errors_without_fallback() {
     let apk = read_input("in03-bad-container-rejected.apk");
     let catalog = parse_catalog(&apk, &InputLimits::DEFAULT).unwrap();
     let control = never_cancel();
-    let mut total = 0u64;
+    let total = AtomicU64::new(0);
     let mut failures = 0;
     for entry in &catalog.entries {
         let bytes =
-            read_entry(&apk, entry, &InputLimits::DEFAULT, &mut total, &control).unwrap();
+            read_entry(&apk, entry, &InputLimits::DEFAULT, &total, &control).unwrap();
         let error = validate_dex_entry(
             artifact_of(&apk),
             entry.ordinal,
@@ -1635,9 +1636,9 @@ fn in04_structural_failures_are_errors_not_warnings() {
     let apk = build_contract_zip(&[EntrySpec::stored("classes.dex", &dex)]);
     let catalog = parse_catalog(&apk, &InputLimits::DEFAULT).unwrap();
     let selection = select_root_dexes(&catalog);
-    let mut total = 0u64;
+    let total = AtomicU64::new(0);
     let bytes =
-        read_entry(&apk, selection.selected[0], &InputLimits::DEFAULT, &mut total, &never_cancel())
+        read_entry(&apk, selection.selected[0], &InputLimits::DEFAULT, &total, &never_cancel())
             .unwrap();
     let error = validate_dex_entry(
         artifact_of(&apk),
@@ -1731,11 +1732,11 @@ fn manifest_a02_cases_agree_with_the_committed_facts() {
             let catalog = catalog.unwrap_or_else(|error| panic!("{case_id}: {error}"));
             let selection = select_root_dexes(&catalog);
             let artifact = artifact_of(&bytes);
-            let mut total = 0u64;
+            let total = AtomicU64::new(0);
             let mut diagnostics = Vec::new();
             let mut rows = Vec::new();
             for entry in &selection.selected {
-                let decoded = read_entry(&bytes, entry, &InputLimits::DEFAULT, &mut total, &control)
+                let decoded = read_entry(&bytes, entry, &InputLimits::DEFAULT, &total, &control)
                     .unwrap_or_else(|error| panic!("{case_id}: {error}"));
                 let (views, entry_diags) = validate_dex_entry(
                     artifact,
@@ -1829,9 +1830,9 @@ fn selected_pipeline_fails(
     control: &ControlProbe<'_>,
 ) -> bool {
     let artifact = artifact_of(apk);
-    let mut total = 0u64;
+    let total = AtomicU64::new(0);
     for entry in &selection.selected {
-        let failure = match read_entry(apk, entry, &InputLimits::DEFAULT, &mut total, control) {
+        let failure = match read_entry(apk, entry, &InputLimits::DEFAULT, &total, control) {
             Err(error) => Some(error.kind().clone()),
             Ok(bytes) => validate_dex_entry(
                 artifact,
@@ -1883,10 +1884,10 @@ fn regenerate_fixture_inputs_when_explicitly_requested() {
         let selection = select_root_dexes(&catalog);
         let artifact = artifact_of(&bytes);
         let control = never_cancel();
-        let mut total = 0u64;
+        let total = AtomicU64::new(0);
         let mut diagnostics = Vec::new();
         for entry in &selection.selected {
-            let decoded = match read_entry(&bytes, entry, &InputLimits::DEFAULT, &mut total, &control)
+            let decoded = match read_entry(&bytes, entry, &InputLimits::DEFAULT, &total, &control)
             {
                 Ok(decoded) => decoded,
                 Err(error) => {

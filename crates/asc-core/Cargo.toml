@@ -18,6 +18,7 @@ flate2 = { version = "1", default-features = false, features = ["zlib"] }
 libdeflater = "1.26"
 fancy-regex = "0.19"
 memchr = "2.7"
+rayon = "1.12"
 quick-xml = { version = "0.42.0", default-features = false }
 
 [features]
