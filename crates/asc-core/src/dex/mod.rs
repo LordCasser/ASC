@@ -1685,6 +1685,30 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn typed_instruction_provider_exposes_const_string_and_registers() {
+        let data = const_string_fixture(1);
+        let view = structured_view(&data);
+        let facts = list_instructions(&view, &ScanLimits::DEFAULT, None).unwrap();
+        assert_eq!(facts.len(), 2, "const-string plus return-void");
+        let first = &facts[0];
+        assert_eq!(first.method().method_idx(), 0);
+        assert_eq!(first.pc(), 0);
+        assert_eq!(first.opcode(), 0x1a);
+        assert_eq!(first.reads(), &[] as &[u16]);
+        assert_eq!(first.writes(), &[0]);
+        assert_eq!(
+            first.reference(),
+            Some(InstructionReference::String { index: 0 })
+        );
+        assert_eq!(
+            first.constant(),
+            Some(InstructionConstant::String { index: 0 })
+        );
+        assert!(facts[1].reads().is_empty());
+        assert!(facts[1].writes().is_empty());
+    }
+
+    #[test]
     fn structured_scan_honors_cancellation_and_deadline() {
         let data = const_string_fixture(3);
         let view = structured_view(&data);
