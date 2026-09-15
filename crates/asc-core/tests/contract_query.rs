@@ -350,7 +350,7 @@ fn golden_reference_dto_bytes_are_frozen() {
     let mut writer = dto::Writer::new();
     dto::write_reference(&mut writer, &reference);
     let json = writer.finish();
-    let expected = std::fs::read_to_string("schemas/goldens/reference.json").expect("golden file");
+    let expected = std::fs::read_to_string("../../schemas/goldens/reference.json").expect("golden file");
     assert_eq!(json, expected.trim_end());
 }
 
@@ -374,13 +374,13 @@ fn golden_envelope_and_error_dto_bytes_are_frozen() {
     });
     // stats never appear in the payload; key order is fixed.
     assert!(!json.contains("stats"));
-    let expected = std::fs::read_to_string("schemas/goldens/envelope-findrefs.json").expect("golden file");
+    let expected = std::fs::read_to_string("../../schemas/goldens/envelope-findrefs.json").expect("golden file");
     assert_eq!(json, expected.trim_end());
 
     let error = error::Error::new(ErrorKind::IncompleteDecompilation)
         .with_context("method Lbroken;->hard failed to convert");
     let error_json = dto::write_error(&error);
-    let error_expected = std::fs::read_to_string("schemas/goldens/error.json").expect("golden file");
+    let error_expected = std::fs::read_to_string("../../schemas/goldens/error.json").expect("golden file");
     assert_eq!(error_json, error_expected.trim_end());
 }
 
@@ -412,7 +412,7 @@ fn golden_dex_text_and_class_dto_bytes_are_frozen() {
     assert_eq!(class.simple_name().as_str().as_deref(), Some("Main$Inner"));
     let mut writer = dto::Writer::new();
     dto::write_class(&mut writer, &class);
-    let expected = std::fs::read_to_string("schemas/goldens/class.json").expect("golden file");
+    let expected = std::fs::read_to_string("../../schemas/goldens/class.json").expect("golden file");
     assert_eq!(writer.finish(), expected.trim_end());
 }
 
@@ -580,7 +580,7 @@ fn golden_source_metadata_dto_bytes_are_frozen() {
     dto::write_source_metadata(&mut writer, &sample_source_metadata());
     let json = writer.finish();
     let expected =
-        std::fs::read_to_string("schemas/goldens/source-metadata.json").expect("golden file");
+        std::fs::read_to_string("../../schemas/goldens/source-metadata.json").expect("golden file");
     assert_eq!(json, expected.trim_end());
 }
 

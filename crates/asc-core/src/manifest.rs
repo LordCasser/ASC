@@ -14,11 +14,8 @@
 //! never change text; illegal XML characters and names are errors, never
 //! silent replacements; output length is bounded.
 
-use crate::error::{CancelCause, Error, ErrorKind};
+use crate::error::{Error, ErrorKind};
 use crate::model::{Diagnostic, DiagnosticCode, DexText, Report, Severity, Stage};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
 const ANDROID_RES_URI: &str = "http://schemas.android.com/apk/res/android";
 const CANONICAL_ANDROID_PREFIX: &str = "android";
@@ -68,56 +65,9 @@ impl Default for XmlRenderOptions {
 /// shared shape); it already carries the contract that matters here: checks
 /// are cooperative, cancellation maps to `Cancelled` with a cause, and
 /// nothing installs signal handlers or spawns threads.
-#[derive(Clone, Default)]
-pub struct OperationControl {
-    cancel: Option<Arc<AtomicBool>>,
-    deadline: Option<Instant>,
-}
-
-impl OperationControl {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    // The builder methods are part of the frozen control shape; the engine
-    // integration (A07/A10) is their first caller.
-    #[allow(dead_code)]
-    pub fn with_cancel_flag(mut self, flag: Arc<AtomicBool>) -> Self {
-        self.cancel = Some(flag);
-        self
-    }
-
-    /// The host cancel flag, when one was installed.
-    pub(crate) fn cancel_flag(&self) -> Option<Arc<AtomicBool>> {
-        self.cancel.clone()
-    }
-
-    /// The absolute deadline, when one was set.
-    pub(crate) fn deadline(&self) -> Option<std::time::Instant> {
-        self.deadline
-    }
-
-    #[allow(dead_code)]
-    pub fn with_deadline(mut self, deadline: Instant) -> Self {
-        self.deadline = Some(deadline);
-        self
-    }
-
-    /// One cooperative checkpoint; called by the decoders and the writer.
-    pub fn check(&self) -> Result<(), Error> {
-        if let Some(deadline) = self.deadline
-            && Instant::now() >= deadline
-        {
-            return Err(Error::new(ErrorKind::Cancelled { cause: CancelCause::Deadline })
-                .with_context("manifest operation passed its deadline"));
-        }
-        if self.cancel.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-            return Err(Error::new(ErrorKind::Cancelled { cause: CancelCause::User })
-                .with_context("manifest operation was cancelled"));
-        }
-        Ok(())
-    }
-}
+// OperationControl lives in bytes.rs (ungated); re-exported here for the
+// manifest API surface.
+pub use crate::bytes::OperationControl;
 
 // ---------------------------------------------------------------------------
 // Domain model
@@ -1594,7 +1544,7 @@ fn is_name_char(character: char) -> bool {
 /// nodes, attributes with namespace decomposition, namespace scope events,
 /// typed raw values and the string-style metadata. Fixed key order; the
 /// document is the same object `to_xml` renders.
-pub(crate) fn write_document_dto(w: &mut crate::model::dto::Writer, manifest: &Manifest) {
+pub fn write_document_dto(w: &mut crate::model::dto::Writer, manifest: &Manifest) {
     w.begin_object();
     w.key("declaration");
     match manifest.declaration() {

@@ -7,10 +7,11 @@
 //! token is checked at least every 64 KiB of output. Nothing buffers the
 //! payload unbounded and checks afterwards.
 
-use crate::error::Error;
-use crate::manifest::{Manifest, OperationControl, XmlRenderOptions};
-use crate::model::dto::{self, Writer};
-use crate::model::{ArtifactId, Class, Diagnostic, Reference, Source, TargetMatch};
+use asc_core::error::Error;
+use asc_core::manifest::{Manifest, XmlRenderOptions};
+use asc_core::bytes::OperationControl;
+use asc_core::model::dto::{self, Writer};
+use asc_core::model::{Class, Diagnostic, Reference, TargetMatch};
 
 /// The text-mode column separator; column content escapes every literal `|`.
 const SEP: &str = " | ";
@@ -21,7 +22,7 @@ const CHECK_INTERVAL: usize = 64 * 1024;
 pub(crate) enum CommandData<'a> {
     Findrefs(&'a [Reference]),
     Classes(&'a [Class]),
-    Getclass(&'a Source),
+    Getclass(&'a asc_core::model::Source),
     Manifest(&'a Manifest),
 }
 
@@ -46,7 +47,7 @@ pub(crate) fn text(
 /// Renders the payload as one JSON envelope object plus a single trailing LF.
 pub(crate) fn json(
     operation: &str,
-    artifact_id: &ArtifactId,
+    artifact_id: &asc_core::model::ArtifactId,
     diagnostics: &[Diagnostic],
     data: &CommandData<'_>,
     budget: usize,
@@ -95,7 +96,7 @@ pub(crate) fn json(
                 w.key("xml");
                 w.string(&xml);
                 w.key("document");
-                crate::manifest::write_document_dto(w, manifest);
+                asc_core::manifest::write_document_dto(w, manifest);
                 w.end_object();
                 control.check()?;
             }
@@ -249,7 +250,7 @@ fn classes_text(
     Ok(out.out)
 }
 
-fn push_prototype_text(line: &mut String, prototype: &crate::model::Prototype) {
+fn push_prototype_text(line: &mut String, prototype: &asc_core::model::Prototype) {
     line.push('(');
     for parameter in prototype.parameters() {
         push_escaped_units(line, parameter.utf16_units());
@@ -365,7 +366,7 @@ mod tests {
     #[test]
     fn bounded_copy_refuses_to_exceed_the_budget() {
         let error = copy_bounded("0123456789", 4, &control()).unwrap_err();
-        assert_eq!(*error.kind(), crate::error::ErrorKind::ResourceLimit);
+        assert_eq!(*error.kind(), asc_core::error::ErrorKind::ResourceLimit);
         assert_eq!(copy_bounded("ok", 16, &control()).unwrap(), "ok");
         // Multi-byte characters are never split mid-UTF-8.
         assert_eq!(copy_bounded("中文中", 12, &control()).unwrap(), "中文中");

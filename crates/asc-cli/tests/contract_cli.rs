@@ -17,7 +17,7 @@ fn bin() -> &'static str {
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/contracts/inputs")
+        .join("../../tests/fixtures/contracts/inputs")
         .join(name)
 }
 
@@ -409,7 +409,12 @@ fn atomic_replacement_leaves_no_temporary_files_behind() {
     let leftovers: Vec<_> = fs::read_dir(&parent)
         .unwrap()
         .filter_map(Result::ok)
-        .filter(|entry| entry.file_name().to_string_lossy().contains(".rasc-"))
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // temp files carry the `.rasc-<pid>-<hex>.tmp` suffix; a renamed
+            // output file may legitimately contain ".rasc-" in its name.
+            name.contains(".rasc-") && name.ends_with(".tmp")
+        })
         .collect();
     assert!(leftovers.is_empty(), "temporary files leaked: {leftovers:?}");
     let _ = fs::remove_file(&out);

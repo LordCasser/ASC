@@ -122,6 +122,17 @@ pub struct FindRefsArgs {
     pub kind: FindKind,
 }
 
+impl FindKind {
+    /// Whether this kind's value/member pattern was flagged .
+    pub fn regex_mode(&self) -> bool {
+        match self {
+            FindKind::String(q) | FindKind::Type(q) => q.regex,
+            FindKind::Method(q) | FindKind::Field(q) => q.regex,
+        }
+    }
+
+}
+
 impl FindRefsArgs {
     /// The common options given after the query kind.
     pub fn kind_common(&self) -> &CommonArgs {
@@ -342,7 +353,7 @@ pub struct EffectiveLimits {
     pub max_string_units: usize,
     pub max_table_items: usize,
     pub max_result_bytes: usize,
-    pub pattern: crate::model::PatternLimits,
+    pub pattern: asc_core::model::PatternLimits,
 }
 
 impl EffectiveLimits {
@@ -358,7 +369,7 @@ impl EffectiveLimits {
             max_string_units: 1_048_576,
             max_table_items: 4_000_000,
             max_result_bytes: 128 * 1024 * 1024,
-            pattern: crate::model::PatternLimits::DEFAULT,
+            pattern: asc_core::model::PatternLimits::DEFAULT,
         };
         for limit in limits {
             let value = usize::try_from(limit.value).unwrap_or(usize::MAX);

@@ -35,7 +35,7 @@ use support::sha;
 use zip::{display_name, parse_catalog, read_entry, select_root_dexes, InputLimits};
 
 fn contracts_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("contracts")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/contracts")
 }
 
 fn input_path(name: &str) -> PathBuf {

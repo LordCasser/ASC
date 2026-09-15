@@ -1,36 +1,20 @@
-[package]
-name = "rasc"
-version = "0.1.0"
+[workspace]
+resolver = "2"
+members = [
+    "crates/asc-core",
+    "crates/asc-cli",
+    "vendor/droidsaw-dex",
+    "vendor/axmldecoder",
+]
+default-members = ["crates/asc-core", "crates/asc-cli"]
+
+[workspace.package]
 edition = "2024"
 rust-version = "1.93"
-description = "Native Rust CLI for APK and DEX analysis"
 license = "Apache-2.0"
-
-[dependencies]
-anyhow = "1.0"
-axmldecoder = "0.5"
-clap = { version = "4.6", features = ["derive"] }
-flate2 = { version = "1", default-features = false, features = ["zlib"] }
-droidsaw-dex = "2.0.0"
-libdeflater = "1.26"
-memchr = "2.7"
-memmap2 = "0.9"
-rayon = "1.12"
-fancy-regex = "0.19"
-quick-xml = { version = "0.42.0", default-features = false }
-
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
 
 [profile.release]
 lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
-
-# axmldecoder 0.5.0 panics on manifests whose string pool uses the extended length
-# forms, which real APKs do. The vendored copy implements them; see
-# vendor/axmldecoder/PATCHES.md.
-[patch.crates-io]
-axmldecoder = { path = "vendor/axmldecoder" }
-droidsaw-dex = { path = "vendor/droidsaw-dex" }

@@ -165,7 +165,7 @@ pub(crate) fn parse(data: &[u8], limits: &DecodeLimits) -> Result<Document, Pars
             let map_header_size = u16_at(data, pos + 2)?;
             let map_size = u32_at(data, pos + 4)? as usize;
             let header = usize::from(map_header_size);
-            if header < 8 || map_size < header || (map_size - header) % 4 != 0 {
+            if header < 8 || map_size < header || !(map_size - header).is_multiple_of(4) {
                 return Err(ParseError::Malformed(format!(
                     "resource map chunk at {pos} is malformed: header_size={map_header_size}, size={map_size}"
                 )));

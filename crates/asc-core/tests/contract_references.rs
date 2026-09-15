@@ -13,7 +13,7 @@
 
 mod support;
 
-#[path = "fixtures/contracts/references/mod.rs"]
+#[path = "../../../tests/fixtures/contracts/references/mod.rs"]
 mod reference_fixtures;
 
 #[path = "../src/bytes.rs"]
@@ -50,7 +50,7 @@ use support::sha;
 // ---------------------------------------------------------------------------
 
 fn contracts_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/contracts")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/contracts")
 }
 
 fn input_bytes(name: &str) -> Vec<u8> {

@@ -12,6 +12,8 @@
 
 mod support;
 
+#[path = "../src/bytes.rs"]
+mod bytes;
 #[path = "../src/error.rs"]
 mod error;
 #[path = "../src/model.rs"]
@@ -19,7 +21,7 @@ mod model;
 #[path = "../src/manifest.rs"]
 mod manifest;
 
-#[path = "fixtures/contracts/manifest/mod.rs"]
+#[path = "../../../tests/fixtures/contracts/manifest/mod.rs"]
 mod fixtures;
 
 use error::ErrorKind;
@@ -31,7 +33,7 @@ use std::fs;
 use std::path::PathBuf;
 
 fn contracts_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/contracts")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/contracts")
 }
 
 fn read_input(name: &str) -> Vec<u8> {
@@ -615,7 +617,7 @@ fn mutation_smoke_never_panics() {
 
 #[test]
 fn axmldecoder_upstream_and_patch_ledger_are_registered() {
-    let vendor = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("vendor/axmldecoder");
+    let vendor = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vendor/axmldecoder");
     let upstream = fs::read_to_string(vendor.join("UPSTREAM.md")).expect("read UPSTREAM.md");
     let patches = fs::read_to_string(vendor.join("PATCHES.md")).expect("read PATCHES.md");
     // The recorded archive sha256 (crates.io index value).
@@ -760,6 +762,6 @@ fn golden_manifest_document_dto_bytes_are_frozen() {
     manifest::write_document_dto(&mut writer, &sample_document());
     let json = writer.finish();
     let expected =
-        std::fs::read_to_string("schemas/goldens/manifest-document.json").expect("golden file");
+        std::fs::read_to_string("../../schemas/goldens/manifest-document.json").expect("golden file");
     assert_eq!(json, expected.trim_end());
 }

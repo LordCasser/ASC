@@ -1300,7 +1300,7 @@ impl Source {
 // no serde dependency; `stats` is never serialized.
 
 #[allow(dead_code)] // consumed by A08's renderer
-pub(crate) mod dto {
+pub mod dto {
     use super::*;
 
     /// Minimal JSON writer: fixed key order is call-ordered, control
@@ -1311,7 +1311,7 @@ pub(crate) mod dto {
     /// allocates beyond the budget), so a bounded serialization cannot grow
     /// without limit. `finish` keeps the historical unbounded behaviour for
     /// the golden tests; the CLI completes through `try_finish`.
-    pub(crate) struct Writer {
+    pub struct Writer {
         out: String,
         /// Per open container: whether a comma must precede the next element.
         need_comma: Vec<bool>,
@@ -1319,35 +1319,45 @@ pub(crate) mod dto {
         over: bool,
     }
 
-    impl Writer {
-        pub(crate) fn new() -> Self {
+    impl Default for Writer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Writer {
+        pub fn new() -> Self {
             Self { out: String::new(), need_comma: vec![false], budget: usize::MAX, over: false }
         }
 
-        pub(crate) fn raw(value: &str) -> String {
+        pub fn raw(value: &str) -> String {
             let mut writer = Writer::new();
             writer.string(value);
             writer.finish()
         }
 
         /// Freezes the output once growth would exceed `max` bytes.
-        pub(crate) fn set_budget(&mut self, max: usize) {
+        pub fn set_budget(&mut self, max: usize) {
             self.budget = max;
         }
 
         /// Bytes written so far (frozen at the budget once over).
-        pub(crate) fn len(&self) -> usize {
+        pub fn len(&self) -> usize {
             self.out.len()
         }
 
+        pub fn is_empty(&self) -> bool {
+            self.out.is_empty()
+        }
+
         /// True once a push was refused for exceeding the budget.
-        pub(crate) fn over_budget(&self) -> bool {
+        pub fn over_budget(&self) -> bool {
             self.over
         }
 
         /// The bounded completion: a writer that crossed its budget is a
         /// `ResourceLimit`, never a truncated payload.
-        pub(crate) fn try_finish(self) -> Result<String, Error> {
+        pub fn try_finish(self) -> Result<String, Error> {
             if self.over {
                 return Err(Error::resource_limit(format!(
                     "serialized payload exceeds the {} byte result-bytes limit",
@@ -1390,13 +1400,13 @@ pub(crate) mod dto {
             }
         }
 
-        pub(crate) fn begin_object(&mut self) {
+        pub fn begin_object(&mut self) {
             self.prefix();
             self.push_raw("{");
             self.need_comma.push(false);
         }
 
-        pub(crate) fn end_object(&mut self) {
+        pub fn end_object(&mut self) {
             self.need_comma.pop();
             self.push_raw("}");
             if let Some(flag) = self.need_comma.last_mut() {
@@ -1404,13 +1414,13 @@ pub(crate) mod dto {
             }
         }
 
-        pub(crate) fn begin_array(&mut self) {
+        pub fn begin_array(&mut self) {
             self.prefix();
             self.push_raw("[");
             self.need_comma.push(false);
         }
 
-        pub(crate) fn end_array(&mut self) {
+        pub fn end_array(&mut self) {
             self.need_comma.pop();
             self.push_raw("]");
             if let Some(flag) = self.need_comma.last_mut() {
@@ -1419,13 +1429,13 @@ pub(crate) mod dto {
         }
 
         /// Writes `"key":`; the value write follows immediately.
-        pub(crate) fn key(&mut self, key: &str) {
+        pub fn key(&mut self, key: &str) {
             self.prefix();
             self.string_unprefixed(key);
             self.push_raw(":");
         }
 
-        pub(crate) fn string(&mut self, value: &str) {
+        pub fn string(&mut self, value: &str) {
             self.prefix();
             self.string_unprefixed(value);
             if let Some(flag) = self.need_comma.last_mut() {
@@ -1453,7 +1463,7 @@ pub(crate) mod dto {
             self.push_raw("\"");
         }
 
-        pub(crate) fn number(&mut self, value: u64) {
+        pub fn number(&mut self, value: u64) {
             self.prefix();
             self.push_raw(&value.to_string());
             if let Some(flag) = self.need_comma.last_mut() {
@@ -1462,7 +1472,7 @@ pub(crate) mod dto {
         }
 
         /// Writes a signed integer without going through a u64 cast.
-        pub(crate) fn signed(&mut self, value: i64) {
+        pub fn signed(&mut self, value: i64) {
             self.prefix();
             self.push_raw(&value.to_string());
             if let Some(flag) = self.need_comma.last_mut() {
@@ -1472,7 +1482,7 @@ pub(crate) mod dto {
 
         /// Fixed-width lowercase hex string for raw typed bits (float/double/
         /// long words), so no JS consumer can lose precision on them.
-        pub(crate) fn hex_bits(&mut self, bits: u64, width: usize) {
+        pub fn hex_bits(&mut self, bits: u64, width: usize) {
             self.prefix();
             self.push_raw(&format!("\"0x{bits:0width$x}\""));
             if let Some(flag) = self.need_comma.last_mut() {
@@ -1480,7 +1490,7 @@ pub(crate) mod dto {
             }
         }
 
-        pub(crate) fn boolean(&mut self, value: bool) {
+        pub fn boolean(&mut self, value: bool) {
             self.prefix();
             self.push_raw(if value { "true" } else { "false" });
             if let Some(flag) = self.need_comma.last_mut() {
@@ -1488,7 +1498,7 @@ pub(crate) mod dto {
             }
         }
 
-        pub(crate) fn null(&mut self) {
+        pub fn null(&mut self) {
             self.prefix();
             self.push_raw("null");
             if let Some(flag) = self.need_comma.last_mut() {
@@ -1496,14 +1506,14 @@ pub(crate) mod dto {
             }
         }
 
-        pub(crate) fn finish(self) -> String {
+        pub fn finish(self) -> String {
             self.out
         }
     }
 
     /// `{"artifact_id":"…","entry_ordinal":n,"logical_ordinal":n}` plus the
     /// kind-specific index key, in that fixed order.
-    pub(crate) fn write_dex_id(w: &mut Writer, id: &DexId) {
+    pub fn write_dex_id(w: &mut Writer, id: &DexId) {
         w.begin_object();
         w.key("artifact_id");
         w.string(&id.artifact().hex());
@@ -1527,20 +1537,20 @@ pub(crate) mod dto {
         w.end_object();
     }
 
-    pub(crate) fn write_class_id(w: &mut Writer, id: &ClassId) {
+    pub fn write_class_id(w: &mut Writer, id: &ClassId) {
         write_indexed_id(w, &id.dex(), "class_def_idx", id.class_def_idx());
     }
 
-    pub(crate) fn write_method_id(w: &mut Writer, id: &MethodId) {
+    pub fn write_method_id(w: &mut Writer, id: &MethodId) {
         write_indexed_id(w, &id.dex(), "method_idx", id.method_idx());
     }
 
-    pub(crate) fn write_target_id(w: &mut Writer, id: &TargetId) {
+    pub fn write_target_id(w: &mut Writer, id: &TargetId) {
         write_indexed_id(w, &id.dex(), "index", id.table_index());
     }
 
     /// `{"text":<string|null>,"utf16":[…]}` - lossless in both projections.
-    pub(crate) fn write_dex_text(w: &mut Writer, text: &DexText) {
+    pub fn write_dex_text(w: &mut Writer, text: &DexText) {
         w.begin_object();
         w.key("text");
         match text.as_str() {
@@ -1556,7 +1566,7 @@ pub(crate) mod dto {
         w.end_object();
     }
 
-    pub(crate) fn write_prototype(w: &mut Writer, prototype: &Prototype) {
+    pub fn write_prototype(w: &mut Writer, prototype: &Prototype) {
         w.begin_object();
         w.key("parameters");
         w.begin_array();
@@ -1569,7 +1579,7 @@ pub(crate) mod dto {
         w.end_object();
     }
 
-    pub(crate) fn write_dex_entry(w: &mut Writer, entry: &DexEntry) {
+    pub fn write_dex_entry(w: &mut Writer, entry: &DexEntry) {
         w.begin_object();
         w.key("id");
         write_dex_id(w, &entry.id());
@@ -1586,7 +1596,7 @@ pub(crate) mod dto {
         w.end_object();
     }
 
-    pub(crate) fn write_target_value(w: &mut Writer, value: &TargetValue) {
+    pub fn write_target_value(w: &mut Writer, value: &TargetValue) {
         match value {
             TargetValue::String(text) | TargetValue::Type(text) => write_dex_text(w, text),
             TargetValue::Field { owner, name, field_type } => {
@@ -1614,7 +1624,7 @@ pub(crate) mod dto {
 
     /// One `targets` entry: `{"id":…,"kind":…,"value":…,"code_unit_offsets":[…]}`.
     /// Shared by `write_reference` and the CLI's text-mode targets-json column.
-    pub(crate) fn write_target_match(w: &mut Writer, target: &TargetMatch) {
+    pub fn write_target_match(w: &mut Writer, target: &TargetMatch) {
         w.begin_object();
         w.key("id");
         write_target_id(w, &target.id());
@@ -1631,7 +1641,7 @@ pub(crate) mod dto {
         w.end_object();
     }
 
-    pub(crate) fn write_reference(w: &mut Writer, reference: &Reference) {
+    pub fn write_reference(w: &mut Writer, reference: &Reference) {
         w.begin_object();
         w.key("caller");
         w.begin_object();
@@ -1655,7 +1665,7 @@ pub(crate) mod dto {
         w.end_object();
     }
 
-    pub(crate) fn write_class(w: &mut Writer, class: &Class) {
+    pub fn write_class(w: &mut Writer, class: &Class) {
         w.begin_object();
         w.key("id");
         write_class_id(w, &class.id());
@@ -1673,7 +1683,7 @@ pub(crate) mod dto {
     }
 
     /// Absent identity anchors are omitted; present keys keep this order.
-    pub(crate) fn write_diagnostic(w: &mut Writer, diagnostic: &Diagnostic) {
+    pub fn write_diagnostic(w: &mut Writer, diagnostic: &Diagnostic) {
         w.begin_object();
         w.key("code");
         w.string(diagnostic.code().as_str());
@@ -1704,7 +1714,7 @@ pub(crate) mod dto {
 
     /// The success envelope: fixed order `schema_version, operation,
     /// artifact_id, data, diagnostics`. `data` is written by `write_data`.
-    pub(crate) fn write_envelope(
+    pub fn write_envelope(
         operation: &str,
         artifact: &ArtifactId,
         diagnostics: &[Diagnostic],
@@ -1720,7 +1730,7 @@ pub(crate) mod dto {
     /// Same envelope, but the data writer may fail (budget/cancel checks) and
     /// the completion refuses a writer that crossed its byte budget. The CLI's
     /// bounded serialization path drives this variant.
-    pub(crate) fn write_envelope_result(
+    pub fn write_envelope_result(
         operation: &str,
         artifact: &ArtifactId,
         diagnostics: &[Diagnostic],
@@ -1747,7 +1757,7 @@ pub(crate) mod dto {
     }
 
     /// The error object: `{"code":"…","context":[…],"diagnostics":[…]}`.
-    pub(crate) fn write_error(error: &crate::error::Error) -> String {
+    pub fn write_error(error: &crate::error::Error) -> String {
         let mut w = Writer::new();
         w.begin_object();
         w.key("code");
@@ -1774,7 +1784,7 @@ pub(crate) mod dto {
     // absent optional data serializes as null, never a fabricated default.
     // Raw typed bits (float/double/long words) use fixed-width hex strings.
 
-    pub(crate) fn write_source_metadata(w: &mut Writer, metadata: &SourceMetadata) {
+    pub fn write_source_metadata(w: &mut Writer, metadata: &SourceMetadata) {
         w.begin_object();
         w.key("class");
         write_class_metadata(w, &metadata.class);

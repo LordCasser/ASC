@@ -1,0 +1,26 @@
+[package]
+name = "asc-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "APK and DEX analysis library: structured identities, reference scanning, decompilation and manifest decoding"
+
+[lib]
+name = "asc_core"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0"
+droidsaw-dex = { version = "2.0.0", path = "../../vendor/droidsaw-dex", optional = true }
+axmldecoder = { version = "0.5.0", path = "../../vendor/axmldecoder", optional = true }
+flate2 = { version = "1", default-features = false, features = ["zlib"] }
+libdeflater = "1.26"
+fancy-regex = "0.19"
+memchr = "2.7"
+quick-xml = { version = "0.42.0", default-features = false }
+
+[features]
+default = []
+decompile = ["dep:droidsaw-dex"]
+manifest = ["dep:axmldecoder"]

@@ -70,17 +70,17 @@ impl<'a> DexView<'a> {
 /// every field must stay a finite positive number.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ScanLimits {
+pub struct ScanLimits {
     /// Maximum number of returned top-level `Reference` items.
-    pub(crate) max_result_items: usize,
+    pub max_result_items: usize,
     /// Maximum number of accumulated target code-unit offsets.
-    pub(crate) max_reference_locations: u64,
+    pub max_reference_locations: u64,
     /// Maximum declared UTF-16 length of one decoded DEX string.
-    pub(crate) max_string_units: usize,
+    pub max_string_units: usize,
     /// Maximum number of rows in one DEX id table.
-    pub(crate) max_table_items: usize,
+    pub max_table_items: usize,
     /// Coarse byte-estimate ceiling for the assembled result.
-    pub(crate) max_result_bytes: usize,
+    pub max_result_bytes: usize,
 }
 
 #[allow(dead_code)]

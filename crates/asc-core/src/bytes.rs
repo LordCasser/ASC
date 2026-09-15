@@ -427,3 +427,58 @@ mod sha256_tests {
         );
     }
 }
+
+
+/// Host-side operation control: an optional cancel flag and an optional
+/// absolute deadline. Cloned handles share the flag; cancellation is
+/// cooperative and observed at the checkpoints listed in interfaces.md §5.
+#[derive(Clone, Debug, Default)]
+pub struct OperationControl {
+    cancel: Option<std::sync::Arc<AtomicBool>>,
+    deadline: Option<std::time::Instant>,
+}
+
+impl OperationControl {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Installs a cancel flag.
+    pub fn with_cancel_flag(mut self, flag: std::sync::Arc<AtomicBool>) -> Self {
+        self.cancel = Some(flag);
+        self
+    }
+
+    /// Installs an absolute deadline.
+    pub fn with_deadline(mut self, deadline: std::time::Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
+    }
+
+    /// The host cancel flag, when one was installed.
+    pub(crate) fn cancel_flag(&self) -> Option<std::sync::Arc<AtomicBool>> {
+        self.cancel.clone()
+    }
+
+    /// The absolute deadline, when one was set.
+    pub(crate) fn deadline(&self) -> Option<std::time::Instant> {
+        self.deadline
+    }
+
+    /// Errors with `Cancelled` once the flag is set or the deadline passed.
+    pub fn check(&self) -> Result<(), crate::error::Error> {
+        if self.cancel.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Err(crate::error::Error::new(crate::error::ErrorKind::Cancelled {
+                cause: CancelCause::User,
+            }));
+        }
+        if let Some(deadline) = self.deadline
+            && std::time::Instant::now() >= deadline
+        {
+            return Err(crate::error::Error::new(crate::error::ErrorKind::Cancelled {
+                cause: CancelCause::Deadline,
+            }));
+        }
+        Ok(())
+    }
+}

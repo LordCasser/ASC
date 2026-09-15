@@ -141,7 +141,7 @@ impl Error {
         Self::new(ErrorKind::InvalidQuery).with_context(message)
     }
 
-    pub(crate) fn resource_limit(message: impl Into<String>) -> Self {
+    pub fn resource_limit(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::ResourceLimit).with_context(message)
     }
 

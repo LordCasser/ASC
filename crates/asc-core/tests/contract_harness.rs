@@ -68,9 +68,7 @@ const PYTHON_MAKE_STATIC_FIELD_DEX_SHA256: &str =
 
 fn contracts_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("contracts")
+        .join("../../tests/fixtures/contracts")
 }
 
 fn load_manifest() -> Json {

@@ -21,7 +21,7 @@ use crate::bytes::ControlProbe;
 use crate::dex::container::{self, ValidatedDexView};
 use crate::dex::{self, ScanOptions};
 use crate::error::{Error, ErrorKind};
-use crate::manifest::OperationControl;
+use crate::bytes::OperationControl;
 use crate::model::{
     AnnotationEntry, AnnotationRecord, AnnotationTarget, AnnotationVisibility, ArtifactId, Class,
     ClassDescriptor, ClassFilter, ClassId, ClassMetadata, ClassSelector, DexEntry, DexText,
@@ -42,13 +42,13 @@ use std::sync::Arc;
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     /// `input-bytes`: the owned snapshot may not exceed this.
-    pub(crate) max_input_bytes: u64,
+    pub max_input_bytes: u64,
     /// `entry-bytes`: one entry's actual decoded bytes.
-    pub(crate) max_entry_bytes: u64,
+    pub max_entry_bytes: u64,
     /// `decoded-bytes`: per-operation accumulated decoded bytes.
-    pub(crate) max_total_decoded_bytes: u64,
+    pub max_total_decoded_bytes: u64,
     /// `table-items`/`string-units`/`result-items`/`locations`/`result-bytes`.
-    pub(crate) scan: crate::dex::ScanLimits,
+    pub scan: crate::dex::ScanLimits,
 }
 
 impl Default for Limits {
@@ -82,6 +82,7 @@ struct ControlGuard {
     dummy: AtomicBool,
     flag: Option<Arc<AtomicBool>>,
     deadline: Option<std::time::Instant>,
+    #[cfg(feature = "decompile")]
     backend: droidsaw_dex::analysis::Control,
 }
 
@@ -91,6 +92,7 @@ impl ControlGuard {
             dummy: AtomicBool::new(false),
             flag: control.cancel_flag(),
             deadline: control.deadline(),
+            #[cfg(feature = "decompile")]
             backend: droidsaw_dex::analysis::Control::new(),
         }
     }
@@ -106,11 +108,24 @@ impl ControlGuard {
 /// One opened input: owned bytes, content identity, archive catalog and the
 /// selected root DEX entries. Opening validates the archive catalog only —
 /// DEX headers and tables are validated per operation.
+/// One selected root DEX source: either an archive entry or the whole raw
+/// byte stream (InputKind::Dex).
+struct Root {
+    ordinal: u32,
+    raw_name: Vec<u8>,
+    source: RootSource,
+}
+
+enum RootSource {
+    Archive(ArchiveEntry),
+    Raw,
+}
+
 pub struct Artifact {
     id: ArtifactId,
     bytes: Arc<[u8]>,
-    catalog: zip::ArchiveCatalog,
-    roots: Vec<ArchiveEntry>,
+    catalog: Option<zip::ArchiveCatalog>,
+    roots: Vec<Root>,
     /// Duplicate-entry-name warnings observed at open time, attached to
     /// every operation's report.
     open_diagnostics: Vec<Diagnostic>,
@@ -183,8 +198,16 @@ pub fn open_bytes(bytes: Arc<[u8]>, control: &OperationControl) -> Result<Artifa
             ),
         ));
     }
-    let roots = selection.selected.into_iter().cloned().collect();
-    Ok(Artifact { id, bytes, catalog, roots, open_diagnostics, limits: Limits::default() })
+    let roots = selection
+        .selected
+        .into_iter()
+        .map(|entry| Root {
+            ordinal: entry.ordinal,
+            raw_name: entry.raw_name.clone(),
+            source: RootSource::Archive(entry.clone()),
+        })
+        .collect();
+    Ok(Artifact { id, bytes, catalog: Some(catalog), roots, open_diagnostics, limits: Limits::default() })
 }
 
 impl Artifact {
@@ -195,7 +218,7 @@ impl Artifact {
     fn fold_roots<T>(
         &self,
         control: &OperationControl,
-        mut op: impl FnMut(&ArchiveEntry, &container::DexEntryViews<'_>, &ControlProbe<'_>) -> Result<Vec<T>, Error>,
+        mut op: impl FnMut(&Root, &container::DexEntryViews<'_>, &ControlProbe<'_>) -> Result<Vec<T>, Error>,
     ) -> Result<(Vec<T>, Vec<Diagnostic>), Error> {
         let guard = ControlGuard::new(control);
         let probe = guard.probe();
@@ -203,13 +226,18 @@ impl Artifact {
         let mut decoded = 0u64;
         let mut results = Vec::new();
         let mut integrity = Vec::new();
-        for entry in &self.roots {
+        for root in &self.roots {
             probe.check()?;
-            let data = zip::read_entry(&self.bytes, entry, &input_limits, &mut decoded, &probe)?;
+            let data: &[u8] = match &root.source {
+                RootSource::Archive(entry) => {
+                    &zip::read_entry(&self.bytes, entry, &input_limits, &mut decoded, &probe)?
+                }
+                RootSource::Raw => &self.bytes,
+            };
             let (views, entry_integrity) =
-                container::validate_dex_entry(self.id, entry.ordinal, &entry.raw_name, &data, &probe)?;
+                container::validate_dex_entry(self.id, root.ordinal, &root.raw_name, data, &probe)?;
             integrity.extend(entry_integrity);
-            results.extend(op(entry, &views, &probe)?);
+            results.extend(op(root, &views, &probe)?);
         }
         let diagnostics =
             self.open_diagnostics.iter().cloned().chain(integrity.iter().cloned()).collect();
@@ -321,6 +349,7 @@ pub fn references(
 /// descriptor (optionally pinned to one logical DEX) or a full identity;
 /// the default descriptor resolution takes the first (entry, logical,
 /// class_def) definition and reports duplicates.
+#[cfg(feature = "decompile")]
 pub fn decompile(
     artifact: &Artifact,
     selector: &ClassSelector,
@@ -342,11 +371,26 @@ pub fn decompile(
     let mut decoded = 0u64;
     let mut resolution: Option<Resolved> = None;
     let mut integrity = Vec::new();
-    for (entry_index, entry) in artifact.roots.iter().enumerate() {
+    for (entry_index, root) in artifact.roots.iter().enumerate() {
         probe.check()?;
-        let data = zip::read_entry(&artifact.bytes, entry, &artifact.limits.input(), &mut decoded, &probe)?;
+        #[allow(unused_assignments)] // Raw input never fills the buffer
+        #[allow(unused_assignments)] // Raw input never fills the buffer
+        let mut data_buffer = None;
+        let data: &[u8] = match &root.source {
+            RootSource::Archive(entry) => {
+                data_buffer = Some(zip::read_entry(
+                    &artifact.bytes,
+                    entry,
+                    &artifact.limits.input(),
+                    &mut decoded,
+                    &probe,
+                )?);
+                data_buffer.as_deref().expect("just assigned")
+            }
+            RootSource::Raw => &artifact.bytes,
+        };
         let (views, entry_integrity) =
-            container::validate_dex_entry(artifact.id, entry.ordinal, &entry.raw_name, &data, &probe)?;
+            container::validate_dex_entry(artifact.id, root.ordinal, &root.raw_name, data, &probe)?;
         integrity.extend(entry_integrity);
         'members: for (logical, view) in views.views.iter().enumerate() {
             match selector {
@@ -419,10 +463,24 @@ pub fn decompile(
 
     // Backend parse + checked decompile over the resolved entry's bytes
     // (041 members go through the operation-local scratch normalization).
-    let entry = &artifact.roots[resolved.entry_index];
-    let data = zip::read_entry(&artifact.bytes, entry, &artifact.limits.input(), &mut decoded, &probe)?;
+    let root = &artifact.roots[resolved.entry_index];
+    #[allow(unused_assignments)] // Raw input never fills the buffer
+    let mut data_buffer = None;
+    let data: &[u8] = match &root.source {
+        RootSource::Archive(entry) => {
+            data_buffer = Some(zip::read_entry(
+                &artifact.bytes,
+                entry,
+                &artifact.limits.input(),
+                &mut decoded,
+                &probe,
+            )?);
+            data_buffer.as_deref().expect("just assigned")
+        }
+        RootSource::Raw => &artifact.bytes,
+    };
     let (views, entry_integrity) =
-        container::validate_dex_entry(artifact.id, entry.ordinal, &entry.raw_name, &data, &probe)?;
+        container::validate_dex_entry(artifact.id, root.ordinal, &root.raw_name, data, &probe)?;
     diagnostics.extend(entry_integrity);
     let view = &views.views[resolved.logical];
     let scratch = container::backend_scratch(view, &integrity);
@@ -490,12 +548,15 @@ pub fn decompile(
 
 /// The decoded manifest: last same-name entry wins. Requires only that one
 /// entry's bytes; DEX entries are not touched.
+#[cfg(feature = "manifest")]
 pub fn manifest(
     artifact: &Artifact,
     control: &OperationControl,
 ) -> Result<Report<crate::manifest::Manifest>, Error> {
-    let entry = artifact
-        .catalog
+    let catalog = artifact.catalog.as_ref().ok_or_else(|| {
+        Error::new(ErrorKind::NotFound).with_context("a raw DEX input has no AndroidManifest.xml")
+    })?;
+    let entry = catalog
         .entries
         .iter()
         .rev()
@@ -527,6 +588,7 @@ pub fn manifest(
 
 // --- mapping helpers ---------------------------------------------------------
 
+#[cfg(feature = "decompile")]
 fn build_class(
     entry: &DexEntry,
     view: &ValidatedDexView<'_>,
@@ -544,6 +606,7 @@ fn build_class(
     Class::new(ClassId::new(view.id(), class_def_idx), entry.clone(), descriptor)
 }
 
+#[cfg(feature = "decompile")]
 fn map_metadata(metadata: &droidsaw_dex::analysis::BackendMetadata) -> SourceMetadata {
     let class = ClassMetadata {
         access_flags: metadata.access_flags,
@@ -621,6 +684,7 @@ fn map_metadata(metadata: &droidsaw_dex::analysis::BackendMetadata) -> SourceMet
     SourceMetadata { class, annotations, fields, methods }
 }
 
+#[cfg(feature = "decompile")]
 fn map_annotation_target(target: droidsaw_dex::analysis::AnnotationTarget) -> AnnotationTarget {
     use droidsaw_dex::analysis::AnnotationTarget as Backend;
     match target {
@@ -634,6 +698,7 @@ fn map_annotation_target(target: droidsaw_dex::analysis::AnnotationTarget) -> An
     }
 }
 
+#[cfg(feature = "decompile")]
 fn map_annotation_visibility(
     visibility: droidsaw_dex::analysis::AnnotationVisibility,
 ) -> AnnotationVisibility {
@@ -656,6 +721,7 @@ fn render_annotation_elements(elements: &[(String, String)]) -> String {
 /// Parses a backend prototype descriptor `(params)ret` into the structured
 /// form. An unparseable text keeps the raw string as the single parameter —
 /// the lossless record beats a silently empty prototype.
+#[cfg(feature = "decompile")]
 fn prototype_from_descriptor(descriptor: &str) -> Prototype {
     let Some((params_text, ret)) = descriptor.split_once(')') else {
         return Prototype::new(
@@ -680,6 +746,7 @@ fn prototype_from_descriptor(descriptor: &str) -> Prototype {
 
 /// Length of one non-array component at the head of `rest` (1 for
 /// primitives, up to and including the `;` for class types).
+#[cfg(feature = "decompile")]
 fn prototype_component_size(rest: &str) -> usize {
     match rest.as_bytes().first() {
         Some(b'L') => rest.find(';').map(|semi| semi + 1).unwrap_or(rest.len()),
@@ -688,6 +755,7 @@ fn prototype_component_size(rest: &str) -> usize {
 }
 
 /// UTF-8, LF line endings, exactly one trailing LF.
+#[cfg(feature = "decompile")]
 fn normalize_source_text(source: &str) -> Arc<str> {
     let trimmed = source.trim_end_matches(['\n', '\r']);
     Arc::from(format!("{trimmed}\n").as_str())
@@ -709,7 +777,7 @@ mod tests {
     fn g02_dex() -> Vec<u8> {
         std::fs::read(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/contracts/inputs/g02-static-initializers.dex"
+            "/../../tests/fixtures/contracts/inputs/g02-static-initializers.dex"
         ))
         .expect("g02 fixture")
     }
@@ -760,6 +828,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
+    #[cfg(feature = "decompile")]
     #[test]
     fn g02_static_initializers_survive_the_integration() {
         let dex = g02_dex();
@@ -779,6 +848,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
+    #[cfg(feature = "decompile")]
     #[test]
     fn zero_checksum_dex_decompiles_with_a_warning() {
         // G03: the G02 bytes with the checksum/signature window zeroed.
@@ -838,6 +908,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
+    #[cfg(feature = "decompile")]
     #[test]
     fn getclass_pinned_dex_selects_across_entries() {
         // Fixture0 lives in both entries; Fixture1 only in classes2.dex.
@@ -901,4 +972,160 @@ mod tests {
         assert_eq!(*error.kind(), ErrorKind::MalformedInput);
         fs::remove_file(&path).unwrap();
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// Public Engine API (interfaces.md §2; A11 adds the pool/permits runtime)
+// ---------------------------------------------------------------------------
+
+/// Explicit input kind: the engine never guesses from file extensions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputKind {
+    Apk,
+    Dex,
+}
+
+/// Engine construction options. A11 extends this with the runtime
+/// limits/pool surface; the current shape carries the default limits.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EngineOptions {
+    pub limits: Limits,
+}
+
+/// A long-lived analysis engine: holds the runtime limits and hands out
+/// [`Artifact`] handles. Cloning shares one runtime (A11); today the engine
+/// is stateless beyond its options and every operation is sequential.
+#[derive(Clone, Debug, Default)]
+pub struct Engine {
+    options: EngineOptions,
+}
+
+impl Engine {
+    pub fn new(options: EngineOptions) -> Result<Engine, Error> {
+        Ok(Engine { options })
+    }
+
+    /// Opens an APK archive or a raw DEX byte stream from the filesystem.
+    pub fn open_path(
+        &self,
+        path: impl AsRef<Path>,
+        kind: InputKind,
+        control: &OperationControl,
+    ) -> Result<Artifact, Error> {
+        match kind {
+            InputKind::Apk => open_path(path.as_ref(), &self.options.limits, control),
+            InputKind::Dex => open_dex_path(path.as_ref(), &self.options.limits, control),
+        }
+    }
+
+    /// Opens an owned byte snapshot as an APK archive or raw DEX.
+    pub fn open_bytes(
+        &self,
+        bytes: Arc<[u8]>,
+        kind: InputKind,
+        control: &OperationControl,
+    ) -> Result<Artifact, Error> {
+        match kind {
+            InputKind::Apk => open_bytes(bytes, control),
+            InputKind::Dex => open_dex_bytes(bytes, control),
+        }
+    }
+
+    pub fn dexes(
+        &self,
+        artifact: &Artifact,
+        control: &OperationControl,
+    ) -> Result<Report<Vec<DexEntry>>, Error> {
+        dexes(artifact, control)
+    }
+
+    pub fn classes(
+        &self,
+        artifact: &Artifact,
+        filter: &ClassFilter,
+        control: &OperationControl,
+    ) -> Result<Report<Vec<Class>>, Error> {
+        classes(artifact, filter, control)
+    }
+
+    pub fn references(
+        &self,
+        artifact: &Artifact,
+        query: &crate::model::ReferenceQuery,
+        control: &OperationControl,
+    ) -> Result<Report<Vec<crate::model::Reference>>, Error> {
+        references(artifact, query, control)
+    }
+
+    #[cfg(feature = "decompile")]
+    pub fn decompile(
+        &self,
+        artifact: &Artifact,
+        selector: &ClassSelector,
+        control: &OperationControl,
+    ) -> Result<Report<Source>, Error> {
+        decompile(artifact, selector, control)
+    }
+
+    #[cfg(feature = "manifest")]
+    pub fn manifest(
+        &self,
+        artifact: &Artifact,
+        control: &OperationControl,
+    ) -> Result<Report<crate::manifest::Manifest>, Error> {
+        manifest(artifact, control)
+    }
+}
+
+/// Opens a raw DEX file from the filesystem (InputKind::Dex).
+fn open_dex_path(
+    path: &Path,
+    limits: &Limits,
+    control: &OperationControl,
+) -> Result<Artifact, Error> {
+    let mut file =
+        File::open(path).map_err(|error| Error::new(ErrorKind::NotFound).with_context(format!("open {path:?}: {error}")))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| Error::new(ErrorKind::NotFound).with_context(format!("stat {path:?}: {error}")))?;
+    if !metadata.is_file() {
+        return Err(Error::new(ErrorKind::UnsupportedFormat).with_context(format!("{path:?} is not a regular file")));
+    }
+    if metadata.len() > limits.max_input_bytes {
+        return Err(Error::resource_limit(format!(
+            "{path:?} is {} bytes, above the {} input limit",
+            metadata.len(),
+            limits.max_input_bytes
+        )));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        control.check()?;
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| Error::new(ErrorKind::MalformedInput).with_context(format!("read {path:?}: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    open_dex_bytes(Arc::from(bytes.into_boxed_slice()), control)
+}
+
+/// Opens an owned raw DEX byte stream: entry ordinal 0, display name
+/// `<memory.dex>` (interfaces.md §1).
+fn open_dex_bytes(bytes: Arc<[u8]>, control: &OperationControl) -> Result<Artifact, Error> {
+    let _ = control;
+    let id = ArtifactId::from_digest(crate::bytes::sha256(&bytes));
+    let roots = vec![Root { ordinal: 0, raw_name: b"<memory.dex>".to_vec(), source: RootSource::Raw }];
+    Ok(Artifact {
+        id,
+        bytes,
+        catalog: None,
+        roots,
+        open_diagnostics: Vec::new(),
+        limits: Limits::default(),
+    })
 }
