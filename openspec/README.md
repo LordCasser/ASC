@@ -17,3 +17,11 @@ openspec validate --all --strict --no-interactive
 ```
 
 分发脚本 `scripts/verify-distribution.py` 验证 registry staging，不执行正式发布；path/submodule 集成不要求先发布 registry。确认新的审计证据后才能更新对应 task 的勾选状态。
+
+## 下一阶段 provider changes
+
+- [受控 APK 条目](changes/expose-controlled-apk-entries/proposal.md)：供消费者 artifact 提取使用。
+- [DEX 方法导航](changes/add-dex-method-navigation/proposal.md)：供源码精确导航与 JNI 声明清单使用。
+- [活跃内存账户](changes/bound-engine-owned-memory/proposal.md)：独立修复 MEM-01/02，不混入接入变更。
+
+三项均为待实施计划；没有把创建 change 当作功能完成。
