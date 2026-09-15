@@ -10,10 +10,39 @@
 //! - IDs are private-construction; equality/ordering ride on their parts.
 
 use crate::error::Error;
-use crate::memory::MemoryPermit;
 use fancy_regex::RegexBuilder;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// A cloneable engine-memory charge. The model module is also compiled by the
+/// standalone contract harnesses, so this small RAII type intentionally has no
+/// dependency on the engine runtime module.
+#[derive(Clone, Debug)]
+pub(crate) struct MemoryPermit {
+    #[allow(dead_code)]
+    allocation: Arc<MemoryAllocation>,
+}
+
+impl MemoryPermit {
+    pub(crate) fn new(account: Arc<AtomicU64>, bytes: u64) -> Self {
+        Self {
+            allocation: Arc::new(MemoryAllocation { account, bytes }),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct MemoryAllocation {
+    account: Arc<AtomicU64>,
+    bytes: u64,
+}
+
+impl Drop for MemoryAllocation {
+    fn drop(&mut self) {
+        self.account.fetch_sub(self.bytes, Ordering::Relaxed);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -1028,6 +1057,7 @@ pub struct TargetMatch {
 }
 
 impl TargetMatch {
+    #[allow(dead_code)]
     pub(crate) fn new(id: TargetId, value: TargetValue, mut code_unit_offsets: Vec<u32>) -> Self {
         code_unit_offsets.sort_unstable();
         code_unit_offsets.dedup();
@@ -1596,7 +1626,6 @@ pub struct OperationStats {
 
 /// The uniform operation result: the value, everything diagnosed along the
 /// way, and stats. Stats do not participate in fact equality or the payload.
-#[derive(Debug)]
 pub struct Report<T> {
     pub(crate) value: T,
     pub(crate) diagnostics: Vec<Diagnostic>,
@@ -1605,6 +1634,21 @@ pub struct Report<T> {
     /// one of its clones) is alive. Consumer-side serialization is outside
     /// this core ledger.
     pub(crate) memory: Option<MemoryPermit>,
+}
+
+/*
+ * Keep the accounting token out of debug output. Apart from being an
+ * implementation detail, its Arc address would make otherwise identical
+ * reports print differently across runs.
+ */
+impl<T: fmt::Debug> fmt::Debug for Report<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Report")
+            .field("value", &self.value)
+            .field("diagnostics", &self.diagnostics)
+            .field("stats", &self.stats)
+            .finish()
+    }
 }
 
 impl<T> Report<T> {

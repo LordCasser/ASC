@@ -30,12 +30,13 @@ use crate::model::{
     Diagnostic, DiagnosticCode, EncodedValue, EnclosingRecord, FieldDeclaration, FieldId,
     FieldMetadata, InnerClassRecord, MethodDeclaration, MethodId, MethodIdentity, MethodInventory,
     MethodMetadata, MethodTarget, OperationStats, Prototype, Report, Severity, Source,
-    SourceMetadata, Stage, StringDeclaration,
+    SourceMetadata, Stage,
 };
 use crate::model::{
     ArchiveEntry as ArchiveEntryFact, ArchiveEntryId, ArchiveEntryQuery, MethodScope,
+    MemoryPermit, StringDeclaration,
 };
-use crate::memory::{MemoryAccount, MemoryPermit};
+use crate::memory::MemoryAccount;
 #[cfg(not(feature = "decompile"))]
 use crate::model::{
     ArtifactId, Class, ClassFilter, DexEntry, DexText, Diagnostic, DiagnosticCode, OperationStats,
@@ -185,8 +186,10 @@ pub struct Artifact {
     /// artifact are rejected (interfaces.md §2).
     runtime: Arc<Runtime>,
     /// Charges the immutable input snapshot for the artifact lifetime.
+    #[allow(dead_code)]
     input_memory: MemoryPermit,
     /// Charges the retained archive catalog and root projection.
+    #[allow(dead_code)]
     catalog_memory: Option<MemoryPermit>,
     /// Duplicate-entry-name warnings observed at open time, attached to
     /// every operation's report.
@@ -201,6 +204,7 @@ impl Artifact {
         self.id
     }
 
+    #[cfg(test)]
     fn byte_len(&self) -> u64 {
         u64::try_from(self.bytes.len()).unwrap_or(u64::MAX)
     }
@@ -447,6 +451,23 @@ impl Artifact {
                                 &root.raw_name,
                                 data,
                                 &probe,
+                            )?;
+                            let work_bytes = views
+                                .views
+                                .iter()
+                                .enumerate()
+                                .map(|(logical, view)| {
+                                    let dex_view =
+                                        dex::DexView::new(views.dex_entry(logical), view.bytes());
+                                    dex::estimated_scan_work(&dex_view, &self.limits.scan)
+                                })
+                                .try_fold(0u64, |maximum, estimate| {
+                                    estimate.map(|estimate| maximum.max(estimate))
+                                })?;
+                            let _scan_memory = self.runtime.memory.reserve_with_limit(
+                                work_bytes,
+                                self.limits.max_engine_owned_bytes,
+                                "DEX scan working set",
                             )?;
                             Ok((op(root, &views, &probe)?, entry_integrity))
                         })
@@ -1095,6 +1116,14 @@ fn fold_scope<T: Send>(
             if wanted_logical.is_some_and(|wanted| wanted != logical as u32) {
                 continue;
             }
+            let entry = views.dex_entry(logical);
+            let dex_view = dex::DexView::new(entry, views.views[logical].bytes());
+            let work_bytes = dex::estimated_scan_work(&dex_view, &artifact.limits.scan)?;
+            let _scan_memory = artifact.runtime.memory.reserve_with_limit(
+                work_bytes,
+                artifact.limits.max_engine_owned_bytes,
+                "scoped DEX scan working set",
+            )?;
             for row in op(&views, logical, &probe)? {
                 probe.check()?;
                 charge_results(&mut used, measure(&row), &artifact.limits.scan)?;
@@ -1530,6 +1559,14 @@ where
                 .filter(|diagnostic| diagnostic.dex() == Some(view.id()))
                 .cloned()
                 .collect();
+            let work_entry = views.dex_entry(logical);
+            let work_view = dex::DexView::new(work_entry, view.bytes());
+            let work_bytes = dex::estimated_scan_work(&work_view, &artifact.limits.scan)?;
+            let _scan_memory = artifact.runtime.memory.reserve_with_limit(
+                work_bytes,
+                artifact.limits.max_engine_owned_bytes,
+                "batch method DEX working set",
+            )?;
             let scratch = container::backend_scratch(view, &view_integrity);
             let backend_bytes = scratch
                 .as_ref()
@@ -1599,6 +1636,14 @@ fn method_inventory(
 
     for input in inputs {
         probe.check()?;
+        let _decode_memory = match &input {
+            MethodScopeInput::Archive { entry, .. } => Some(artifact.runtime.memory.reserve_with_limit(
+                entry.declared_uncompressed_bytes(),
+                artifact.limits.max_engine_owned_bytes,
+                "decoded method-inventory DEX entry",
+            )?),
+            MethodScopeInput::Raw => None,
+        };
         let (buffer, ordinal, raw_name, wanted_logical) = match input {
             MethodScopeInput::Raw => (None, 0, b"<memory.dex>".to_vec(), None),
             MethodScopeInput::Archive { entry, logical } => {
@@ -1636,6 +1681,14 @@ fn method_inventory(
                 .filter(|diagnostic| diagnostic.dex() == Some(view.id()))
                 .cloned()
                 .collect();
+            let work_entry = views.dex_entry(logical);
+            let work_view = dex::DexView::new(work_entry, view.bytes());
+            let work_bytes = dex::estimated_scan_work(&work_view, &scan_limits)?;
+            let _scan_memory = artifact.runtime.memory.reserve_with_limit(
+                work_bytes,
+                artifact.limits.max_engine_owned_bytes,
+                "method inventory DEX working set",
+            )?;
             let scratch = container::backend_scratch(view, &view_integrity);
             let backend_bytes = scratch
                 .as_ref()
@@ -1828,20 +1881,33 @@ fn decompile_with_scope(
     let decoded = AtomicU64::new(0);
     let mut resolution: Option<Resolved> = None;
     let mut selected_bytes = None;
+    let mut selected_memory = None;
     let mut definitions = 0usize;
     let mut diagnostics = artifact.open_diagnostics.clone();
     // Visit the entire selected scope, keeping only the chosen entry alive.
     // This both certifies later entries and charges each inflation once.
     for (entry_index, input) in inputs.iter().enumerate() {
         probe.check()?;
+        let decode_memory = match input {
+            MethodScopeInput::Archive { entry, .. } => Some(artifact.runtime.memory.reserve_with_limit(
+                entry.declared_uncompressed_bytes(),
+                artifact.limits.max_engine_owned_bytes,
+                "decoded class-scope DEX entry",
+            )?),
+            MethodScopeInput::Raw => None,
+        };
         let (buffer, ordinal, raw_name) = match input {
-            MethodScopeInput::Archive { entry, .. } => (Some(zip::read_entry(
-                &artifact.bytes,
-                entry,
-                &artifact.limits.input(),
-                &decoded,
-                &probe,
-            )?), entry.ordinal, entry.raw_name.as_slice()),
+            MethodScopeInput::Archive { entry, .. } => (
+                Some(zip::read_entry(
+                    &artifact.bytes,
+                    entry,
+                    &artifact.limits.input(),
+                    &decoded,
+                    &probe,
+                )?),
+                entry.ordinal,
+                entry.raw_name.as_slice(),
+            ),
             MethodScopeInput::Raw => (None, 0, b"<memory.dex>".as_slice()),
         };
         let data = buffer.as_deref().unwrap_or(&artifact.bytes);
@@ -1884,6 +1950,7 @@ fn decompile_with_scope(
         }
         if chose_entry {
             selected_bytes = buffer;
+            selected_memory = decode_memory;
         }
     }
     let resolved = resolution.ok_or_else(|| {
@@ -1903,6 +1970,10 @@ fn decompile_with_scope(
         MethodScopeInput::Raw => (0, b"<memory.dex>".as_slice()),
     };
     let data = selected_bytes.as_deref().unwrap_or(&artifact.bytes);
+    // Keep the selected decoded buffer's permit alive through backend parse,
+    // rendering, and report construction. Non-selected entry permits were
+    // released at the end of their loop iteration.
+    let _selected_memory = selected_memory;
     // Recreate borrowed views; integrity diagnostics were collected once above.
     let (views, _) =
         container::validate_dex_entry(artifact.id, ordinal, raw_name, data, &probe)?;
@@ -1915,6 +1986,14 @@ fn decompile_with_scope(
         .filter(|diagnostic| diagnostic.dex() == Some(view.id()))
         .cloned()
         .collect();
+    let work_entry = views.dex_entry(resolved.logical);
+    let work_view = dex::DexView::new(work_entry, view.bytes());
+    let work_bytes = dex::estimated_scan_work(&work_view, &artifact.limits.scan)?;
+    let _scan_memory = artifact.runtime.memory.reserve_with_limit(
+        work_bytes,
+        artifact.limits.max_engine_owned_bytes,
+        "decompile DEX working set",
+    )?;
     let scratch = container::backend_scratch(view, &view_integrity);
     let backend_bytes: &[u8] = match &scratch {
         Some(scratch_view) => &scratch_view.bytes,
@@ -2014,7 +2093,7 @@ fn decompile_selected_method(
     let guard = ControlGuard::new(control);
     let probe = guard.probe();
     let decoded = AtomicU64::new(0);
-    let (buffer, ordinal, raw_name) = if let Some(catalog) = &artifact.catalog {
+    let (buffer, ordinal, raw_name, decode_memory) = if let Some(catalog) = &artifact.catalog {
         let entry = catalog
             .entries
             .iter()
@@ -2027,6 +2106,11 @@ fn decompile_selected_method(
             })?;
         let ordinal = entry.ordinal;
         let raw_name = entry.raw_name.clone();
+        let decode_memory = artifact.runtime.memory.reserve_with_limit(
+            entry.declared_uncompressed_bytes(),
+            artifact.limits.max_engine_owned_bytes,
+            "decoded selected-method DEX entry",
+        )?;
         let data = zip::read_entry(
             &artifact.bytes,
             entry,
@@ -2034,7 +2118,7 @@ fn decompile_selected_method(
             &decoded,
             &probe,
         )?;
-        (Some(data), ordinal, raw_name)
+        (Some(data), ordinal, raw_name, Some(decode_memory))
     } else {
         if method_id.dex().entry_ordinal() != 0 || method_id.dex().logical_ordinal() != 0 {
             return Err(Error::invalid_query(
@@ -2048,8 +2132,9 @@ fn decompile_selected_method(
                 artifact.limits.max_total_decoded_bytes
             )));
         }
-        (None, 0, b"<memory.dex>".to_vec())
+        (None, 0, b"<memory.dex>".to_vec(), None)
     };
+    let _decode_memory = decode_memory;
     let data = buffer.as_deref().unwrap_or(&artifact.bytes);
     let (views, integrity) = container::validate_dex_entry(
         artifact.id,
@@ -2075,6 +2160,14 @@ fn decompile_selected_method(
         .filter(|diagnostic| diagnostic.dex() == Some(view.id()))
         .cloned()
         .collect();
+    let work_entry = views.dex_entry(logical);
+    let work_view = dex::DexView::new(work_entry, view.bytes());
+    let work_bytes = dex::estimated_scan_work(&work_view, &artifact.limits.scan)?;
+    let _scan_memory = artifact.runtime.memory.reserve_with_limit(
+        work_bytes,
+        artifact.limits.max_engine_owned_bytes,
+        "selected-method DEX working set",
+    )?;
     let scratch = container::backend_scratch(view, &view_integrity);
     let backend_bytes = scratch
         .as_ref()
@@ -2200,6 +2293,11 @@ fn manifest(
         })?;
     let guard = ControlGuard::new(control);
     let probe = guard.probe();
+    let _decode_memory = artifact.runtime.memory.reserve_with_limit(
+        entry.declared_uncompressed_bytes(),
+        artifact.limits.max_engine_owned_bytes,
+        "decoded manifest entry",
+    )?;
     let decoded = AtomicU64::new(0);
     let bytes = zip::read_entry(
         &artifact.bytes,
@@ -3125,7 +3223,11 @@ mod tests {
             .active_bytes
             .load(Ordering::Relaxed);
         let probe_report = probe_engine
-            .classes(&probe_artifact, &ClassFilter::none(), &no_control())
+            .archive_entries(
+                &probe_artifact,
+                &ArchiveEntryQuery::default(),
+                &no_control(),
+            )
             .unwrap();
         let after_report = probe_engine
             .runtime
@@ -3151,16 +3253,56 @@ mod tests {
             .open_bytes(Arc::from(zip.into_boxed_slice()), InputKind::Apk, &no_control())
             .unwrap();
         let report = engine
-            .classes(&artifact, &ClassFilter::none(), &no_control())
+            .archive_entries(
+                &artifact,
+                &ArchiveEntryQuery::default(),
+                &no_control(),
+            )
+            .unwrap();
+        let error = engine
+            .archive_entries(
+                &artifact,
+                &ArchiveEntryQuery::default(),
+                &no_control(),
+            )
+            .unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::ResourceLimit));
+        drop(report);
+        assert!(engine
+            .archive_entries(
+                &artifact,
+                &ArchiveEntryQuery::default(),
+                &no_control(),
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn scanner_working_set_is_reserved_before_rows_and_releases_on_failure() {
+        let dex = const_string_fixture(1);
+        let zip = build_zip(&[("classes.dex", &dex, true)]);
+        let max_engine_owned_bytes = zip.len() as u64 + 64 + 2 * b"classes.dex".len() as u64 + 1;
+        let engine = Engine::new(EngineOptions {
+            limits: Limits {
+                max_engine_owned_bytes,
+                ..Limits::default()
+            },
+            ..EngineOptions::default()
+        })
+        .unwrap();
+        let artifact = engine
+            .open_bytes(Arc::from(zip.into_boxed_slice()), InputKind::Apk, &no_control())
             .unwrap();
         let error = engine
             .classes(&artifact, &ClassFilter::none(), &no_control())
             .unwrap_err();
         assert!(matches!(error.kind(), ErrorKind::ResourceLimit));
-        drop(report);
-        assert!(engine
-            .classes(&artifact, &ClassFilter::none(), &no_control())
-            .is_ok());
+        drop(artifact);
+        assert_eq!(
+            engine.runtime.active_bytes.load(Ordering::Relaxed),
+            0,
+            "working-set rejection must release all retained input charges"
+        );
     }
 
     #[cfg(feature = "decompile")]
@@ -3469,9 +3611,9 @@ pub(crate) struct Runtime {
     /// Waiters use a bounded lock poll so a cancelled or
     /// deadline-expired host never queues forever (interfaces.md §5).
     admission: Mutex<()>,
-    /// Retained input bytes (catalog/working allocations are tracked separately
-    /// in the embedding audit debt). Inputs are opened
-    /// through this engine and released with the artifact.
+    /// Compatibility-visible counter for deterministic tests; all charges are
+    /// issued by the single `memory` ledger below.
+    #[allow(dead_code)]
     active_bytes: Arc<AtomicU64>,
     /// Single checked ledger used by all engine-owned allocation permits.
     memory: Arc<MemoryAccount>,

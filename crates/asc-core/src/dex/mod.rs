@@ -65,6 +65,34 @@ impl<'a> DexView<'a> {
     }
 }
 
+/// Conservative upper bound for scanner-owned working structures for one
+/// logical DEX. The input bytes themselves are charged by the caller when an
+/// archive entry was inflated; this estimate covers table/index maps and a
+/// code-sized allowance for hit locations that can be much larger than the
+/// final result.
+pub(crate) fn estimated_scan_work(
+    view: &DexView<'_>,
+    limits: &ScanLimits,
+) -> Result<u64, Error> {
+    let dex = ScanDex::parse(view, limits)?;
+    let mut bytes = 4096u64.saturating_add(view.bytes.len() as u64);
+    for (count, per_row) in [
+        (dex.header.strings_size, 64u64),
+        (dex.header.types_size, 32),
+        (dex.header.protos_size, 64),
+        (dex.header.fields_size, 96),
+        (dex.header.methods_size, 128),
+        (dex.header.classes_size, 256),
+    ] {
+        bytes = bytes.saturating_add(
+            u64::try_from(count)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(per_row),
+        );
+    }
+    Ok(bytes)
+}
+
 /// Scan-scope budgets: the interfaces.md §5 initial values that the scanner
 /// itself enforces. A11 folds this struct into the engine-wide Limits table;
 /// every field must stay a finite positive number.

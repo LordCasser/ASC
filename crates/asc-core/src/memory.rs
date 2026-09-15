@@ -6,6 +6,7 @@
 //! artifacts, transient decode buffers and reports.
 
 use crate::error::Error;
+use crate::model::MemoryPermit;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -13,6 +14,28 @@ use std::sync::Arc;
 pub(crate) struct MemoryAccount {
     active: Arc<AtomicU64>,
     limit: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::ErrorKind;
+
+    #[test]
+    fn checked_reservation_rejects_overflow_and_returns_charge_on_drop() {
+        let (account, active) = MemoryAccount::new(u64::MAX);
+        let account = Arc::new(account);
+        let permit = account
+            .reserve_with_limit(u64::MAX, u64::MAX, "overflow fixture")
+            .unwrap();
+        assert_eq!(active.load(Ordering::Relaxed), u64::MAX);
+        let error = account
+            .reserve_with_limit(1, u64::MAX, "overflow fixture")
+            .unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::ResourceLimit));
+        drop(permit);
+        assert_eq!(active.load(Ordering::Relaxed), 0);
+    }
 }
 
 impl MemoryAccount {
@@ -25,10 +48,6 @@ impl MemoryAccount {
             },
             active,
         )
-    }
-
-    pub(crate) fn reserve(self: &Arc<Self>, bytes: u64, label: &str) -> Result<MemoryPermit, Error> {
-        self.reserve_with_limit(bytes, self.limit, label)
     }
 
     pub(crate) fn reserve_with_limit(
@@ -58,47 +77,10 @@ impl MemoryAccount {
                 Ordering::Relaxed,
             ) {
                 Ok(_) => {
-                    return Ok(MemoryPermit {
-                        allocation: Arc::new(Allocation {
-                            account: Arc::clone(self),
-                            bytes,
-                        }),
-                    })
+                    return Ok(MemoryPermit::new(Arc::clone(&self.active), bytes))
                 }
                 Err(observed) => current = observed,
             }
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn active(&self) -> u64 {
-        self.active.load(Ordering::Relaxed)
-    }
-}
-
-#[derive(Debug)]
-struct Allocation {
-    account: Arc<MemoryAccount>,
-    bytes: u64,
-}
-
-impl Drop for Allocation {
-    fn drop(&mut self) {
-        self.account
-            .active
-            .fetch_sub(self.bytes, Ordering::Relaxed);
-    }
-}
-
-/// A cloneable RAII charge. Clones share the same allocation and therefore
-/// keep the charge alive until the final clone is dropped.
-#[derive(Clone, Debug)]
-pub(crate) struct MemoryPermit {
-    allocation: Arc<Allocation>,
-}
-
-impl MemoryPermit {
-    pub(crate) fn bytes(&self) -> u64 {
-        self.allocation.bytes
     }
 }
