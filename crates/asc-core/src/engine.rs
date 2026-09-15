@@ -28,13 +28,13 @@ use crate::model::{
     AnnotationEntry, AnnotationRecord, AnnotationTarget, AnnotationVisibility, ArtifactId, Class,
     ClassDescriptor, ClassFilter, ClassId, ClassMetadata, ClassSelector, DexEntry, DexText,
     Diagnostic, DiagnosticCode, EncodedValue, EnclosingRecord, FieldDeclaration, FieldId,
-    FieldMetadata, InnerClassRecord, MethodDeclaration, MethodId, MethodIdentity, MethodInventory,
+    FieldMetadata, InnerClassRecord, MethodDeclaration, MethodIdentity, MethodInventory,
     MethodMetadata, MethodTarget, OperationStats, Prototype, Report, Severity, Source,
     SourceMetadata, Stage,
 };
 use crate::model::{
     ArchiveEntry as ArchiveEntryFact, ArchiveEntryId, ArchiveEntryQuery, MethodScope,
-    InstructionFact, MemoryPermit, StringDeclaration,
+    InstructionFact, MemoryPermit, MethodId, StringDeclaration,
 };
 use crate::memory::MemoryAccount;
 #[cfg(not(feature = "decompile"))]
@@ -932,6 +932,34 @@ pub(crate) fn instructions_in_scope(
     scope: &MethodScope,
     control: &OperationControl,
 ) -> Result<Report<Vec<InstructionFact>>, Error> {
+    instructions_in_scope_filtered(artifact, scope, control, None)
+}
+
+/// Typed instruction facts for a bounded set of method identities.  Scope
+/// validation and archive integrity still cover the selected DEX entries, but
+/// code items outside `methods` are not decoded or retained in the report.
+pub(crate) fn instructions_for_methods_in_scope(
+    artifact: &Artifact,
+    scope: &MethodScope,
+    methods: &[MethodId],
+    control: &OperationControl,
+) -> Result<Report<Vec<InstructionFact>>, Error> {
+    let mut by_dex = std::collections::BTreeMap::new();
+    for method in methods {
+        by_dex
+            .entry(method.dex())
+            .or_insert_with(std::collections::BTreeSet::new)
+            .insert(method.method_idx());
+    }
+    instructions_in_scope_filtered(artifact, scope, control, Some(&by_dex))
+}
+
+fn instructions_in_scope_filtered(
+    artifact: &Artifact,
+    scope: &MethodScope,
+    control: &OperationControl,
+    method_filter: Option<&std::collections::BTreeMap<crate::model::DexId, std::collections::BTreeSet<u32>>>,
+) -> Result<Report<Vec<InstructionFact>>, Error> {
     let scan_limits = artifact.limits.scan;
     let (rows, diagnostics) = fold_scope(
         artifact,
@@ -940,8 +968,21 @@ pub(crate) fn instructions_in_scope(
         instruction_fact_size,
         |views, logical, probe| {
             let view = &views.views[logical];
-            let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
-            dex::list_instructions(&dex_view, &scan_limits, Some(probe))
+            let entry = views.dex_entry(logical);
+            let selected = method_filter.and_then(|filter| filter.get(&entry.id()));
+            if method_filter.is_some() && selected.is_none() {
+                return Ok(Vec::new());
+            }
+            let dex_view = dex::DexView::new(entry, view.bytes());
+            match method_filter {
+                None => dex::list_instructions(&dex_view, &scan_limits, Some(probe)),
+                Some(_) => dex::list_instructions_for_methods(
+                    &dex_view,
+                    &scan_limits,
+                    Some(probe),
+                    selected,
+                ),
+            }
         },
     )?;
     let bytes = rows
@@ -1667,6 +1708,115 @@ where
                     &guard,
                 );
                 visitor(&declaration, result.as_ref())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "decompile")]
+fn visit_method_declarations<F>(
+    artifact: &Artifact,
+    scope: &MethodScope,
+    control: &OperationControl,
+    mut visitor: F,
+) -> Result<(), Error>
+where
+    F: FnMut(&MethodDeclaration) -> Result<(), Error>,
+{
+    let inputs = resolve_method_scope(artifact, scope)?;
+    let guard = ControlGuard::new(control);
+    let probe = guard.probe();
+    let input_limits = artifact.limits.input();
+    let declared_total = declared_scope_bytes(artifact, &inputs);
+    if declared_total > input_limits.max_total_decoded_bytes {
+        return Err(Error::resource_limit(format!(
+            "the selected method scope declares {declared_total} decoded bytes, above the {} per-operation limit",
+            input_limits.max_total_decoded_bytes
+        )));
+    }
+    let decoded = AtomicU64::new(0);
+    for input in inputs {
+        probe.check()?;
+        let _decode_permit = match &input {
+            MethodScopeInput::Archive { entry, .. } => Some(artifact.runtime.memory.reserve_with_limit(
+                entry.declared_uncompressed_bytes(),
+                artifact.limits.max_engine_owned_bytes,
+                "decoded method declaration DEX entry",
+            )?),
+            MethodScopeInput::Raw => None,
+        };
+        let (buffer, ordinal, raw_name, wanted_logical) = match input {
+            MethodScopeInput::Raw => (None, 0, b"<memory.dex>".to_vec(), None),
+            MethodScopeInput::Archive { entry, logical } => {
+                let ordinal = entry.ordinal;
+                let raw_name = entry.raw_name.clone();
+                let data = zip::read_entry(
+                    &artifact.bytes,
+                    &entry,
+                    &input_limits,
+                    &decoded,
+                    &probe,
+                )?;
+                (Some(data), ordinal, raw_name, logical)
+            }
+        };
+        let data = buffer.as_deref().unwrap_or(&artifact.bytes);
+        let (views, integrity) = container::validate_dex_entry(
+            artifact.id,
+            ordinal,
+            &raw_name,
+            data,
+            &probe,
+        )?;
+        for (logical, view) in views.views.iter().enumerate() {
+            let logical_u32 = u32::try_from(logical).map_err(|_| {
+                Error::malformed_input("logical DEX ordinal exceeds the public identity range")
+            })?;
+            if wanted_logical.is_some_and(|wanted| wanted != logical_u32) {
+                continue;
+            }
+            probe.check()?;
+            let view_integrity: Vec<Diagnostic> = integrity
+                .iter()
+                .filter(|diagnostic| diagnostic.dex() == Some(view.id()))
+                .cloned()
+                .collect();
+            let work_entry = views.dex_entry(logical);
+            let work_view = dex::DexView::new(work_entry, view.bytes());
+            let work_bytes = dex::estimated_scan_work(&work_view, &artifact.limits.scan)?;
+            let _scan_memory = artifact.runtime.memory.reserve_with_limit(
+                work_bytes,
+                artifact.limits.max_engine_owned_bytes,
+                "method declaration DEX working set",
+            )?;
+            let scratch = container::backend_scratch(view, &view_integrity);
+            let backend_bytes = scratch
+                .as_ref()
+                .map(|scratch| scratch.bytes.as_slice())
+                .unwrap_or_else(|| view.bytes());
+            let budget = guard.backend_budget(backend_bytes.len() as u64);
+            let parsed = droidsaw_dex::analysis::parse_for_analysis(
+                backend_bytes,
+                &droidsaw_dex::analysis::ParseOptions::default(),
+                &budget,
+                &guard.backend,
+            )
+            .map_err(|error| {
+                map_backend_error(error)
+                    .with_context("backend method declaration parse")
+                    .with_diagnostics(integrity.clone())
+            })?;
+            let entry = views.dex_entry(logical);
+            for declaration in method_declarations_for_parsed(
+                &parsed,
+                &entry,
+                view,
+                backend_bytes,
+                &probe,
+            )? {
+                probe.check()?;
+                visitor(&declaration)?;
             }
         }
     }
@@ -4022,6 +4172,23 @@ impl Engine {
             .install(|| instructions_in_scope(artifact, scope, control))
     }
 
+    /// Returns typed instruction facts for selected method identities only.
+    /// The archive and DEX scope are still validated, while unselected method
+    /// code items are skipped before fact decoding and result accounting.
+    pub fn instructions_for_methods_in_scope(
+        &self,
+        artifact: &Artifact,
+        scope: &MethodScope,
+        methods: &[MethodId],
+        control: &OperationControl,
+    ) -> Result<Report<Vec<InstructionFact>>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        self.runtime.pool.install(|| {
+            instructions_for_methods_in_scope(artifact, scope, methods, control)
+        })
+    }
+
     /// Lists every method declared by the selected DEX scope, including
     /// native/abstract declarations and methods with no reference hits.
     #[cfg(feature = "decompile")]
@@ -4036,6 +4203,28 @@ impl Engine {
         self.runtime
             .pool
             .install(|| method_inventory(artifact, scope, control))
+    }
+
+    /// Visits each declared method in deterministic scope order without
+    /// retaining a whole-scope inventory.  The callback runs while the
+    /// current logical DEX is parsed, so callers can keep only the rows they
+    /// need for a bounded query.
+    #[cfg(feature = "decompile")]
+    pub fn visit_method_declarations<F>(
+        &self,
+        artifact: &Artifact,
+        scope: &MethodScope,
+        control: &OperationControl,
+        visitor: F,
+    ) -> Result<(), Error>
+    where
+        F: FnMut(&MethodDeclaration) -> Result<(), Error> + Send,
+    {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        self.runtime
+            .pool
+            .install(|| visit_method_declarations(artifact, scope, control, visitor))
     }
 
     #[cfg(feature = "decompile")]

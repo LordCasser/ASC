@@ -203,6 +203,18 @@ pub(crate) fn list_instructions(
     limits: &ScanLimits,
     control: Option<&ControlProbe<'_>>,
 ) -> Result<Vec<InstructionFact>, Error> {
+    list_instructions_for_methods(view, limits, control, None)
+}
+
+/// Typed instruction facts for only the selected method-table rows.  Class
+/// data is still walked to validate the table, but unselected code items are
+/// never decoded or retained in the result.
+pub(crate) fn list_instructions_for_methods(
+    view: &DexView<'_>,
+    limits: &ScanLimits,
+    control: Option<&ControlProbe<'_>>,
+    methods: Option<&std::collections::BTreeSet<u32>>,
+) -> Result<Vec<InstructionFact>, Error> {
     let dex = ScanDex::parse(view, limits)?;
     check_control(control)?;
     let mut out = Vec::new();
@@ -229,7 +241,7 @@ pub(crate) fn list_instructions(
                     .ok_or_else(|| Error::malformed_input("method index overflow in class data"))?;
                 dex.uleb(&mut cursor)?; // access flags
                 let code_off = dex.uleb(&mut cursor)? as usize;
-                if code_off != 0 {
+                if code_off != 0 && methods.is_none_or(|selected| selected.contains(&method_idx)) {
                     dex.list_code_instructions(
                         method_idx,
                         code_off,
@@ -1792,6 +1804,21 @@ pub(crate) mod tests {
         );
         assert!(facts[1].reads().is_empty());
         assert!(facts[1].writes().is_empty());
+    }
+
+    #[test]
+    fn typed_instruction_provider_can_skip_unselected_methods() {
+        let data = const_string_fixture(1);
+        let view = structured_view(&data);
+        let selected = std::collections::BTreeSet::from([99_u32]);
+        let facts = list_instructions_for_methods(
+            &view,
+            &ScanLimits::DEFAULT,
+            None,
+            Some(&selected),
+        )
+        .unwrap();
+        assert!(facts.is_empty());
     }
 
     #[test]
