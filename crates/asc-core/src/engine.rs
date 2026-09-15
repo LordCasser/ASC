@@ -26,7 +26,7 @@ use crate::error::{Error, ErrorKind};
 #[cfg(feature = "decompile")]
 use crate::model::{
     AnnotationEntry, AnnotationRecord, AnnotationTarget, AnnotationVisibility, ArtifactId, Class,
-    ClassDescriptor, ClassFilter, ClassId, ClassMetadata, ClassSelector, DexEntry, DexText,
+    ClassDescriptor, ClassFilter, ClassId, ClassMetadata, ClassSelector, DexText,
     Diagnostic, DiagnosticCode, EncodedValue, EnclosingRecord, FieldDeclaration, FieldId,
     FieldMetadata, InnerClassRecord, MethodDeclaration, MethodIdentity, MethodInventory,
     MethodMetadata, MethodTarget, OperationStats, Prototype, Report, Severity, Source,
@@ -34,12 +34,12 @@ use crate::model::{
 };
 use crate::model::{
     ArchiveEntry as ArchiveEntryFact, ArchiveEntryId, ArchiveEntryQuery, MethodScope,
-    InstructionFact, MemoryPermit, MethodId, StringDeclaration,
+    DexEntry, InstructionFact, MemoryPermit, MethodId, StringDeclaration,
 };
 use crate::memory::MemoryAccount;
 #[cfg(not(feature = "decompile"))]
 use crate::model::{
-    ArtifactId, Class, ClassFilter, DexEntry, DexText, Diagnostic, DiagnosticCode, OperationStats,
+    ArtifactId, Class, ClassFilter, DexText, Diagnostic, DiagnosticCode, OperationStats,
     Prototype, Report, Severity, Stage,
 };
 use crate::zip::{self, ArchiveEntry as ZipArchiveEntry};
@@ -599,7 +599,7 @@ fn reference_size(row: &crate::model::Reference) -> (usize, usize, u64) {
 fn dexes(artifact: &Artifact, control: &OperationControl) -> Result<Report<Vec<DexEntry>>, Error> {
     let (rows, diagnostics) = artifact.fold_roots(
         control,
-        |entry: &DexEntry| (1, 128 + entry.raw_entry_name().len(), 0),
+        |entry: &DexEntry| (1, 128usize.saturating_add(entry.raw_entry_name().len()), 0),
         |_entry, views, _probe| {
             let mut rows = Vec::with_capacity(views.views.len());
             for logical in 0..views.views.len() {
@@ -1001,6 +1001,40 @@ fn instructions_in_scope_filtered(
                 .collect::<std::collections::BTreeSet<_>>()
                 .len() as u32,
             result_items: rows.len() as u64,
+            ..Default::default()
+        },
+    )
+    .with_memory(memory))
+}
+
+/// Resolves an explicit method scope to logical DEX identities without
+/// building class or method inventories. Entry bytes and DEX structure are
+/// still checked through the same scoped validation pipeline.
+fn dexes_in_scope(
+    artifact: &Artifact,
+    scope: &MethodScope,
+    control: &OperationControl,
+) -> Result<Report<Vec<DexEntry>>, Error> {
+    let (rows, diagnostics) = fold_scope(
+        artifact,
+        scope,
+        control,
+        |entry: &DexEntry| (1, 128 + entry.raw_entry_name().len(), 0),
+        |views, logical, _probe| Ok(vec![views.dex_entry(logical)]),
+    )?;
+    let selected_dexes = rows.len() as u32;
+    let result_items = rows.len() as u64;
+    let bytes = rows
+        .iter()
+        .map(|entry| 128usize.saturating_add(entry.raw_entry_name().len()))
+        .fold(0usize, usize::saturating_add);
+    let memory = reserve_report_memory(artifact, bytes, &diagnostics, "scoped DEX report")?;
+    Ok(Report::new(
+        rows,
+        diagnostics,
+        OperationStats {
+            selected_dexes,
+            result_items,
             ..Default::default()
         },
     )
@@ -3782,6 +3816,18 @@ mod tests {
             .method_inventory(&artifact, &MethodScope::AllDetected, &no_control())
             .unwrap();
         assert_eq!(all.value().resolved_dexes().len(), 2);
+        let dexes = engine
+            .dexes_in_scope(&artifact, &MethodScope::AllDetected, &no_control())
+            .unwrap();
+        assert_eq!(dexes.value().len(), 2);
+        assert_eq!(
+            dexes
+                .value()
+                .iter()
+                .map(|dex| dex.id().entry_ordinal())
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
         let asset_method = all
             .value()
             .methods()
@@ -3986,6 +4032,22 @@ impl Engine {
         let _admission = self.admit(control)?;
         self.check_ownership(artifact)?;
         dexes(artifact, control)
+    }
+
+    /// Resolves a DEX scope to logical entries without retaining method or
+    /// class declarations. The selected input is still validated before the
+    /// report is returned.
+    pub fn dexes_in_scope(
+        &self,
+        artifact: &Artifact,
+        scope: &MethodScope,
+        control: &OperationControl,
+    ) -> Result<Report<Vec<DexEntry>>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        self.runtime
+            .pool
+            .install(|| dexes_in_scope(artifact, scope, control))
     }
 
     /// Returns every central-directory entry in stable ordinal order. The
