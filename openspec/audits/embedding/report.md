@@ -33,7 +33,7 @@ cargo test -p asc-core --all-features --test embedded_regressions --locked
 
 这些问题不混入 submodule 机械接入，也不消失在“审计通过”的概述里：
 
-1. **MEM-01 活跃内存完整账户**：当前 `max_engine_owned_bytes` 实际保留输入 bytes；历史 interfaces.md 中输入/catalog/解压/scratch/结构/结果全账户的声明没有全部落实。输入、解压、scan 结果各有独立上限，但不等同于总活跃内存或 RSS。后续必须单独设计 permits 与真实分配前计量，或明确收窄该 API 合同；本轮不声称修复。
+1. **MEM-01 活跃内存完整账户**：`max_engine_owned_bytes` 现在覆盖输入、catalog、解压、scan scratch 与 report 的部分估算；`Report` 在 `4e3d710` 中通过共享真实 payload allocation 修正了 clone/drop 所有权，移除了会把 payload 带出 permit 生命周期的 public `into_value`。`Artifact::fold_*` 在 `ac1010c` 中把每个逻辑 DEX 的 scan estimate permit 持有到 rows 转移并取得最终 report permit 后，才释放 scratch，因而覆盖了批内结果的临时存活窗口；report size 仍是结构估算，vendor parse/CFG/SSA 仍未完整计量。输入、解压、scan 结果各有独立上限，但不等同于完整活跃内存或 RSS；本轮只收窄并记录边界，不声称完整修复。
 2. **MEM-02 中间结构**：scan 的 hits 索引、批内返回值、class filter 前临时结构和 vendor parse/CFG/SSA 不是整个进程内存硬限制。操作结果上限已修复，但不能据此宣称中间结构也都已计量。
 3. **QUAL-01 质量基线**：格式及既有 clippy 警告单独清理；不能对当前 patch 顺带重排整个 vendor。源码审计发现 `.github` 不存在，历史“已建立原生 CI”声明需作为后续 gate 重建，不能当现场证据。
 4. **PLAT-01 原生平台**：本机为 macOS arm64；没有用 Linux/Windows 原生运行冒充通过。BIN/IDA 的最终 native bridge 验收仍由消费者负责。
@@ -53,9 +53,9 @@ cargo test -p asc-core --all-features --test embedded_regressions --locked
 
 本节记录本轮在 ASC 源仓的实现 checkpoint，不把下游 APK/IDA 联调结果倒灌成 core 证据。
 
-* A16 provider 已由 `b41b82f` 提供 archive identity、bounded catalog、受控 copy 和 shared decoded quota。A16 2.1 的 feature matrix 与仓外 path consumer 证据仍以 `/tmp/asc-audit-logs/feature-matrix-after-gates-final.log` 和 `/tmp/asc-audit-logs/consumer-path-final.log` 为准；2.2 staged-output 联合验收未在本仓归档。
+* A16 provider 已由 `b41b82f` 提供 archive identity、bounded catalog、受控 copy 和 shared decoded quota。A16 2.1 的 feature matrix 与仓外 path consumer 证据仍以 `/tmp/asc-audit-logs/feature-matrix-after-gates-final.log` 和 `/tmp/asc-audit-logs/consumer-path-final.log` 为准；消费者 B 的 staged-output 联合验收已由 reverse-engine 通过，故 2.2 可归档，宿主原子发布与父子身份仍由消费者负责。
 * A17 的 `4b5064f`/`d9f4b49` 提供 MethodInventory、FieldDeclaration、MethodTarget 和显式 scope；`bd84da4` 增加 `visit_method_declarations`、按 MethodId 的 `instructions_for_methods_in_scope`，`08f51c2` 增加有序 `invoke_registers`，`935207f` 增加不物化声明的 `dexes_in_scope`。`cargo test -p asc-core --all-features --locked` 本轮为 209 passed；其中包含 nested/all-detected scope 与 batch visitor 回归。完整 native/abstract/metadata 矩阵以及仓外消费者/IDA 仍未完成，故 A17 tasks 不归档。
-* A18 的 `6141965`、`8b91724`、`abf5816` 和上述 scoped visitor 让输入、解压、scan/report 结果及部分 typed facts 在分配前取得精确或保守的 ledger charge，并由 RAII 归还。该 ledger 的 `max_engine_owned_bytes` 只是引擎可计量资源的上限；vendor parse/CFG/SSA、部分中间结构没有完整精确计量，任何 `estimated_scan_work` 或 report estimate 也都不是 OS RSS 硬限制。A18 任务保持未勾选。
+* A18 的 `6141965`、`8b91724`、`abf5816`、scoped visitor、`4e3d710`、`ac1010c` 让输入、解压、scan/report 结果及部分 typed facts 在分配前取得精确或保守的 ledger charge，并由 RAII 归还；其中 report clone 共享同一真实 payload allocation，结果不能通过 public owned extraction 脱离 permit，fold 批内 rows 也保持其 scan estimate permit 到最终 report permit 取得。该 ledger 的 `max_engine_owned_bytes` 只是引擎可计量资源的上限；report estimate、vendor parse/CFG/SSA 与部分中间结构没有完整精确计量，任何 `estimated_scan_work` 或 report estimate 也都不是 OS RSS 硬限制。A18 任务保持未勾选。
 
 复现命令（ASC 源仓，Rust 1.93.1，复用默认 `target`，未创建第二 target）：
 

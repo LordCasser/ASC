@@ -22,7 +22,7 @@
 | ClassFilter | 可选 Java 名大小写不敏感子串；空 filter 表示不过滤，规则不复用 Pattern 的空查询拒绝；有效 Unicode scalar 做非 locale lowercase，非配对 UTF-16 单元原样保留 |
 | ClassSelector | Descriptor(ClassDescriptor, Option<DexId>) 或 Id(ClassId)；后者不再次按 descriptor 搜索 |
 | Reference | caller: MethodIdentity，targets: Vec<TargetMatch>；TargetMatch 含 ID、完整名称/类型信息、升序去重 code_unit_offsets |
-| Report<T> | value: T、diagnostics: Vec<Diagnostic>、stats: OperationStats；stats 不参与事实等价/默认 payload |
+| Report<T> | `value()` 借用 payload、`diagnostics()`、`stats()`；Report clone 共享同一 payload allocation 与其 permit，stats 不参与事实等价/默认 payload；core 不提供转移 payload 后释放 permit 的 owned extraction |
 | Source | class: Class、UTF-8 Java 风格 text、SourceMetadata；完整成功才能存在于 Ok Report |
 | SourceMetadata | 原 class/field/method flags、super/interfaces、prototype、annotations（目标/visibility/值）、generic signatures、throws、inner/enclosing、参数/debug locals/lines；缺失可选数据用 None |
 | Manifest | 自有有序文档模型、原始 typed data 与 styles 元数据，显式 to_xml(&XmlRenderOptions, &OperationControl) -> Result<String>；不暴露 vendor Rc/DTO |
@@ -62,7 +62,7 @@ Engine::dexes(&self, artifact: &Artifact,
 
 InputKind 为 Apk/Dex，不按文件扩展名猜；CLI 首版入口仍是 APK。Engine::dexes 返回 selected entry 的名字、ordinal、版本和 header offset；也是 getclass --dex 的定位入口。open APK 仅验证输入与中央目录 catalog，不为 manifest 预解析无关 DEX；逻辑成员在 dexes/classes/references/getclass 操作中有界构建。dexes 对无 DEX 返回空 catalog；查询/classes/getclass 在无 DEX 时返回 NotFound，manifest 不要求存在或有效的 DEX；raw DEX 调用 manifest 返回 UnsupportedFormat。之后操作的验证范围见下一节。
 
-Engine 是可 Clone 的 Arc 句柄，Clone 共享一个私有 pool 和资源账户；Engine/Artifact 为 Send + Sync，结果拥有数据。Artifact 记录所属 Engine 账户，操作只接受同一账户创建的 Artifact；其他 Engine 拒绝 InvalidQuery，调用者可用同一 bytes 重新 open。Artifact 持有输入 permits 到 drop，因此 Engine 句柄先 drop 仍不会让输入预算失去归属。所有操作同步返回，调用期间克隆内部句柄；最后一个账户句柄和活动调用释放后销毁 pool。返回的 owned 结果不再占 Engine permits，受 per-operation result 上限约束；宿主持有的历史结果总量不属于 Engine 的硬上限。
+Engine 是可 Clone 的 Arc 句柄，Clone 共享一个私有 pool 和资源账户；Engine/Artifact 为 Send + Sync，结果拥有数据。Artifact 记录所属 Engine 账户，操作只接受同一账户创建的 Artifact；其他 Engine 拒绝 InvalidQuery，调用者可用同一 bytes 重新 open。Artifact 持有输入 permits 到 drop，因此 Engine 句柄先 drop 仍不会让输入预算失去归属。所有操作同步返回，调用期间克隆内部句柄；最后一个账户句柄和活动调用释放后销毁 pool。返回的 Report 在自身及所有 clone 存活期间继续占用它代表的结果 permit；消费者从 `value()` 建立的副本属于 core 计量边界之外。宿主持有的历史结果总量不属于 Engine 的硬上限。
 
 open_path 读取有界 owned bytes；metadata 只预检，实际读超过上限必须中断，hash 和解析检查 control。快照保证读取完成后内容不变，不声称在另一个进程写文件时具有文件系统事务快照。open_bytes 不复制 Arc 数据，但每次 open 保守申请其完整长度额度；只保证一次 Artifact 内的 041 views 共享 bytes，不试图用全局指针表跨 Artifact 精确核算共享内存。
 
@@ -104,7 +104,7 @@ DEX checksum/signature 不匹配为 warning；安全结构无效为 MalformedInp
 | max_input_bytes / input-bytes | 512 MiB | 单个 APK/raw DEX，owned snapshot/Arc 保留 |
 | max_entry_bytes / entry-bytes | 256 MiB | 单 entry 解压的实际字节，不只信元数据 |
 | max_total_decoded_bytes / decoded-bytes | 1 GiB | 每操作累计 entry 解压量，流式校验丢弃的数据也计入 |
-| max_engine_owned_bytes / engine-bytes | 2 GiB | 本 Engine 输入、catalog、解压/041 scratch、ASC 自有结构和结果组装的活跃估计；不含不可控第三方与已返回结果 |
+| max_engine_owned_bytes / engine-bytes | 2 GiB | 本 Engine 输入、catalog、解压/041 scratch、ASC 自有结构和结果组装的活跃估计；Report 结果 permit 在 report/clone 存活期间保留；不含不可控第三方与消费者从 `value()` 建立的副本 |
 | max_archive_entries / entries | 100,000 | 中央目录全部条目 |
 | max_logical_dexes / dexes | 4,096 | 一个 Artifact 选中的逻辑 DEX 总数 |
 | max_table_items / table-items | 4,000,000 | 每个 DEX table，格式本身的限制更优先 |
