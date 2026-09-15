@@ -395,26 +395,25 @@ fn failed_file_write_sends_no_stdout_payload() {
 fn atomic_replacement_leaves_no_temporary_files_behind() {
     let apk = fixture(G01);
     let out = temp_apk("replace-me.txt", b"old");
-    // Pre-clean leftovers from previously killed runs: this test only
-    // certifies the files created by the run below.
-    for entry in fs::read_dir(std::env::temp_dir()).unwrap().filter_map(Result::ok) {
-        if entry.file_name().to_string_lossy().contains(".rasc-") {
-            let _ = fs::remove_file(entry.path());
-        }
-    }
+    // Snapshot-based leak check: sibling tests run in parallel and use the
+    // same temp directory, so only files that appear AND survive this
+    // command are leaks (concurrent in-flight temps belong to them).
+    let snap = |parent: &Path| -> std::collections::BTreeSet<String> {
+        fs::read_dir(parent)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect()
+    };
+    let parent = std::env::temp_dir();
+    let before = snap(&parent);
     let output = run(&["classes", apk.to_str().unwrap(), "-o", out.to_str().unwrap()]);
     assert_eq!(status(&output), 0);
     // Only the final file exists: the hidden temp file was renamed over it.
-    let parent = std::env::temp_dir();
-    let leftovers: Vec<_> = fs::read_dir(&parent)
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            // temp files carry the `.rasc-<pid>-<hex>.tmp` suffix; a renamed
-            // output file may legitimately contain ".rasc-" in its name.
-            name.contains(".rasc-") && name.ends_with(".tmp")
-        })
+    let leftovers: Vec<_> = snap(&parent)
+        .difference(&before)
+        .filter(|name| name.contains(".rasc-") && name.ends_with(".tmp"))
+        .cloned()
         .collect();
     assert!(leftovers.is_empty(), "temporary files leaked: {leftovers:?}");
     let _ = fs::remove_file(&out);

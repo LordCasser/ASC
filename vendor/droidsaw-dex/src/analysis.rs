@@ -385,6 +385,9 @@ pub struct StaticFieldReport {
     /// exists **and** it renders; `None` when the slot is elided or the
     /// value is unrenderable (distinguish via [`Self::drop_reason`]).
     pub encoded_value_java: Option<String>,
+    /// PATCHED (asc, A12): the raw encoded value, resolved to a
+    /// primitive-only typed record (DECL-02 typed metadata).
+    pub typed_value: Option<crate::analysis::TypedValue>,
     /// PATCHED (asc, DX-P04): lossless metadata-grade rendering of the
     /// encoded-array entry whenever one exists at this slot (including
     /// shapes Java source cannot express — Method / MethodType /
@@ -622,6 +625,32 @@ pub enum AnnotationTarget {
     },
 }
 
+/// PATCHED (asc, A12/DECL-02): a fully-resolved, primitive-only encoded
+/// value. Pool indexes (strings/types/fields/methods/protos) resolve at
+/// report-build time, so no vendor pool type crosses the checked API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypedValue {
+    Null,
+    Boolean(bool),
+    Byte(i8),
+    Short(i16),
+    Char(u16),
+    Int(i32),
+    Long(i64),
+    /// Raw IEEE-754 bits - the only lossless float/double form (DECL-01).
+    FloatBits(u32),
+    DoubleBits(u64),
+    Text(String),
+    Type(String),
+    Field { class: String, name: String, ty: String },
+    Method { class: String, name: String, proto: String },
+    Enum { class: String, name: String },
+    Array(Vec<TypedValue>),
+    Annotation { type_descriptor: String, elements: Vec<(String, TypedValue)> },
+    MethodType(String),
+    MethodHandle(u32),
+}
+
 /// PATCHED (asc, DX-P05a): one structured annotation with lossless
 /// element rendering (values render through the metadata-grade
 /// encoded-value text, so Method / MethodType / MethodHandle /
@@ -636,6 +665,9 @@ pub struct AnnotationReport {
     pub type_descriptor: String,
     /// Elements in encoded order: (name, metadata-grade value text).
     pub elements: Vec<(String, String)>,
+    /// PATCHED (asc, A12): the same elements as typed values (DECL-02
+    /// typed metadata); populated from the annotation encoded values.
+    pub typed_elements: Vec<(String, TypedValue)>,
 }
 
 /// PATCHED (asc, DX-P05a): `dalvik.annotation.InnerClass` facts.
@@ -1241,22 +1273,24 @@ fn collect_annotation_reports(
                 .get_type_descriptor(item.annotation.type_idx)
                 .unwrap_or("?")
                 .to_string();
-            let elements = item
-                .annotation
-                .elements
-                .iter()
-                .map(|(name_idx, value)| {
-                    (
-                        dex.get_string(*name_idx).unwrap_or("?").to_string(),
-                        crate::classes::encoded_value_metadata_text(dex, value),
-                    )
-                })
-                .collect();
+            let mut elements = Vec::new();
+            let mut typed_elements = Vec::new();
+            for (name_idx, value) in &item.annotation.elements {
+                elements.push((
+                    dex.get_string(*name_idx).unwrap_or("?").to_string(),
+                    crate::classes::encoded_value_metadata_text(dex, value),
+                ));
+                typed_elements.push((
+                    dex.get_string(*name_idx).unwrap_or("?").to_string(),
+                    crate::classes::encoded_value_to_typed(dex, value),
+                ));
+            }
             out.push(AnnotationReport {
                 target,
                 visibility,
                 type_descriptor,
                 elements,
+                typed_elements,
             });
         }
     };

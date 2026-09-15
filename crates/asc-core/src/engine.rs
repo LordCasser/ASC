@@ -742,12 +742,29 @@ fn map_metadata(metadata: &droidsaw_dex::analysis::BackendMetadata) -> SourceMet
             annotation: AnnotationRecord::new(
                 map_annotation_visibility(report.visibility),
                 DexText::from_str_lossless(&report.type_descriptor),
-                Vec::new(),
+                report
+                    .typed_elements
+                    .iter()
+                    .map(|(name, value)| {
+                        (DexText::from_str_lossless(name), typed_to_encoded(value))
+                    })
+                    .collect(),
                 render_annotation_elements(&report.elements),
             ),
         })
         .collect();
     let fields = metadata
+        .static_fields
+        .iter()
+        .map(|report| FieldMetadata {
+            name: DexText::from_str_lossless(&report.name),
+            field_type: DexText::from_str_lossless(&report.type_descriptor),
+            access_flags: report.access_flags,
+            generic_signature: None,
+            initial_value: report.typed_value.as_ref().map(typed_to_encoded),
+        })
+        .chain(
+        metadata
         .instance_field_reports
         .iter()
         .map(|report| FieldMetadata {
@@ -757,6 +774,7 @@ fn map_metadata(metadata: &droidsaw_dex::analysis::BackendMetadata) -> SourceMet
             generic_signature: None,
             initial_value: None,
         })
+        )
         .collect();
     let methods = metadata
         .method_reports
@@ -776,6 +794,58 @@ fn map_metadata(metadata: &droidsaw_dex::analysis::BackendMetadata) -> SourceMet
 }
 
 #[cfg(feature = "decompile")]
+/// Maps the backend's resolved typed record onto the frozen model value.
+/// Floats/doubles arrive as raw IEEE-754 bits, so no textual rounding can
+/// change a constant (DECL-01).
+fn typed_to_encoded(value: &droidsaw_dex::analysis::TypedValue) -> crate::model::EncodedValue {
+    use crate::model::EncodedValue as M;
+    use droidsaw_dex::analysis::TypedValue as T;
+    match value {
+        T::Null => M::Null,
+        T::Boolean(b) => M::Boolean(*b),
+        T::Byte(n) => M::Byte(*n),
+        T::Short(n) => M::Short(*n),
+        T::Int(n) => M::Int(*n),
+        T::Long(n) => M::Long(*n),
+        T::Char(c) => M::Char(*c),
+        T::FloatBits(bits) => M::Float(*bits),
+        T::DoubleBits(bits) => M::Double(*bits),
+        T::Text(text) => M::String(DexText::from_str_lossless(text)),
+        T::Type(desc) => M::Type(DexText::from_str_lossless(desc)),
+        T::Field { class, name, ty } => M::Field {
+            owner: DexText::from_str_lossless(class),
+            name: DexText::from_str_lossless(name),
+            field_type: DexText::from_str_lossless(ty),
+        },
+        T::Method { class, name, proto } => M::Method {
+            owner: DexText::from_str_lossless(class),
+            name: DexText::from_str_lossless(name),
+            prototype: prototype_from_descriptor(proto),
+        },
+        T::Enum { class, name } => M::Enum {
+            owner: DexText::from_str_lossless(class),
+            name: DexText::from_str_lossless(name),
+        },
+        T::Array(items) => M::Array(items.iter().map(typed_to_encoded).collect()),
+        T::Annotation { type_descriptor, elements } => M::Annotation(crate::model::AnnotationRecord {
+            visibility: crate::model::AnnotationVisibility::Runtime,
+            type_descriptor: DexText::from_str_lossless(type_descriptor),
+            items: elements
+                .iter()
+                .map(|(name, value)| {
+                    (DexText::from_str_lossless(name), typed_to_encoded(value))
+                })
+                .collect(),
+            rendered: render_annotation_elements(&elements
+                .iter()
+                .map(|(n, v)| (n.clone(), format!("{v:?}")))
+                .collect::<Vec<_>>()),
+        }),
+        T::MethodType(text) => M::Type(DexText::from_str_lossless(text)),
+        T::MethodHandle(idx) => M::Int(*idx as i32),
+    }
+}
+
 fn map_annotation_target(target: droidsaw_dex::analysis::AnnotationTarget) -> AnnotationTarget {
     use droidsaw_dex::analysis::AnnotationTarget as Backend;
     match target {

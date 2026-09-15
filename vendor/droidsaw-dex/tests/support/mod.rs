@@ -184,6 +184,8 @@ struct PoolFixup {
 
 #[derive(Clone, Copy, Debug)]
 enum BranchWidth {
+    /// 10t: signed 8-bit offset in the HIGH byte of the op unit.
+    W8High,
     /// 10t: signed 8-bit offset in the operand byte.
     W8,
     /// 21t/22t/31t: signed 16-bit operand word.
@@ -588,7 +590,10 @@ impl Asm {
     }
 
     pub fn new_array(&mut self, dst: u16, len: u16, elem_ty: &str) -> &mut Self {
-        self.emit(0x24 | (dst << 8) | (len << 12));
+        // PATCHED (asc, A14): new-array is opcode 0x23 (0x24 is
+        // filled-new-array - the previous byte made every array
+        // construction decode as a filled-new-array).
+        self.emit(0x23 | (dst << 8) | (len << 12));
         self.pool_word(PoolKind::Type, elem_ty);
         self
     }
@@ -638,8 +643,18 @@ impl Asm {
     }
 
     pub fn goto(&mut self, label: &str) -> &mut Self {
+        // PATCHED (asc, A14): 10t goto is ONE unit - op 0x28 in the low byte
+        // and the signed 8-bit offset in the high byte. The previous shape
+        // emitted a separate offset unit and the branch fixup overwrote the
+        // opcode itself (bytes `fa ff`), shifting every later decode.
+        let unit = self.words.len();
         self.emit(0x28);
-        self.branch_operand(label, BranchWidth::W8);
+        self.branches.push(BranchFixup {
+            pc: unit,
+            word: unit,
+            width: BranchWidth::W8High,
+            label: label.to_string(),
+        });
         self
     }
 
@@ -821,12 +836,23 @@ impl Asm {
                     data,
                     operand_word,
                 } => {
+                    // PATCHED (asc, A14): fill-array-data-payload = ident(2)
+                    // + element_width(2) + element_count(4) + the raw
+                    // element bytes packed two bytes per 16-bit unit (the
+                    // previous code wrote one byte per unit, bloating the
+                    // payload 2x and shifting everything after it).
                     self.emit(0x0300);
                     self.emit(element_width);
-                    let units = (data.len().div_ceil(element_width as usize)) as u16;
-                    self.emit(units);
-                    for b in &data {
-                        self.emit(*b as u16);
+                    let elements = (data.len() / element_width as usize) as u16;
+                    self.emit(elements);
+                    self.emit(0); // size is a u32: high half
+                    for pair in data.chunks(2) {
+                        let unit = match pair {
+                            [lo] => *lo as u16,
+                            [lo, hi] => (*lo as u16) | ((*hi as u16) << 8),
+                            _ => unreachable!("chunks(2) yields 1 or 2 bytes"),
+                        };
+                        self.emit(unit);
                     }
                     if self.words.len() % 2 == 1 {
                         self.emit(0x0000);
@@ -853,6 +879,12 @@ impl Asm {
             }
             let off = self.labels[&b.label] as i64 - b.pc as i64;
             match b.width {
+                // PATCHED (asc, A14): 10t goto carries the offset in the
+                // HIGH byte of the op unit.
+                BranchWidth::W8High => {
+                    self.words[b.word] =
+                        (self.words[b.word] & 0x00ff) | (((off as i8) as u16) << 8)
+                }
                 BranchWidth::W8 => self.words[b.word] = (off as i8) as u16,
                 BranchWidth::W16 => self.words[b.word] = off as u16,
             }

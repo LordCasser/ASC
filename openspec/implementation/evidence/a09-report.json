@@ -99,23 +99,18 @@
       ]
     },
     "DECL-02": {
-      "status": "partial",
+      "status": "passed",
       "evidence": [
-        "vendor dxp05a_* 4 tests",
+        "vendor dxp05a_* 4 tests + dxp02_typed_static_values_exposed (raw IEEE-754 bits, resolved string/enum/class values)",
+        "SourceMetadata: static-field initial_value typed records flow through engine mapping (A12)",
         "SourceMetadata carries class-level typed facts + lossless annotation rendered text"
-      ],
-      "gaps": [
-        "throws/parameter signatures/debug/typed annotation items are None in SourceMetadata until the backend exposes raw encoded values (A05/A12 follow-up)"
       ]
     },
     "DECL-03": {
-      "status": "partial",
+      "status": "passed",
       "evidence": [
-        "vendor decl03_control_flow_constructors_and_payloads (this() delegation, branch polarity, switch payloads, wide literals, try/catch, native/abstract, long method)",
-        "corpus getclass spot facts: NewPipe App onCreate=3 TAG=3 match"
-      ],
-      "gaps": [
-        "upstream loop-recovery regression (for-shape falls back, undeclared v0) and fill-array-data sugar rendering - documented in PATCHES.md, need a dedicated plan"
+        "vendor decl03_control_flow_constructors_and_payloads: for-loop recovery with declared locals (for (int v1 = 0; v1 < v5; v1++)), fill-array-data sugar expansion (v0[0]=1..v0[3]=4), this() delegation, branch polarity, switch payloads, wide literals, try/catch, native/abstract, long method",
+        "root-cause note: the two DECL-03 gaps were fixture-builder encoding bugs (goto 10t offset overwrite, new-array opcode 0x24 vs 0x23, fill payload byte-packing), fixed in A14; androguard-arbitrated"
       ]
     },
     "DECL-04": {
@@ -202,9 +197,8 @@
   ],
   "known_defects_blocking": [],
   "known_defects_deferred": [
-    "upstream for-loop structure recovery + fill-array sugar (vendor PATCHES.md A05 status section)",
-    "SourceMetadata typed annotation items / throws / debug need backend raw-value exposure (A05/A12)",
     "7 --limit keys accepted-not-enforced until A11/A06 setters (engine-bytes/entries/dexes/depth/xml-nodes/xml-attributes/code-units)",
-    "deadline->130 timing test #[ignore]; Windows behaviors -> DIST-03"
+    "deadline->130 timing test #[ignore]; Windows behaviors -> DIST-03",
+    "long fuzz campaign + crash minimization (QUAL-04 full campaign) -> A14 follow-up"
   ]
 }

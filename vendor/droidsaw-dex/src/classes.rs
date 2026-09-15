@@ -943,6 +943,130 @@ pub(crate) fn encoded_value_to_java(dex: &DexFile, v: &EncodedValue) -> Option<S
 /// references (`method@3`, `proto (I)V#2`, `handle@1`) or nested
 /// `@Type(...)` annotation text, so structured metadata preserves every
 /// value exactly (DECL-02 "不可表达信息在 metadata 保留").
+/// PATCHED (asc, A12/DECL-02): render a proto id as the canonical
+/// descriptor text `(params)ret` (DECL-02 method references).
+pub(crate) fn proto_descriptor_text(
+    dex: &DexFile,
+    pidx: crate::ids::ProtoIdx,
+) -> Option<String> {
+    let p = dex.protos.get(pidx.0 as usize)?;
+    let ret = dex.get_type_descriptor(p.return_type_idx).ok()?;
+    let params: Vec<String> = if p.parameters_off == 0 {
+        Vec::new()
+    } else {
+        dex.type_lists
+            .get(&p.parameters_off)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|t| dex.get_type_descriptor(*t).ok())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    Some(format!("({}){}", params.join(""), ret))
+}
+
+/// PATCHED (asc, A12/DECL-02): resolve an encoded value into the
+/// primitive-only [`TypedValue`] record exposed through the checked API.
+/// Pool indexes (strings/types/fields/methods/protos) resolve through the
+/// DexFile; unresolvable indexes render as `@N` placeholders so the record
+/// stays lossless even for malformed inputs.
+pub(crate) fn encoded_value_to_typed(
+    dex: &DexFile,
+    v: &EncodedValue,
+) -> crate::analysis::TypedValue {
+    use crate::analysis::TypedValue;
+    match v {
+        EncodedValue::Null => TypedValue::Null,
+        EncodedValue::Boolean(b) => TypedValue::Boolean(*b),
+        EncodedValue::Byte(n) => TypedValue::Byte(*n),
+        EncodedValue::Short(n) => TypedValue::Short(*n),
+        EncodedValue::Char(c) => TypedValue::Char(*c),
+        EncodedValue::Int(n) => TypedValue::Int(*n),
+        EncodedValue::Long(n) => TypedValue::Long(*n),
+        // Bit-exact: the typed record carries the IEEE-754 bits, never a
+        // rounded decimal.
+        EncodedValue::Float(f) => TypedValue::FloatBits(f.to_bits()),
+        EncodedValue::Double(d) => TypedValue::DoubleBits(d.to_bits()),
+        EncodedValue::String(sidx) => {
+            TypedValue::Text(dex.get_string(*sidx).unwrap_or("<invalid>").to_string())
+        }
+        EncodedValue::Type(tidx) => {
+            TypedValue::Type(dex.get_type_descriptor(*tidx).unwrap_or("?").to_string())
+        }
+        EncodedValue::Field(fidx) => {
+            let field = dex.fields.get(fidx.0 as usize);
+            let class = field
+                .and_then(|f| dex.get_type_descriptor(f.class_idx).ok())
+                .unwrap_or("?")
+                .to_string();
+            let name = field
+                .and_then(|f| dex.get_string(f.name_idx).ok())
+                .unwrap_or("?")
+                .to_string();
+            let ty = field
+                .and_then(|f| dex.get_type_descriptor(f.type_idx).ok())
+                .unwrap_or("?")
+                .to_string();
+            TypedValue::Field { class, name, ty }
+        }
+        EncodedValue::Method(midx) => {
+            let method = dex.methods.get(midx.0 as usize);
+            let class = method
+                .and_then(|m| dex.get_type_descriptor(m.class_idx).ok())
+                .unwrap_or("?")
+                .to_string();
+            let name = method
+                .and_then(|m| dex.get_string(m.name_idx).ok())
+                .unwrap_or("?")
+                .to_string();
+            let proto = method
+                .and_then(|m| proto_descriptor_text(dex, m.proto_idx))
+                .unwrap_or_else(|| "?".to_string());
+            TypedValue::Method { class, name, proto }
+        }
+        EncodedValue::Enum(fidx) => {
+            let field = dex.fields.get(fidx.0 as usize);
+            let class = field
+                .and_then(|f| dex.get_type_descriptor(f.class_idx).ok())
+                .unwrap_or("?")
+                .to_string();
+            let name = field
+                .and_then(|f| dex.get_string(f.name_idx).ok())
+                .unwrap_or("?")
+                .to_string();
+            TypedValue::Enum { class, name }
+        }
+        EncodedValue::Array(items) => {
+            TypedValue::Array(items.iter().map(|item| encoded_value_to_typed(dex, item)).collect())
+        }
+        EncodedValue::Annotation(a) => {
+            let type_descriptor =
+                dex.get_type_descriptor(a.type_idx).unwrap_or("?").to_string();
+            let elements = a
+                .elements
+                .iter()
+                .map(|(name_idx, value)| {
+                    (
+                        dex.get_string(*name_idx).unwrap_or("?").to_string(),
+                        encoded_value_to_typed(dex, value),
+                    )
+                })
+                .collect();
+            TypedValue::Annotation { type_descriptor, elements }
+        }
+        EncodedValue::MethodType(pidx) => {
+            let resolved = encoded_value_metadata_text(
+                dex,
+                &EncodedValue::MethodType(*pidx),
+            );
+            TypedValue::MethodType(resolved)
+        }
+        EncodedValue::MethodHandle(hidx) => TypedValue::MethodHandle(hidx.0),
+    }
+}
+
 pub(crate) fn encoded_value_metadata_text(dex: &DexFile, v: &EncodedValue) -> String {
     match v {
         EncodedValue::Method(midx) => {
@@ -1437,6 +1561,10 @@ fn emit_fields(
                 Slot::Present(v) => Some(encoded_value_metadata_text(dex, v)),
                 _ => None,
             };
+            let typed_value = match &slot {
+                Slot::Present(v) => Some(encoded_value_to_typed(dex, v)),
+                _ => None,
+            };
             push_static_field_report(
                 &mut rep.static_fields,
                 dex,
@@ -1446,6 +1574,7 @@ fn emit_fields(
                 drop_reason,
                 encoded_value_java,
                 encoded_value_metadata,
+                typed_value,
             );
             rep.diagnostics.extend(field_diagnostics);
         }
@@ -1514,6 +1643,7 @@ fn push_static_field_report(
     drop_reason: Option<crate::analysis::InitializerDropReason>,
     encoded_value_java: Option<String>,
     encoded_value_metadata: Option<String>,
+    typed_value: Option<crate::analysis::TypedValue>,
 ) {
     let type_descriptor = dex
         .get_type_descriptor(field.type_idx)
@@ -1527,6 +1657,7 @@ fn push_static_field_report(
         access_flags: ef.access_flags,
         encoded_value_java,
         encoded_value_metadata,
+        typed_value,
         initializer_emitted,
         drop_reason,
     });

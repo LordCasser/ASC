@@ -304,6 +304,42 @@ fn statics_fixture() -> (Vec<u8>, Vec<String>) {
 }
 
 #[test]
+fn dxp02_typed_static_values_exposed() -> TestResult {
+    // DECL-02: the checked report exposes the RAW encoded values as typed
+    // records (floats/doubles as IEEE-754 bits), not just Java text.
+    let (dex, _names) = statics_fixture();
+    let report = decompile_single(&dex, STATICS_DESC)?;
+    use droidsaw_dex::analysis::TypedValue;
+    let find = |name: &str| -> Option<&TypedValue> {
+        report
+            .metadata
+            .static_fields
+            .iter()
+            .find(|f| f.name == name)
+            .and_then(|f| f.typed_value.as_ref())
+    };
+    match (find("I_NUM"), find("J_NUM"), find("F_BITS"), find("D_BITS"), find("STR")) {
+        (
+            Some(TypedValue::Int(42)),
+            Some(TypedValue::Long(4_000_000_000_123)),
+            Some(TypedValue::FloatBits(bits)),
+            Some(TypedValue::DoubleBits(dbits)),
+            Some(TypedValue::Text(s)),
+        ) => {
+            assert_eq!(*bits, 1.5f32.to_bits(), "float must carry raw bits");
+            assert_eq!(*dbits, (-2.5f64).to_bits(), "double must carry raw bits");
+            assert_eq!(s, "héllo\n", "string value lossless");
+        }
+        (i, j, f, dd, st) => {
+            return Err(format!(
+                "typed values wrong: i={i:?} j={j:?} f={f:?} d={dd:?} s={st:?}"
+            ))
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn dxp04_all_static_initial_values_emitted() -> TestResult {
     let (dex, names) = statics_fixture();
     let report = decompile_single(&dex, STATICS_DESC)?;
@@ -979,6 +1015,23 @@ fn dxp05a_no_debug_info_still_complete() -> TestResult {
 // probe appended to asc_semantics temporarily
 
 #[test]
+#[test]
+#[ignore]
+fn debug_print_count_fillarr() {
+    let dex = flow_fixture();
+    let report = decompile_single(&dex, FLOW_DESC).expect("decompile");
+    let src = report.source.clone();
+    for marker in ["public int count(", "public static int[] fillArr("] {
+        if let Some(i) = src.find(marker) {
+            let end = src[i..].find("
+    }").map(|e| i + e + 6).unwrap_or(src.len());
+            println!("--- {} ---
+{}", marker, &src[i..end]);
+        }
+    }
+}
+
+#[test]
 fn decl03_control_flow_constructors_and_payloads() -> TestResult {
     let dex = flow_fixture();
     let report = decompile_single(&dex, FLOW_DESC)?;
@@ -1063,6 +1116,22 @@ fn decl03_control_flow_constructors_and_payloads() -> TestResult {
     let long = src.split("public static int longMethod(").nth(1).ok_or("no longMethod")?;
     if !long.contains("v1 + 1") {
         return Err(format!("longMethod must chain the parameter:\n{long}"));
+    }
+    // DECL-03: the for-loop must recover with DECLARED loop locals (the
+    // pre-fix regression rendered `do {} while (v0)` with undeclared v0).
+    let count = src.split("public int count(").nth(1).ok_or("no count")?;
+    if !count.contains("for (int v1 = 0; v1 < v5; v1++)") || !count.contains("v0 += v1") {
+        return Err(format!("count loop recovery wrong:\n{count}"));
+    }
+    if count.contains("do {{") || count.contains("while (v0)") {
+        return Err(format!("count must not degrade to do-while fallback:\n{count}"));
+    }
+    // DECL-03: fill-array-data sugar must expand the payload elements.
+    let fill = src.split("public static int[] fillArr(").nth(1).ok_or("no fillArr")?;
+    for want in ["new int[4]", "v0[0] = 1", "v0[1] = 2", "v0[2] = 3", "v0[3] = 4", "return v0"] {
+        if !fill.contains(want) {
+            return Err(format!("fillArr missing {want:?}:\n{fill}"));
+        }
     }
 
     // Method outcomes: exactly one DeclarationOnly (native), the rest Emitted.
