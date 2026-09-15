@@ -570,6 +570,158 @@ pub struct MethodIdentity {
     prototype: Prototype,
 }
 
+/// The DEX range an operation is allowed to inspect. `Root` keeps the
+/// existing selected `classes*.dex` policy; `Entries` names physical archive
+/// records (all validated logical members are included); `Dexes` pins logical
+/// members when a DEX041 container has to be addressed precisely;
+/// `AllDetected` discovers DEX images across the complete archive.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MethodScope {
+    Root,
+    Entries(Vec<ArchiveEntryId>),
+    Dexes(Vec<DexId>),
+    AllDetected,
+}
+
+/// A precise method navigation target. `MethodId` identifies the method table
+/// row and `ClassId` disambiguates declarations of the same descriptor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MethodTarget {
+    class: ClassId,
+    method: MethodId,
+}
+
+impl MethodTarget {
+    pub(crate) fn new(class: ClassId, method: MethodId) -> Self {
+        Self { class, method }
+    }
+
+    pub fn class(&self) -> ClassId {
+        self.class
+    }
+
+    pub fn method(&self) -> MethodId {
+        self.method
+    }
+}
+
+/// One declared method from class_data. This is an inventory fact, not a
+/// projection inferred from emitted source or reference hits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MethodDeclaration {
+    target: MethodTarget,
+    identity: MethodIdentity,
+    class: Class,
+    access_flags: u32,
+    is_direct: bool,
+    has_code: bool,
+    code_off: Option<u32>,
+}
+
+impl MethodDeclaration {
+    pub(crate) fn new(
+        target: MethodTarget,
+        identity: MethodIdentity,
+        class: Class,
+        access_flags: u32,
+        is_direct: bool,
+        has_code: bool,
+        code_off: u32,
+    ) -> Self {
+        Self {
+            target,
+            identity,
+            class,
+            access_flags,
+            is_direct,
+            has_code,
+            code_off: has_code.then_some(code_off),
+        }
+    }
+
+    pub fn target(&self) -> MethodTarget {
+        self.target
+    }
+
+    pub fn id(&self) -> MethodId {
+        self.target.method()
+    }
+
+    pub fn method_id(&self) -> MethodId {
+        self.target.method()
+    }
+
+    pub fn class_id(&self) -> ClassId {
+        self.target.class()
+    }
+
+    pub fn declaring_class(&self) -> ClassId {
+        self.target.class()
+    }
+
+    pub fn identity(&self) -> &MethodIdentity {
+        &self.identity
+    }
+
+    pub fn class(&self) -> &Class {
+        &self.class
+    }
+
+    pub fn access_flags(&self) -> u32 {
+        self.access_flags
+    }
+
+    pub fn is_direct(&self) -> bool {
+        self.is_direct
+    }
+
+    pub fn has_code(&self) -> bool {
+        self.has_code
+    }
+
+    pub fn code_off(&self) -> Option<u32> {
+        self.code_off
+    }
+}
+
+/// Method declarations plus the resolved DEX scope used to obtain them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MethodInventory {
+    requested_scope: MethodScope,
+    resolved_dexes: Vec<DexId>,
+    methods: Vec<MethodDeclaration>,
+}
+
+impl MethodInventory {
+    pub(crate) fn new(
+        requested_scope: MethodScope,
+        resolved_dexes: Vec<DexId>,
+        methods: Vec<MethodDeclaration>,
+    ) -> Self {
+        Self {
+            requested_scope,
+            resolved_dexes,
+            methods,
+        }
+    }
+
+    pub fn requested_scope(&self) -> &MethodScope {
+        &self.requested_scope
+    }
+
+    pub fn scope(&self) -> &MethodScope {
+        &self.requested_scope
+    }
+
+    pub fn resolved_dexes(&self) -> &[DexId] {
+        &self.resolved_dexes
+    }
+
+    pub fn methods(&self) -> &[MethodDeclaration] {
+        &self.methods
+    }
+}
+
 impl MethodIdentity {
     pub(crate) fn new(
         id: MethodId,

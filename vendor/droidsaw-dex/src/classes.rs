@@ -2013,6 +2013,74 @@ fn emit_abstract_method(out: &mut String, dex: &DexFile, em: &decode::EncodedMet
     }
 }
 
+/// Render one exact class_data method through the same SSA/CFG/debug/annotation
+/// pipeline used by class emission. The caller has already selected the
+/// declaration, so synthetic class-wide suppression is intentionally skipped.
+pub(crate) fn render_selected_method(
+    dex: &DexFile,
+    data: &[u8],
+    class_def: &ClassDefItem,
+    em: &decode::EncodedMethod,
+    emit: &crate::analysis::EmitOptions,
+    budget: &crate::analysis::Budget,
+    control: &crate::analysis::Control,
+) -> Result<(String, crate::analysis::MethodRecord), DexError> {
+    let ctx = RunCtx::checked(emit, budget, control);
+    let mut record = crate::analysis::MethodRecord::default();
+    if em.code_off == 0 {
+        let mut out = String::new();
+        emit_abstract_method(&mut out, dex, em);
+        let source = out
+            .lines()
+            .map(|line| line.strip_prefix("    ").unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Ok((
+            if source.is_empty() {
+                source
+            } else {
+                format!("{source}\n")
+            },
+            record,
+        ));
+    }
+    let census = r8_inversion::build_trampoline_census(dex);
+    let annotations = collect_runtime_annotation_lines(dex, class_def.annotations_off);
+    let mut imports = BTreeSet::new();
+    let source = match decompile_method(
+        dex,
+        data,
+        em,
+        class_def,
+        &mut imports,
+        false,
+        &ctx,
+        &census,
+        annotations
+            .methods
+            .get(&em.method_idx.0)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]),
+        Some(&mut record),
+    ) {
+        Ok(source) => source,
+        Err(DexError::AnalysisControlAbort { deadline }) => {
+            return Err(DexError::AnalysisControlAbort { deadline });
+        }
+        Err(error) => {
+            record.failure = Some(error.to_string());
+            record.diagnostics.push(crate::analysis::BackendDiagnostic {
+                code: crate::analysis::DiagnosticCode::MethodFailed,
+                message: error.to_string(),
+                method_idx: Some(em.method_idx.0),
+                field_idx: None,
+            });
+            format!("// Failed to decompile: {error}\n")
+        }
+    };
+    Ok((source, record))
+}
+
 fn build_param_string(dex: &DexFile, proto: &crate::ids::ProtoIdItem) -> String {
     if proto.parameters_off == 0 {
         return String::new();

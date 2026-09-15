@@ -166,10 +166,11 @@ pub use xrefs::{method_key_for_idx, CallSite, FieldKey, InvokeKind, MethodKey, X
 // the ASC core decompile adapter can `use droidsaw_dex::analysis::*`
 // (the module path `droidsaw_dex::analysis` remains canonical).
 pub use analysis::{
-    decompile_checked, parse_for_analysis, BackendDiagnostic, BackendError, BackendMetadata,
-    BackendReport, Budget, Completeness, Control, DeclarationKind, DiagnosticCode, EmitOptions,
-    IncompleteReason, InitializerDropReason, MethodOutcome, MethodStatus, ParseOptions, ParseScope,
-    ParsedDex, StaticFieldReport, SuppressionReason,
+    decompile_checked, decompile_method_checked, parse_for_analysis, BackendDiagnostic,
+    BackendError, BackendMetadata, BackendReport, Budget, Completeness, Control, DeclarationKind,
+    DiagnosticCode, EmitOptions, IncompleteReason, InitializerDropReason, MethodBackendReport,
+    MethodOutcome, MethodStatus, ParseOptions, ParseScope, ParsedDex, StaticFieldReport,
+    SuppressionReason,
 };
 
 // Kani proofs for MUTF-8 decode identity are not yet added: the String-returning

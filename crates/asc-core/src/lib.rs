@@ -27,4 +27,7 @@ pub use bytes::OperationControl;
 pub use engine::{ArchiveCopySession, Engine, EngineOptions, InputKind};
 pub use error::Error;
 pub use model::dto;
-pub use model::{ArchiveEntry, ArchiveEntryId, ArchiveEntryQuery, ArtifactId, Report};
+pub use model::{
+    ArchiveEntry, ArchiveEntryId, ArchiveEntryQuery, ArtifactId, MethodDeclaration, MethodId,
+    MethodInventory, MethodScope, MethodTarget, Report,
+};

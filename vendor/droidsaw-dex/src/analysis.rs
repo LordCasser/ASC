@@ -241,6 +241,13 @@ pub enum BackendError {
         /// Number of class defs actually present.
         class_defs: usize,
     },
+    /// `method_idx` is not declared by the selected class_data.
+    InvalidMethodIndex {
+        /// The requested method_ids index.
+        index: u32,
+        /// The selected class_def index.
+        class_def_idx: usize,
+    },
 }
 
 impl fmt::Display for BackendError {
@@ -255,6 +262,13 @@ impl fmt::Display for BackendError {
             BackendError::InvalidClassDefIndex { index, class_defs } => write!(
                 f,
                 "class_def index {index} out of range (this DEX has {class_defs} class defs)"
+            ),
+            BackendError::InvalidMethodIndex {
+                index,
+                class_def_idx,
+            } => write!(
+                f,
+                "method index {index} is not declared by class_def {class_def_idx}"
             ),
         }
     }
@@ -783,6 +797,22 @@ pub struct BackendReport {
     pub metadata: BackendMetadata,
 }
 
+/// The checked result for one selected method. The source contains only the
+/// method body/signature; class relations and annotations remain in metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MethodBackendReport {
+    /// Java-like source for the selected declaration.
+    pub source: String,
+    /// Whether the selected method is safe to publish as complete source.
+    pub completeness: Completeness,
+    /// Structured diagnostics from the selected method pipeline.
+    pub diagnostics: Vec<BackendDiagnostic>,
+    /// The exact declaration outcome.
+    pub method_outcome: MethodOutcome,
+    /// Metadata for the declaring class and its members.
+    pub metadata: BackendMetadata,
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Internal collectors (filled by the classes.rs instrumentation)
 // ─────────────────────────────────────────────────────────────────────
@@ -795,6 +825,8 @@ pub(crate) struct MethodRecord {
     pub(crate) unrecognized: Vec<(u32, &'static str)>,
     /// Diagnostics collected during the method pipeline.
     pub(crate) diagnostics: Vec<BackendDiagnostic>,
+    /// A typed pipeline failure captured for the selected-method report.
+    pub(crate) failure: Option<String>,
 }
 
 /// Per-class accumulator threaded through `decompile_class_impl`.
@@ -1027,6 +1059,165 @@ pub fn decompile_checked(
         completeness,
         diagnostics,
         method_outcomes,
+        metadata,
+    })
+}
+
+/// Decompile one exact `class_data` declaration without rendering its
+/// enclosing class and slicing text. The selected method is looked up by its
+/// method_ids index inside the selected class, so duplicate class descriptors
+/// remain disambiguated by the caller's class_def identity.
+pub fn decompile_method_checked(
+    parsed: &ParsedDex,
+    selected_class_def_idx: usize,
+    selected_method_idx: u32,
+    emit: &EmitOptions,
+    budget: &Budget,
+    control: &Control,
+) -> Result<MethodBackendReport, BackendError> {
+    let _gate = enter_controlled();
+    abort_check(control, budget)?;
+    let class_def = parsed
+        .dex
+        .class_defs
+        .get(selected_class_def_idx)
+        .ok_or(BackendError::InvalidClassDefIndex {
+            index: selected_class_def_idx,
+            class_defs: parsed.dex.class_defs.len(),
+        })?;
+    let class_data = if class_def.class_data_off == 0 {
+        return Err(BackendError::InvalidMethodIndex {
+            index: selected_method_idx,
+            class_def_idx: selected_class_def_idx,
+        });
+    } else {
+        crate::decode::parse_class_data(parsed.data, class_def.class_data_off)?
+    };
+    let mut selected = None;
+    for (is_direct, methods) in [
+        (true, &class_data.direct_methods),
+        (false, &class_data.virtual_methods),
+    ] {
+        if let Some(method) = methods
+            .iter()
+            .find(|method| method.method_idx.0 == selected_method_idx)
+        {
+            selected = Some((is_direct, method.clone()));
+            break;
+        }
+    }
+    let Some((is_direct, encoded)) = selected else {
+        return Err(BackendError::InvalidMethodIndex {
+            index: selected_method_idx,
+            class_def_idx: selected_class_def_idx,
+        });
+    };
+    let (source, record) = crate::classes::render_selected_method(
+        &parsed.dex,
+        parsed.data,
+        class_def,
+        &encoded,
+        emit,
+        budget,
+        control,
+    )
+    .map_err(|error| match error {
+        DexError::AnalysisControlAbort { deadline } => abort_to_backend(deadline),
+        error => BackendError::Dex(error),
+    })?;
+    if let Some(err) = abort_observed(control, budget) {
+        return Err(abort_to_backend(err));
+    }
+
+    let name = parsed
+        .dex
+        .methods
+        .get(selected_method_idx as usize)
+        .and_then(|method| parsed.dex.get_string(method.name_idx).ok())
+        .unwrap_or("?")
+        .to_string();
+    let status = if encoded.code_off == 0 {
+        let kind = if encoded.access_flags & 0x0400 != 0 {
+            DeclarationKind::Abstract
+        } else if encoded.access_flags & 0x0100 != 0 {
+            DeclarationKind::Native
+        } else {
+            DeclarationKind::NoCode
+        };
+        MethodStatus::DeclarationOnly { kind }
+    } else if let Some(detail) = &record.failure {
+        MethodStatus::Failed {
+            detail: detail.clone(),
+        }
+    } else if record.unrecognized.is_empty() {
+        MethodStatus::Emitted
+    } else {
+        let detail = record
+            .unrecognized
+            .iter()
+            .map(|(_, kind)| *kind)
+            .collect::<Vec<_>>()
+            .join(",");
+        MethodStatus::Unsupported {
+            regions: record.unrecognized.len(),
+            detail,
+        }
+    };
+    let method_outcome = MethodOutcome {
+        method_idx: selected_method_idx,
+        name,
+        is_direct,
+        status,
+    };
+    let mut outcome = ClassOutcome::default();
+    outcome.method_outcomes.push(method_outcome.clone());
+    outcome.diagnostics = record.diagnostics;
+    let mut diagnostics = std::mem::take(&mut outcome.diagnostics);
+    match (&parsed.scope, parsed.fell_back_to_full) {
+        (ParseScope::Full, _) => {}
+        (ParseScope::ScopedToDescriptor { .. }, true) => diagnostics.push(BackendDiagnostic {
+            code: DiagnosticCode::ScopedFallbackToFull,
+            message: "scoped descriptor matched no class def; the full parse ran instead"
+                .to_string(),
+            method_idx: None,
+            field_idx: None,
+        }),
+        (ParseScope::ScopedToDescriptor { .. }, false) => diagnostics.push(BackendDiagnostic {
+            code: DiagnosticCode::R8OriginCommentsDropped,
+            message: "scoped parse cannot produce cross-class R8-origin comments (DX-P01)"
+                .to_string(),
+            method_idx: None,
+            field_idx: None,
+        }),
+    }
+    let parse_error_count = parsed
+        .dex
+        .parse_errors
+        .iter()
+        .filter(|error| parse_error_drops_subsection(&error.kind))
+        .count();
+    if !parsed.dex.parse_errors.is_empty() {
+        diagnostics.push(BackendDiagnostic {
+            code: DiagnosticCode::ParseErrorsPresent,
+            message: format!(
+                "DEX carries {} tolerant-parse failure record(s) ({parse_error_count} subsection drops)",
+                parsed.dex.parse_errors.len()
+            ),
+            method_idx: None,
+            field_idx: None,
+        });
+    }
+    let metadata = build_metadata(parsed, class_def, selected_class_def_idx, &outcome);
+    let detector_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == DiagnosticCode::DetectorIndeterminate)
+        .count();
+    let completeness = build_completeness(&outcome, detector_count, parse_error_count);
+    Ok(MethodBackendReport {
+        source,
+        completeness,
+        diagnostics,
+        method_outcome,
         metadata,
     })
 }

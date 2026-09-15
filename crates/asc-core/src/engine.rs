@@ -27,10 +27,13 @@ use crate::error::{Error, ErrorKind};
 use crate::model::{
     AnnotationEntry, AnnotationRecord, AnnotationTarget, AnnotationVisibility, ArtifactId, Class,
     ClassDescriptor, ClassFilter, ClassId, ClassMetadata, ClassSelector, DexEntry, DexText,
-    Diagnostic, DiagnosticCode, EnclosingRecord, FieldMetadata, InnerClassRecord, MethodMetadata,
+    Diagnostic, DiagnosticCode, EnclosingRecord, FieldMetadata, InnerClassRecord,
+    MethodDeclaration, MethodId, MethodIdentity, MethodInventory, MethodMetadata, MethodTarget,
     OperationStats, Prototype, Report, Severity, Source, SourceMetadata, Stage,
 };
-use crate::model::{ArchiveEntry as ArchiveEntryFact, ArchiveEntryId, ArchiveEntryQuery};
+use crate::model::{
+    ArchiveEntry as ArchiveEntryFact, ArchiveEntryId, ArchiveEntryQuery, MethodScope,
+};
 #[cfg(not(feature = "decompile"))]
 use crate::model::{
     ArtifactId, Class, ClassFilter, DexEntry, DexText, Diagnostic, DiagnosticCode, OperationStats,
@@ -668,6 +671,519 @@ fn references(
     Ok(Report::new(rows, diagnostics, stats))
 }
 
+fn classes_in_scope(
+    artifact: &Artifact,
+    scope: &MethodScope,
+    filter: &ClassFilter,
+    control: &OperationControl,
+) -> Result<Report<Vec<Class>>, Error> {
+    let scan_limits = artifact.limits.scan;
+    let (pairs, mut diagnostics) = fold_scope(
+        artifact,
+        scope,
+        control,
+        |(class, _): &(Class, String)| {
+            if filter.matches(class.java_name()) {
+                (
+                    1,
+                    320 + class.descriptor().as_str().len() * 8
+                        + class.dex().raw_entry_name().len(),
+                    0,
+                )
+            } else {
+                (0, 0, 0)
+            }
+        },
+        |views, logical, probe| {
+            let view = &views.views[logical];
+            let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
+            let classes = dex::list_classes(&dex_view, &scan_limits, Some(probe))?;
+            Ok(classes
+                .into_iter()
+                .map(|class| {
+                    let descriptor = class.descriptor().as_str().to_owned();
+                    (class, descriptor)
+                })
+                .collect())
+        },
+    )?;
+    let mut descriptor_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut rows = Vec::new();
+    for (class, descriptor) in pairs {
+        *descriptor_counts.entry(descriptor).or_insert(0) += 1;
+        if filter.matches(class.java_name()) {
+            rows.push(class);
+        }
+    }
+    for (descriptor, count) in descriptor_counts {
+        if count > 1 {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::DuplicateClassDefinition,
+                Severity::Warning,
+                Stage::Dex,
+                format!(
+                    "descriptor {descriptor} is defined {count} times; identity is the (entry, logical, class_def) index"
+                ),
+            ));
+        }
+    }
+    rows.sort_by_key(Class::id);
+    let result_items = rows.len() as u64;
+    Ok(Report::new(
+        rows,
+        diagnostics,
+        OperationStats {
+            result_items,
+            ..Default::default()
+        },
+    ))
+}
+
+fn references_in_scope(
+    artifact: &Artifact,
+    scope: &MethodScope,
+    query: &crate::model::ReferenceQuery,
+    control: &OperationControl,
+) -> Result<Report<Vec<crate::model::Reference>>, Error> {
+    let scan_limits = artifact.limits.scan;
+    let (rows, diagnostics) = fold_scope(
+        artifact,
+        scope,
+        control,
+        reference_size,
+        |views, logical, probe| {
+            let view = &views.views[logical];
+            let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
+            let options = ScanOptions {
+                limits: scan_limits,
+                control: Some(probe),
+                prefilter: true,
+            };
+            dex::scan_references(&dex_view, query, &options)
+        },
+    )?;
+    Ok(Report::new(
+        rows.clone(),
+        diagnostics,
+        OperationStats {
+            result_items: rows.len() as u64,
+            matched_targets: rows.iter().map(|row| row.targets().len() as u64).sum(),
+            ..Default::default()
+        },
+    ))
+}
+
+#[derive(Clone)]
+enum MethodScopeInput {
+    Raw,
+    Archive {
+        entry: ZipArchiveEntry,
+        logical: Option<u32>,
+    },
+}
+
+fn resolve_method_scope(
+    artifact: &Artifact,
+    scope: &MethodScope,
+) -> Result<Vec<MethodScopeInput>, Error> {
+    let mut inputs = Vec::new();
+    match scope {
+        MethodScope::Root => {
+            if artifact.roots.is_empty() {
+                return Err(Error::new(ErrorKind::NotFound)
+                    .with_context("the archive contains no root DEX entry to analyse"));
+            }
+            for root in &artifact.roots {
+                match &root.source {
+                    RootSource::Raw => inputs.push(MethodScopeInput::Raw),
+                    RootSource::Archive(entry) => inputs.push(MethodScopeInput::Archive {
+                        entry: entry.clone(),
+                        logical: None,
+                    }),
+                }
+            }
+        }
+        MethodScope::AllDetected => {
+            match &artifact.catalog {
+                None => inputs.push(MethodScopeInput::Raw),
+                Some(catalog) => {
+                    // Detection is deliberately name-agnostic about nesting:
+                    // assets/foo.dex is a valid explicit DEX provider. A bad
+                    // *.dex entry is retained as an in-scope error rather than
+                    // silently disappearing from an all-detected result.
+                    for entry in &catalog.entries {
+                        if entry.raw_name.ends_with(b".dex") {
+                            inputs.push(MethodScopeInput::Archive {
+                                entry: entry.clone(),
+                                logical: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        MethodScope::Entries(ids) => {
+            let catalog = artifact.catalog.as_ref().ok_or_else(|| {
+                Error::new(ErrorKind::UnsupportedFormat)
+                    .with_context("raw DEX input has no archive entries")
+            })?;
+            let mut seen = std::collections::BTreeSet::new();
+            for id in ids {
+                if id.artifact() != artifact.id {
+                    return Err(Error::invalid_query(
+                        "method scope entry belongs to a different artifact",
+                    ));
+                }
+                if !seen.insert(id.ordinal()) {
+                    continue;
+                }
+                let entry = catalog
+                    .entries
+                    .iter()
+                    .find(|entry| entry.ordinal == id.ordinal())
+                    .ok_or_else(|| {
+                        Error::invalid_query(format!(
+                            "method scope entry ordinal {} does not exist in this artifact",
+                            id.ordinal()
+                        ))
+                    })?;
+                inputs.push(MethodScopeInput::Archive {
+                    entry: entry.clone(),
+                    logical: None,
+                });
+            }
+        }
+        MethodScope::Dexes(ids) => {
+            let catalog = artifact.catalog.as_ref();
+            let mut seen = std::collections::BTreeSet::new();
+            for id in ids {
+                if id.artifact() != artifact.id {
+                    return Err(Error::invalid_query(
+                        "method scope DEX belongs to a different artifact",
+                    ));
+                }
+                if id.entry_ordinal() == 0 && catalog.is_none() {
+                    if id.logical_ordinal() != 0 || !seen.insert((0, 0)) {
+                        continue;
+                    }
+                    inputs.push(MethodScopeInput::Raw);
+                    continue;
+                }
+                let catalog = catalog.ok_or_else(|| {
+                    Error::new(ErrorKind::UnsupportedFormat)
+                        .with_context("raw DEX input has no archive entries")
+                })?;
+                let entry = catalog
+                    .entries
+                    .iter()
+                    .find(|entry| entry.ordinal == id.entry_ordinal())
+                    .ok_or_else(|| {
+                        Error::invalid_query(format!(
+                            "method scope DEX entry ordinal {} does not exist in this artifact",
+                            id.entry_ordinal()
+                        ))
+                    })?;
+                if !seen.insert((id.entry_ordinal(), id.logical_ordinal())) {
+                    continue;
+                }
+                inputs.push(MethodScopeInput::Archive {
+                    entry: entry.clone(),
+                    logical: Some(id.logical_ordinal()),
+                });
+            }
+        }
+    }
+    inputs.sort_by_key(|input| match input {
+        MethodScopeInput::Raw => (0, 0, 0),
+        MethodScopeInput::Archive { entry, logical } => (
+            1,
+            entry.ordinal,
+            logical.unwrap_or(u32::MAX),
+        ),
+    });
+    Ok(inputs)
+}
+
+fn declared_scope_bytes(artifact: &Artifact, inputs: &[MethodScopeInput]) -> u64 {
+    let mut total = 0u64;
+    let mut seen_entries = std::collections::BTreeSet::new();
+    for input in inputs {
+        match input {
+            MethodScopeInput::Raw => {
+                total = total.saturating_add(artifact.bytes.len() as u64)
+            }
+            MethodScopeInput::Archive { entry, .. } if seen_entries.insert(entry.ordinal) => {
+                total = total.saturating_add(entry.declared_uncompressed_bytes())
+            }
+            MethodScopeInput::Archive { .. } => {}
+        }
+    }
+    total
+}
+
+/// Runs a DEX operation over an explicit method scope. The archive entry
+/// decode account is shared across all logical members and all selected
+/// physical entries, just as it is for the root fold.
+fn fold_scope<T: Send>(
+    artifact: &Artifact,
+    scope: &MethodScope,
+    control: &OperationControl,
+    measure: impl Fn(&T) -> (usize, usize, u64),
+    op: impl Fn(
+        &container::DexEntryViews<'_>,
+        usize,
+        &ControlProbe<'_>,
+    ) -> Result<Vec<T>, Error>,
+) -> Result<(Vec<T>, Vec<Diagnostic>), Error> {
+    let inputs = resolve_method_scope(artifact, scope)?;
+    let guard = ControlGuard::new(control);
+    let probe = guard.probe();
+    let input_limits = artifact.limits.input();
+    let declared_total = declared_scope_bytes(artifact, &inputs);
+    if declared_total > input_limits.max_total_decoded_bytes {
+        return Err(Error::resource_limit(format!(
+            "the selected scope declares {declared_total} decoded bytes, above the {} per-operation limit",
+            input_limits.max_total_decoded_bytes
+        )));
+    }
+    let decoded = AtomicU64::new(0);
+    let mut rows = Vec::new();
+    let mut integrity = Vec::new();
+    let mut used = (0usize, 0usize, 0u64);
+    for input in inputs {
+        probe.check()?;
+        let (buffer, ordinal, raw_name, wanted_logical) = match input {
+            MethodScopeInput::Raw => (None, 0, b"<memory.dex>".to_vec(), None),
+            MethodScopeInput::Archive { entry, logical } => {
+                let ordinal = entry.ordinal;
+                let raw_name = entry.raw_name.clone();
+                let data = zip::read_entry(
+                    &artifact.bytes,
+                    &entry,
+                    &input_limits,
+                    &decoded,
+                    &probe,
+                )?;
+                (Some(data), ordinal, raw_name, logical)
+            }
+        };
+        let data = buffer.as_deref().unwrap_or(&artifact.bytes);
+        let (views, entry_integrity) = container::validate_dex_entry(
+            artifact.id,
+            ordinal,
+            &raw_name,
+            data,
+            &probe,
+        )?;
+        integrity.extend(entry_integrity);
+        for (logical, _view) in views.views.iter().enumerate() {
+            if wanted_logical.is_some_and(|wanted| wanted != logical as u32) {
+                continue;
+            }
+            for row in op(&views, logical, &probe)? {
+                probe.check()?;
+                charge_results(&mut used, measure(&row), &artifact.limits.scan)?;
+                rows.push(row);
+            }
+        }
+    }
+    let diagnostics = artifact
+        .open_diagnostics
+        .iter()
+        .cloned()
+        .chain(integrity)
+        .collect();
+    Ok((rows, diagnostics))
+}
+
+#[cfg(feature = "decompile")]
+fn method_declaration_size(row: &MethodDeclaration) -> (usize, usize, u64) {
+    let identity = row.identity();
+    let text = |value: &DexText| value.unit_len().saturating_mul(2);
+    let prototype = identity
+        .prototype()
+        .parameters()
+        .iter()
+        .fold(text(identity.prototype().return_type()), |size, parameter| {
+            size.saturating_add(text(parameter))
+        });
+    (
+        1,
+        384usize
+            .saturating_add(text(identity.owner()))
+            .saturating_add(text(identity.name()))
+            .saturating_add(prototype)
+            .saturating_add(row.class().descriptor().as_str().len()),
+        0,
+    )
+}
+
+#[cfg(feature = "decompile")]
+fn method_inventory(
+    artifact: &Artifact,
+    scope: &MethodScope,
+    control: &OperationControl,
+) -> Result<Report<MethodInventory>, Error> {
+    let inputs = resolve_method_scope(artifact, scope)?;
+    let guard = ControlGuard::new(control);
+    let probe = guard.probe();
+    let input_limits = artifact.limits.input();
+    let declared_total = declared_scope_bytes(artifact, &inputs);
+    if declared_total > input_limits.max_total_decoded_bytes {
+        return Err(Error::resource_limit(format!(
+            "the selected method scope declares {declared_total} decoded bytes, above the {} per-operation limit",
+            input_limits.max_total_decoded_bytes
+        )));
+    }
+    let decoded = AtomicU64::new(0);
+    let mut methods = Vec::new();
+    let mut resolved_dexes = Vec::new();
+    let mut diagnostics = artifact.open_diagnostics.clone();
+    let mut descriptor_counts = std::collections::BTreeMap::<String, usize>::new();
+    let scan_limits = artifact.limits.scan;
+    let mut used = (0usize, 0usize, 0u64);
+
+    for input in inputs {
+        probe.check()?;
+        let (buffer, ordinal, raw_name, wanted_logical) = match input {
+            MethodScopeInput::Raw => (None, 0, b"<memory.dex>".to_vec(), None),
+            MethodScopeInput::Archive { entry, logical } => {
+                let ordinal = entry.ordinal;
+                let raw_name = entry.raw_name.clone();
+                let data = zip::read_entry(
+                    &artifact.bytes,
+                    &entry,
+                    &input_limits,
+                    &decoded,
+                    &probe,
+                )?;
+                (Some(data), ordinal, raw_name, logical)
+            }
+        };
+        let data = buffer.as_deref().unwrap_or(&artifact.bytes);
+        let (views, integrity) = container::validate_dex_entry(
+            artifact.id,
+            ordinal,
+            &raw_name,
+            data,
+            &probe,
+        )?;
+        diagnostics.extend(integrity.clone());
+        for (logical, view) in views.views.iter().enumerate() {
+            let logical_u32 = u32::try_from(logical).map_err(|_| {
+                Error::malformed_input("logical DEX ordinal exceeds the public identity range")
+            })?;
+            if wanted_logical.is_some_and(|wanted| wanted != logical_u32) {
+                continue;
+            }
+            probe.check()?;
+            let view_integrity: Vec<Diagnostic> = integrity
+                .iter()
+                .filter(|diagnostic| diagnostic.dex() == Some(view.id()))
+                .cloned()
+                .collect();
+            let scratch = container::backend_scratch(view, &view_integrity);
+            let backend_bytes = scratch
+                .as_ref()
+                .map(|scratch| scratch.bytes.as_slice())
+                .unwrap_or_else(|| view.bytes());
+            let budget = guard.backend_budget(backend_bytes.len() as u64);
+            let parsed = droidsaw_dex::analysis::parse_for_analysis(
+                backend_bytes,
+                &droidsaw_dex::analysis::ParseOptions::default(),
+                &budget,
+                &guard.backend,
+            )
+            .map_err(|error| {
+                map_backend_error(error)
+                    .with_context("backend method inventory parse")
+                    .with_diagnostics(diagnostics.clone())
+            })?;
+            let entry = views.dex_entry(logical);
+            resolved_dexes.push(view.id());
+            for class_summary in parsed.dex().list_classes() {
+                probe.check()?;
+                let descriptor = ClassDescriptor::from_normalized(class_summary.descriptor.clone())
+                    .map_err(|error| {
+                        Error::malformed_input(format!(
+                            "class_def {} has invalid descriptor: {error}",
+                            class_summary.class_idx
+                        ))
+                    })?;
+                let class_id = ClassId::new(view.id(), class_summary.class_idx as u32);
+                let class = Class::new(class_id, entry.clone(), descriptor);
+                *descriptor_counts
+                    .entry(class.descriptor().as_str().to_owned())
+                    .or_insert(0) += 1;
+                let rows = parsed
+                    .dex()
+                    .list_methods(class_summary.class_idx, backend_bytes)
+                    .map_err(|error| {
+                        map_backend_error(droidsaw_dex::analysis::BackendError::Dex(error))
+                            .with_context("backend class_data parse")
+                            .with_diagnostics(diagnostics.clone())
+                    })?;
+                for summary in rows {
+                    probe.check()?;
+                    let method_id = MethodId::new(view.id(), summary.method_idx);
+                    let target = MethodTarget::new(class_id, method_id);
+                    let identity = MethodIdentity::new(
+                        method_id,
+                        entry.clone(),
+                        DexText::from_str_lossless(&class.descriptor().as_str()),
+                        DexText::from_str_lossless(&summary.name),
+                        Prototype::new(
+                            summary
+                                .parameters
+                                .iter()
+                                .map(|parameter| DexText::from_str_lossless(parameter))
+                                .collect(),
+                            DexText::from_str_lossless(&summary.return_type),
+                        ),
+                    );
+                    let row = MethodDeclaration::new(
+                        target,
+                        identity,
+                        class.clone(),
+                        summary.access_flags,
+                        summary.is_direct,
+                        summary.has_code,
+                        summary.code_off,
+                    );
+                    charge_results(&mut used, method_declaration_size(&row), &scan_limits)?;
+                    methods.push(row);
+                }
+            }
+        }
+    }
+    methods.sort_by_key(MethodDeclaration::target);
+    resolved_dexes.sort();
+    resolved_dexes.dedup();
+    for (descriptor, count) in descriptor_counts {
+        if count > 1 {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::DuplicateClassDefinition,
+                Severity::Warning,
+                Stage::Dex,
+                format!(
+                    "descriptor {descriptor} is defined {count} times; method identity retains class_def index"
+                ),
+            ));
+        }
+    }
+    let stats = OperationStats {
+        selected_dexes: resolved_dexes.len() as u32,
+        scanned_methods: methods.len() as u64,
+        result_items: methods.len() as u64,
+        ..Default::default()
+    };
+    Ok(Report::new(
+        MethodInventory::new(scope.clone(), resolved_dexes, methods),
+        diagnostics,
+        stats,
+    ))
+}
+
 /// Decompiles one class through the checked backend path. `selector` is a
 /// descriptor (optionally pinned to one logical DEX) or a full identity;
 /// the default descriptor resolution takes the first (entry, logical,
@@ -678,7 +1194,24 @@ fn decompile(
     selector: &ClassSelector,
     control: &OperationControl,
 ) -> Result<Report<Source>, Error> {
-    artifact.require_roots()?;
+    decompile_with_scope(artifact, &MethodScope::Root, selector, control)
+}
+
+#[cfg(feature = "decompile")]
+fn decompile_with_scope(
+    artifact: &Artifact,
+    scope: &MethodScope,
+    selector: &ClassSelector,
+    control: &OperationControl,
+) -> Result<Report<Source>, Error> {
+    let inputs = resolve_method_scope(artifact, scope)?;
+    let declared_total = declared_scope_bytes(artifact, &inputs);
+    if declared_total > artifact.limits.max_total_decoded_bytes {
+        return Err(Error::resource_limit(format!(
+            "the selected class scope declares {declared_total} decoded bytes, above the {} per-operation limit",
+            artifact.limits.max_total_decoded_bytes
+        )));
+    }
     struct Resolved {
         entry_index: usize,
         logical: usize,
@@ -707,21 +1240,21 @@ fn decompile(
     let mut diagnostics = artifact.open_diagnostics.clone();
     // Visit the entire selected scope, keeping only the chosen entry alive.
     // This both certifies later entries and charges each inflation once.
-    for (entry_index, root) in artifact.roots.iter().enumerate() {
+    for (entry_index, input) in inputs.iter().enumerate() {
         probe.check()?;
-        let buffer = match &root.source {
-            RootSource::Archive(entry) => Some(zip::read_entry(
+        let (buffer, ordinal, raw_name) = match input {
+            MethodScopeInput::Archive { entry, .. } => (Some(zip::read_entry(
                 &artifact.bytes,
                 entry,
                 &artifact.limits.input(),
                 &decoded,
                 &probe,
-            )?),
-            RootSource::Raw => None,
+            )?), entry.ordinal, entry.raw_name.as_slice()),
+            MethodScopeInput::Raw => (None, 0, b"<memory.dex>".as_slice()),
         };
         let data = buffer.as_deref().unwrap_or(&artifact.bytes);
         let (views, integrity) =
-            container::validate_dex_entry(artifact.id, root.ordinal, &root.raw_name, data, &probe)?;
+            container::validate_dex_entry(artifact.id, ordinal, raw_name, data, &probe)?;
         diagnostics.extend(integrity);
         let mut chose_entry = false;
         for (logical, view) in views.views.iter().enumerate() {
@@ -772,11 +1305,15 @@ fn decompile(
             format!("the descriptor is defined {definitions} times; the first (entry, logical, class_def) identity was decompiled"),
         ));
     }
-    let root = &artifact.roots[resolved.entry_index];
+    let input = &inputs[resolved.entry_index];
+    let (ordinal, raw_name) = match input {
+        MethodScopeInput::Archive { entry, .. } => (entry.ordinal, entry.raw_name.as_slice()),
+        MethodScopeInput::Raw => (0, b"<memory.dex>".as_slice()),
+    };
     let data = selected_bytes.as_deref().unwrap_or(&artifact.bytes);
     // Recreate borrowed views; integrity diagnostics were collected once above.
     let (views, _) =
-        container::validate_dex_entry(artifact.id, root.ordinal, &root.raw_name, data, &probe)?;
+        container::validate_dex_entry(artifact.id, ordinal, raw_name, data, &probe)?;
     let view = &views.views[resolved.logical];
     // Only integrity findings about *this* view decide whether it needs the
     // normalization scratch; a checksum warning on another entry must not
@@ -858,6 +1395,184 @@ fn decompile(
     }
 }
 
+#[cfg(feature = "decompile")]
+fn decompile_selected_method(
+    artifact: &Artifact,
+    target: &MethodTarget,
+    control: &OperationControl,
+) -> Result<Report<Source>, Error> {
+    let class_id = target.class();
+    let method_id = target.method();
+    if class_id.dex().artifact() != artifact.id || method_id.dex().artifact() != artifact.id {
+        return Err(Error::invalid_query(
+            "method target belongs to a different artifact",
+        ));
+    }
+    if class_id.dex() != method_id.dex() {
+        return Err(Error::invalid_query(
+            "method target class and method belong to different DEX identities",
+        ));
+    }
+    let guard = ControlGuard::new(control);
+    let probe = guard.probe();
+    let decoded = AtomicU64::new(0);
+    let (buffer, ordinal, raw_name) = if let Some(catalog) = &artifact.catalog {
+        let entry = catalog
+            .entries
+            .iter()
+            .find(|entry| entry.ordinal == method_id.dex().entry_ordinal())
+            .ok_or_else(|| {
+                Error::invalid_query(format!(
+                    "method target entry ordinal {} does not exist in this artifact",
+                    method_id.dex().entry_ordinal()
+                ))
+            })?;
+        let ordinal = entry.ordinal;
+        let raw_name = entry.raw_name.clone();
+        let data = zip::read_entry(
+            &artifact.bytes,
+            entry,
+            &artifact.limits.input(),
+            &decoded,
+            &probe,
+        )?;
+        (Some(data), ordinal, raw_name)
+    } else {
+        if method_id.dex().entry_ordinal() != 0 || method_id.dex().logical_ordinal() != 0 {
+            return Err(Error::invalid_query(
+                "raw DEX method target must use entry/logical ordinal zero",
+            ));
+        }
+        let decoded = u64::try_from(artifact.bytes.len()).unwrap_or(u64::MAX);
+        if decoded > artifact.limits.max_total_decoded_bytes {
+            return Err(Error::resource_limit(format!(
+                "raw DEX method input declares {decoded} decoded bytes, above the {} per-operation limit",
+                artifact.limits.max_total_decoded_bytes
+            )));
+        }
+        (None, 0, b"<memory.dex>".to_vec())
+    };
+    let data = buffer.as_deref().unwrap_or(&artifact.bytes);
+    let (views, integrity) = container::validate_dex_entry(
+        artifact.id,
+        ordinal,
+        &raw_name,
+        data,
+        &probe,
+    )?;
+    let logical = usize::try_from(method_id.dex().logical_ordinal()).map_err(|_| {
+        Error::invalid_query("method target logical DEX ordinal cannot fit the host index")
+    })?;
+    let view = views.views.get(logical).ok_or_else(|| {
+        Error::invalid_query(format!(
+            "method target logical DEX ordinal {} does not exist",
+            method_id.dex().logical_ordinal()
+        ))
+    })?;
+    if view.id() != method_id.dex() {
+        return Err(Error::invalid_query("method target identity does not match the DEX view"));
+    }
+    let view_integrity: Vec<Diagnostic> = integrity
+        .iter()
+        .filter(|diagnostic| diagnostic.dex() == Some(view.id()))
+        .cloned()
+        .collect();
+    let scratch = container::backend_scratch(view, &view_integrity);
+    let backend_bytes = scratch
+        .as_ref()
+        .map(|scratch| scratch.bytes.as_slice())
+        .unwrap_or_else(|| view.bytes());
+    let budget = guard.backend_budget(backend_bytes.len() as u64);
+    let parsed = droidsaw_dex::analysis::parse_for_analysis(
+        backend_bytes,
+        &droidsaw_dex::analysis::ParseOptions::default(),
+        &budget,
+        &guard.backend,
+    )
+    .map_err(|error| {
+        map_backend_error(error)
+            .with_context("backend selected-method parse")
+            .with_diagnostics(
+                artifact
+                    .open_diagnostics
+                    .iter()
+                    .cloned()
+                    .chain(integrity.iter().cloned())
+                    .collect(),
+            )
+    })?;
+    let report = droidsaw_dex::analysis::decompile_method_checked(
+        &parsed,
+        class_id.class_def_idx() as usize,
+        method_id.method_idx(),
+        &droidsaw_dex::analysis::EmitOptions::default(),
+        &budget,
+        &guard.backend,
+    )
+    .map_err(|error| {
+        map_backend_error(error)
+            .with_context("backend selected-method decompile")
+            .with_diagnostics(
+                artifact
+                    .open_diagnostics
+                    .iter()
+                    .cloned()
+                    .chain(integrity.iter().cloned())
+                    .collect(),
+            )
+    })?;
+    let class_def = parsed
+        .dex()
+        .class_defs
+        .get(class_id.class_def_idx() as usize)
+        .ok_or_else(|| Error::invalid_query("class_def index does not exist"))?;
+    let descriptor_text = parsed
+        .dex()
+        .get_type_descriptor(class_def.class_idx)
+        .map_err(|_| Error::malformed_input("selected class descriptor cannot be resolved"))?;
+    let entry = views.dex_entry(logical);
+    let class = build_class(&entry, view, class_id.class_def_idx(), descriptor_text);
+    let source = Source::new(
+        class,
+        normalize_source_text(&report.source),
+        map_metadata(&report.metadata),
+    );
+    let mut diagnostics: Vec<Diagnostic> = artifact
+        .open_diagnostics
+        .iter()
+        .cloned()
+        .chain(integrity)
+        .collect();
+    for backend_diag in &report.diagnostics {
+        diagnostics.push(
+            Diagnostic::new(
+                DiagnosticCode::DecompilationNotice,
+                Severity::Warning,
+                Stage::Decompile,
+                format!("{:?}: {}", backend_diag.code, backend_diag.message),
+            )
+            .with_dex(view.id()),
+        );
+    }
+    match report.completeness {
+        droidsaw_dex::analysis::Completeness::Complete => Ok(Report::new(
+            source,
+            diagnostics,
+            OperationStats {
+                result_items: 1,
+                scanned_methods: 1,
+                ..Default::default()
+            },
+        )),
+        droidsaw_dex::analysis::Completeness::Incomplete { reasons } => {
+            Err(Error::new(ErrorKind::IncompleteDecompilation)
+                .with_context(format!("incomplete selected-method decompilation: {reasons:?}"))
+                .with_diagnostics(diagnostics)
+                .with_partial_source(source))
+        }
+    }
+}
+
 /// The decoded manifest: last same-name entry wins. Requires only that one
 /// entry's bytes; DEX entries are not touched.
 #[cfg(feature = "manifest")]
@@ -916,7 +1631,9 @@ fn map_backend_error(error: droidsaw_dex::analysis::BackendError) -> Error {
             cause: CancelCause::Deadline,
         },
         Backend::InputBudget { .. } => ErrorKind::ResourceLimit,
-        Backend::InvalidClassDefIndex { .. } => ErrorKind::InvalidQuery,
+        Backend::InvalidClassDefIndex { .. } | Backend::InvalidMethodIndex { .. } => {
+            ErrorKind::InvalidQuery
+        }
         Backend::Dex(_) => ErrorKind::MalformedInput,
     };
     Error::new(kind).with_context(error.to_string())
@@ -1862,6 +2579,132 @@ mod tests {
         assert_eq!(*error.kind(), ErrorKind::MalformedInput);
         fs::remove_file(&path).unwrap();
     }
+
+    #[cfg(feature = "decompile")]
+    #[test]
+    fn method_inventory_keeps_declarations_and_exact_method_target() {
+        let engine = Engine::new(EngineOptions::default()).unwrap();
+        let artifact = engine
+            .open_bytes(Arc::from(g02_dex().into_boxed_slice()), InputKind::Dex, &no_control())
+            .unwrap();
+        let inventory = engine
+            .method_inventory(&artifact, &MethodScope::Root, &no_control())
+            .unwrap();
+        assert!(!inventory.value().methods().is_empty());
+        let declaration = inventory
+            .value()
+            .methods()
+            .iter()
+            .find(|method| method.has_code())
+            .expect("g02 contains an implemented method");
+        let source = engine
+            .decompile_method(&artifact, &declaration.target(), &no_control())
+            .unwrap();
+        assert!(!source.value().text().is_empty());
+        assert_eq!(source.value().class().id(), declaration.class_id());
+        let other = engine
+            .open_bytes(
+                Arc::from(const_string_fixture(1).into_boxed_slice()),
+                InputKind::Dex,
+                &no_control(),
+            )
+            .unwrap();
+        let error = engine
+            .decompile_method(&other, &declaration.target(), &no_control())
+            .unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::InvalidQuery);
+    }
+
+    #[cfg(feature = "decompile")]
+    #[test]
+    fn method_inventory_accepts_nested_dex_scope_and_all_detected() {
+        let first = const_string_fixture(1);
+        let second = const_string_fixture(2);
+        let zip = build_zip(&[
+            ("classes.dex", &first, true),
+            ("assets/extra.dex", &second, true),
+        ]);
+        let engine = Engine::new(EngineOptions::default()).unwrap();
+        let artifact = engine
+            .open_bytes(Arc::from(zip.into_boxed_slice()), InputKind::Apk, &no_control())
+            .unwrap();
+        let entries = engine
+            .archive_entries(&artifact, &ArchiveEntryQuery::default(), &no_control())
+            .unwrap();
+        let asset = entries
+            .value()
+            .iter()
+            .find(|entry| entry.raw_name() == b"assets/extra.dex")
+            .expect("asset DEX is exposed by the archive catalog")
+            .id();
+        let scoped = engine
+            .method_inventory(&artifact, &MethodScope::Entries(vec![asset]), &no_control())
+            .unwrap();
+        assert!(scoped
+            .value()
+            .resolved_dexes()
+            .iter()
+            .all(|dex| dex.entry_ordinal() == asset.ordinal()));
+        let classes = engine
+            .classes_in_scope(
+                &artifact,
+                &MethodScope::Entries(vec![asset]),
+                &ClassFilter::default(),
+                &no_control(),
+            )
+            .unwrap();
+        assert!(classes
+            .value()
+            .iter()
+            .all(|class| class.id().dex().entry_ordinal() == asset.ordinal()));
+        let query = query::string_query("Authorization", MatchMode::Literal, &Default::default())
+            .unwrap();
+        let references = engine
+            .references_in_scope(
+                &artifact,
+                &MethodScope::Entries(vec![asset]),
+                &query,
+                &no_control(),
+            )
+            .unwrap();
+        assert!(references
+            .value()
+            .iter()
+            .all(|reference| reference.caller().id().dex().entry_ordinal() == asset.ordinal()));
+        let selector = ClassSelector::Descriptor(
+            ClassDescriptor::from_normalized("LFixture1;".to_owned()).unwrap(),
+            None,
+        );
+        let source = engine
+            .decompile_in_scope(
+                &artifact,
+                &MethodScope::Entries(vec![asset]),
+                &selector,
+                &no_control(),
+            )
+            .unwrap();
+        assert_eq!(
+            source.value().class().id().dex().entry_ordinal(),
+            asset.ordinal()
+        );
+        let all = engine
+            .method_inventory(&artifact, &MethodScope::AllDetected, &no_control())
+            .unwrap();
+        assert_eq!(all.value().resolved_dexes().len(), 2);
+        let asset_method = all
+            .value()
+            .methods()
+            .iter()
+            .find(|method| method.class_id().dex().entry_ordinal() == asset.ordinal())
+            .expect("asset method declaration");
+        let asset_source = engine
+            .decompile_method(&artifact, &asset_method.target(), &no_control())
+            .unwrap();
+        assert_eq!(
+            asset_source.value().class().id().dex().entry_ordinal(),
+            asset.ordinal()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2151,6 +2994,22 @@ impl Engine {
         classes(artifact, filter, control)
     }
 
+    /// Lists classes over an explicit DEX scope while preserving their
+    /// original artifact and logical-member identities.
+    pub fn classes_in_scope(
+        &self,
+        artifact: &Artifact,
+        scope: &MethodScope,
+        filter: &ClassFilter,
+        control: &OperationControl,
+    ) -> Result<Report<Vec<Class>>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        self.runtime
+            .pool
+            .install(|| classes_in_scope(artifact, scope, filter, control))
+    }
+
     pub fn references(
         &self,
         artifact: &Artifact,
@@ -2160,6 +3019,38 @@ impl Engine {
         let _admission = self.admit(control)?;
         self.check_ownership(artifact)?;
         references(artifact, query, control)
+    }
+
+    /// Scans references over an explicit DEX scope with one shared operation
+    /// decode and result budget.
+    pub fn references_in_scope(
+        &self,
+        artifact: &Artifact,
+        scope: &MethodScope,
+        query: &crate::model::ReferenceQuery,
+        control: &OperationControl,
+    ) -> Result<Report<Vec<crate::model::Reference>>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        self.runtime
+            .pool
+            .install(|| references_in_scope(artifact, scope, query, control))
+    }
+
+    /// Lists every method declared by the selected DEX scope, including
+    /// native/abstract declarations and methods with no reference hits.
+    #[cfg(feature = "decompile")]
+    pub fn method_inventory(
+        &self,
+        artifact: &Artifact,
+        scope: &MethodScope,
+        control: &OperationControl,
+    ) -> Result<Report<MethodInventory>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        self.runtime
+            .pool
+            .install(|| method_inventory(artifact, scope, control))
     }
 
     #[cfg(feature = "decompile")]
@@ -2174,6 +3065,39 @@ impl Engine {
         self.runtime
             .pool
             .install(|| decompile(artifact, selector, control))
+    }
+
+    /// Decompiles a class selected from an explicit DEX scope. The class
+    /// selector's identity, when pinned, is still checked against that scope.
+    #[cfg(feature = "decompile")]
+    pub fn decompile_in_scope(
+        &self,
+        artifact: &Artifact,
+        scope: &MethodScope,
+        selector: &ClassSelector,
+        control: &OperationControl,
+    ) -> Result<Report<Source>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        self.runtime
+            .pool
+            .install(|| decompile_with_scope(artifact, scope, selector, control))
+    }
+
+    /// Renders exactly one declared method. The class component of the target
+    /// disambiguates duplicate class descriptors in one DEX.
+    #[cfg(feature = "decompile")]
+    pub fn decompile_method(
+        &self,
+        artifact: &Artifact,
+        target: &MethodTarget,
+        control: &OperationControl,
+    ) -> Result<Report<Source>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        self.runtime
+            .pool
+            .install(|| decompile_selected_method(artifact, target, control))
     }
 
     #[cfg(feature = "manifest")]
