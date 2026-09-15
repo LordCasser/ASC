@@ -1,5 +1,17 @@
 # Patch ledger: droidsaw-dex 2.0.0 → asc derived
 
+## DX-P06 — shared host cancellation (A15)
+
+- **问题输入**：ASC 只在 parse/emit 前复制取消状态，宿主在后端执行期间取消不能到达已有检查点。
+- **修改文件/符号**：`src/analysis.rs` 的 `Control` 使用 `Arc<AtomicBool>`，新增 `from_cancel_flag`。
+- **目标行为**：宿主和后端观察同一标记；deadline 仍由 `Budget` 独立传递，不伪装成用户取消。无轮询线程。
+- **测试**：core `engine::tests::backend_control_shares_live_cancellation_and_preserves_causes`；vendor 原有 checked API 取消/期限测试继续执行。
+- **必要**：是，嵌入取消合同。维护者：ASC `lordcasser/main`。
+- **上游状态**：未提交上游；本地维护补丁。
+- **移除条件**：上游提供经过同等测试的共享宿主控制入口。
+
+---
+
 Vendored copy of [`droidsaw-dex`](https://github.com/droidsaw/droidsaw-dex) 2.0.0
 (BSD-3-Clause, `LICENSE` kept as shipped). Source provenance and hashes live in
 [`upstream.json`](upstream.json); the ready-to-file upstream request text lives in

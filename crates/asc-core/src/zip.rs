@@ -149,10 +149,20 @@ fn unsupported(message: impl Into<String>) -> Error {
 /// record is readable and decodable by this reader's support matrix". Bad
 /// structure returns errors that name the failing offset or entry; it never
 /// returns an empty catalog for a broken archive.
+#[cfg(test)]
 pub(crate) fn parse_catalog(
     data: &[u8],
     limits: &InputLimits,
 ) -> Result<ArchiveCatalog, Error> {
+    parse_catalog_controlled(data, limits, &ControlProbe::never())
+}
+
+pub(crate) fn parse_catalog_controlled(
+    data: &[u8],
+    limits: &InputLimits,
+    control: &ControlProbe<'_>,
+) -> Result<ArchiveCatalog, Error> {
+    control.check()?;
     let Some(eocd) = find_eocd(data) else {
         return Err(malformed(format!(
             "end of central directory not found in the last {} bytes of a {} byte archive",
@@ -222,6 +232,7 @@ pub(crate) fn parse_catalog(
     let mut offset = cd_offset as usize;
     let cd_end = cd_end as usize;
     while offset < cd_end {
+        control.check()?;
         let ordinal = entries.len() as u32;
         let header = data.get(offset..offset + 46).ok_or_else(|| {
             malformed(format!(

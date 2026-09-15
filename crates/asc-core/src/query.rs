@@ -101,8 +101,8 @@ pub fn member_query(
 
 /// Normalizes a class argument to a validated `Lpkg/Name;` descriptor.
 ///
-/// Accepts Java dotted names, descriptors with or without the `L`/`;`
-/// delimiters and mixed separators, then validates the result: no empty
+/// Accepts Java dotted/slashed names or complete `L...;` descriptors,
+/// then validates the result: no empty
 /// names, no `[` (arrays) or stray `;` inside the body. Primitive spellings
 /// become the class of that name in the default package (`I` -> `LI;`), which
 /// is a legal class descriptor, not the primitive type.
@@ -115,13 +115,10 @@ pub fn exact_descriptor(input: &str) -> Result<ClassDescriptor, Error> {
     let body = if let Some(stripped) = input
         .strip_prefix('L')
         .and_then(|rest| rest.strip_suffix(';'))
-        .filter(|_| input.contains('/'))
     {
-        stripped.to_owned()
+        stripped.replace('.', "/")
     } else {
-        let no_prefix = input.strip_prefix('L').unwrap_or(input);
-        let no_suffix = no_prefix.strip_suffix(';').unwrap_or(no_prefix);
-        no_suffix.replace('.', "/")
+        input.replace('.', "/")
     };
     if body.is_empty() {
         return Err(Error::invalid_query(format!("class name {input:?} is empty")));

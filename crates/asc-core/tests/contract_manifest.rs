@@ -9,6 +9,7 @@
 
 // Compiled via #[path] includes: each target uses a subset of the modules.
 #![allow(dead_code)]
+#![cfg(feature = "manifest")]
 
 mod support;
 

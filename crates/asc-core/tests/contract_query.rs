@@ -130,7 +130,11 @@ fn exact_descriptor_normalizes_java_and_descriptor_inputs() {
         ("Lcom/example/Main;", "Lcom/example/Main;"),
         ("Lcom.example.Main;", "Lcom/example/Main;"),
         ("com/example/Main", "Lcom/example/Main;"),
-        ("Lcom/foo/Main", "Lcom/foo/Main;"),
+        ("Lcom/foo/Main", "LLcom/foo/Main;"),
+        ("Login", "LLogin;"),
+        ("Login.View", "LLogin/View;"),
+        ("L", "LL;"),
+        ("LLogin;", "LLogin;"),
         ("Main", "LMain;"),
         ("com.example.Main$Inner", "Lcom/example/Main$Inner;"),
     ] {
@@ -142,7 +146,7 @@ fn exact_descriptor_normalizes_java_and_descriptor_inputs() {
 
 #[test]
 fn exact_descriptor_rejects_malformed_forms() {
-    for bad in ["", "[Lcom/foo/Main;", "L[com;", "com/foo/Main;extra;", ";", "L"] {
+    for bad in ["", "[Lcom/foo/Main;", "L[com;", "com/foo/Main;extra;", ";"] {
         assert!(
             query::exact_descriptor(bad).is_err(),
             "{bad:?} must be rejected"

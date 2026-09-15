@@ -17,16 +17,22 @@
 //! ordinal order, so the merged output never depends on scheduling.
 
 use crate::bytes::ControlProbe;
-use crate::dex::container::{self, ValidatedDexView};
+use crate::dex::container;
+#[cfg(feature = "decompile")]
+use crate::dex::container::ValidatedDexView;
 use crate::dex::{self, ScanOptions};
 use crate::error::{Error, ErrorKind};
 use crate::bytes::OperationControl;
+#[cfg(feature = "decompile")]
 use crate::model::{
     AnnotationEntry, AnnotationRecord, AnnotationTarget, AnnotationVisibility, ArtifactId, Class,
     ClassDescriptor, ClassFilter, ClassId, ClassMetadata, ClassSelector, DexEntry, DexText,
     Diagnostic, DiagnosticCode, EnclosingRecord, FieldMetadata, InnerClassRecord, MethodMetadata,
     OperationStats, Prototype, Report, Severity, Source, SourceMetadata, Stage,
 };
+#[cfg(not(feature = "decompile"))]
+use crate::model::{ArtifactId, Class, ClassFilter, DexEntry, DexText, Diagnostic,
+    DiagnosticCode, OperationStats, Prototype, Report, Severity, Stage};
 use crate::zip::{self, ArchiveEntry};
 use std::fs::File;
 use std::io::Read;
@@ -55,6 +61,7 @@ pub struct Limits {
     pub max_archive_entries: usize,
     /// `depth`/`xml-nodes`/`xml-attributes` (and the manifest-side string-unit
     /// budget) for manifest decoding.
+    #[cfg(feature = "manifest")]
     pub manifest: crate::manifest::XmlDecodeLimits,
     /// `table-items`/`string-units`/`result-items`/`locations`/`result-bytes`.
     pub scan: crate::dex::ScanLimits,
@@ -68,6 +75,7 @@ impl Default for Limits {
             max_entry_bytes: crate::zip::InputLimits::DEFAULT.max_entry_bytes,
             max_total_decoded_bytes: crate::zip::InputLimits::DEFAULT.max_total_decoded_bytes,
             max_archive_entries: crate::zip::InputLimits::DEFAULT.max_archive_entries,
+            #[cfg(feature = "manifest")]
             manifest: crate::manifest::XmlDecodeLimits::default(),
             scan: crate::dex::ScanLimits::DEFAULT,
         }
@@ -85,6 +93,7 @@ impl Limits {
 }
 
 /// `AndroidManifest.xml`, matched on raw entry-name bytes (last wins).
+#[cfg(feature = "manifest")]
 const MANIFEST_NAME: &[u8] = b"AndroidManifest.xml";
 
 /// RAII admission ticket: released on drop, so cancellation or an error
@@ -111,7 +120,9 @@ impl ControlGuard {
             flag: control.cancel_flag(),
             deadline: control.deadline(),
             #[cfg(feature = "decompile")]
-            backend: droidsaw_dex::analysis::Control::new(),
+            backend: droidsaw_dex::analysis::Control::from_cancel_flag(
+                control.cancel_flag().unwrap_or_default(),
+            ),
         }
     }
 
@@ -119,21 +130,6 @@ impl ControlGuard {
         match &self.flag {
             Some(flag) => ControlProbe { cancelled: flag, deadline: self.deadline },
             None => ControlProbe { cancelled: &self.dummy, deadline: self.deadline },
-        }
-    }
-
-    /// Mirrors the host's cancellation state into the backend token so the
-    /// backend's own checkpoints (parse entry/exit, between method stages)
-    /// observe a host cancel or an expired deadline instead of only the
-    /// engine-side probes around the call.
-    #[cfg(feature = "decompile")]
-    fn sync_backend(&self) {
-        let host_cancelled =
-            self.flag.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed));
-        let deadline_expired =
-            self.deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline);
-        if host_cancelled || deadline_expired {
-            self.backend.cancel();
         }
     }
 
@@ -233,40 +229,55 @@ pub(crate) fn open_path(
     runtime: &Arc<Runtime>,
     control: &OperationControl,
 ) -> Result<Artifact, Error> {
+    let bytes = read_path_snapshot(path, limits.max_input_bytes, control)?;
+    open_bytes(bytes, limits, runtime, control)
+}
+
+fn read_path_snapshot(
+    path: &Path,
+    max_bytes: u64,
+    control: &OperationControl,
+) -> Result<Arc<[u8]>, Error> {
+    control.check()?;
     let mut file = File::open(path)
         .map_err(|error| Error::new(ErrorKind::NotFound).with_context(format!("open {path:?}: {error}")))?;
-    let metadata = file
-        .metadata()
+    let metadata = file.metadata()
         .map_err(|error| Error::new(ErrorKind::NotFound).with_context(format!("stat {path:?}: {error}")))?;
     if !metadata.is_file() {
         return Err(Error::new(ErrorKind::UnsupportedFormat)
             .with_context(format!("{path:?} is not a regular file")));
     }
-    if metadata.len() > limits.max_input_bytes {
-        return Err(Error::resource_limit(format!(
-            "{path:?} is {} bytes, above the {} input limit",
-            metadata.len(),
-            limits.max_input_bytes
-        )));
+    if metadata.len() > max_bytes {
+        return Err(Error::resource_limit(format!("{path:?} exceeds the {max_bytes} input limit")));
     }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    read_snapshot(&mut file, max_bytes, control).map(|bytes| Arc::from(bytes.into_boxed_slice()))
+}
+
+fn read_snapshot(
+    reader: &mut impl Read,
+    max_bytes: u64,
+    control: &OperationControl,
+) -> Result<Vec<u8>, Error> {
+    let mut bytes = Vec::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {
         control.check()?;
-        let read = file.read(&mut buffer).map_err(|error| {
-            Error::new(ErrorKind::MalformedInput).with_context(format!("read {path:?}: {error}"))
+        let remaining = max_bytes.saturating_sub(bytes.len() as u64);
+        // One extra byte proves overflow without reading an unbounded tail.
+        let wanted = remaining.saturating_add(1).min(buffer.len() as u64) as usize;
+        let read = reader.read(&mut buffer[..wanted]).map_err(|error| {
+            Error::new(ErrorKind::MalformedInput).with_context(format!("read input: {error}"))
         })?;
-        if read == 0 {
-            break;
+        if read == 0 { break; }
+        if read as u64 > remaining {
+            return Err(Error::resource_limit(format!("input exceeds the {max_bytes} byte limit")));
         }
+        bytes.try_reserve_exact(read)
+            .map_err(|error| Error::resource_limit(format!("input allocation: {error}")))?;
         bytes.extend_from_slice(&buffer[..read]);
     }
-    // A file grown between the stat and the read is still caught by the
-    // snapshot-length check in `open_bytes`.
-    let artifact = open_bytes(Arc::from(bytes.into_boxed_slice()), limits, runtime, control)?;
-    let mut artifact = artifact;
-    artifact.limits = *limits;
-    Ok(artifact)
+    control.check()?;
+    Ok(bytes)
 }
 
 /// Opens an already-owned input snapshot (the raw-bytes host path and tests).
@@ -276,7 +287,7 @@ pub(crate) fn open_bytes(
     runtime: &Arc<Runtime>,
     control: &OperationControl,
 ) -> Result<Artifact, Error> {
-    let _ = control;
+    control.check()?;
     let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     if len > limits.max_input_bytes {
         return Err(Error::resource_limit(format!(
@@ -289,7 +300,7 @@ pub(crate) fn open_bytes(
     // drop - insufficient budget fails immediately). The reservation is
     // rolled back if the catalog turns out to be malformed.
     reserve_bytes(runtime, len, limits.max_engine_owned_bytes)?;
-    match catalog_artifact(bytes, limits, runtime) {
+    match catalog_artifact(bytes, limits, runtime, control) {
         Ok(artifact) => Ok(artifact),
         Err(error) => {
             runtime.active_bytes.fetch_sub(len, Ordering::Relaxed);
@@ -304,9 +315,12 @@ fn catalog_artifact(
     bytes: Arc<[u8]>,
     limits: &Limits,
     runtime: &Arc<Runtime>,
+    control: &OperationControl,
 ) -> Result<Artifact, Error> {
-    let id = ArtifactId::from_digest(crate::bytes::sha256(&bytes));
-    let catalog = zip::parse_catalog(&bytes, &limits.input())?;
+    let id = ArtifactId::from_digest(crate::bytes::sha256_controlled(&bytes, control)?);
+    let guard = ControlGuard::new(control);
+    let catalog = zip::parse_catalog_controlled(&bytes, &limits.input(), &guard.probe())?;
+    control.check()?;
     let selection = zip::select_root_dexes(&catalog);
     let mut open_diagnostics = Vec::new();
     for duplicate in &selection.duplicates {
@@ -349,6 +363,7 @@ impl Artifact {
     fn fold_roots<T: Send>(
         &self,
         control: &OperationControl,
+        measure: impl Fn(&T) -> (usize, usize, u64),
         op: impl Fn(&Root, &container::DexEntryViews<'_>, &ControlProbe<'_>) -> Result<Vec<T>, Error>
             + Sync,
     ) -> Result<(Vec<T>, Vec<Diagnostic>), Error> {
@@ -377,15 +392,15 @@ impl Artifact {
             )));
         }
         let decoded = AtomicU64::new(0);
-        // Parallel across entries on the engine's pool (the rayon global pool
-        // when no worker count was configured); results and errors are merged
-        // in ordinal order, so the lowest ordinal decides the operation's
-        // error and the merged output never depends on scheduling
-        // (interfaces.md §4).
-        let fold = || {
-            self.roots
-                .par_iter()
-                .map(|root| {
+        let mut results = Vec::new();
+        let mut integrity = Vec::new();
+        let mut used = (0usize, 0usize, 0u64);
+        // Bound in-flight result batches by private worker count. Fold in
+        // ordinal order so scheduling cannot select a different error.
+        for batch in self.roots.chunks(self.runtime.pool.current_num_threads()) {
+            #[allow(clippy::type_complexity)]
+            let per_root: Vec<Result<(Vec<T>, Vec<Diagnostic>), Error>> =
+                self.runtime.pool.install(|| batch.par_iter().map(|root| {
                     let data: &[u8] = match &root.source {
                         RootSource::Archive(entry) => {
                             &zip::read_entry(&self.bytes, entry, &input_limits, &decoded, &probe)?
@@ -393,29 +408,19 @@ impl Artifact {
                         RootSource::Raw => &self.bytes,
                     };
                     let (views, entry_integrity) = container::validate_dex_entry(
-                        self.id,
-                        root.ordinal,
-                        &root.raw_name,
-                        data,
-                        &probe,
+                        self.id, root.ordinal, &root.raw_name, data, &probe,
                     )?;
-                    let rows = op(root, &views, &probe)?;
-                    Ok((rows, entry_integrity))
-                })
-                .collect::<Vec<_>>()
-        };
-        #[allow(clippy::type_complexity)]
-        let per_root: Vec<Result<(Vec<T>, Vec<Diagnostic>), Error>> =
-            match &self.runtime.pool {
-                Some(pool) => pool.install(fold),
-                None => fold(),
-            };
-        let mut results = Vec::new();
-        let mut integrity = Vec::new();
-        for entry in per_root {
-            let (rows, entry_integrity) = entry?;
-            results.extend(rows);
-            integrity.extend(entry_integrity);
+                    Ok((op(root, &views, &probe)?, entry_integrity))
+                }).collect());
+            for entry in per_root {
+                let (rows, entry_integrity) = entry?;
+                for row in rows {
+                    probe.check()?;
+                    charge_results(&mut used, measure(&row), &self.limits.scan)?;
+                    results.push(row);
+                }
+                integrity.extend(entry_integrity);
+            }
         }
         let diagnostics =
             self.open_diagnostics.iter().cloned().chain(integrity.iter().cloned()).collect();
@@ -431,10 +436,54 @@ impl Artifact {
     }
 }
 
+fn charge_results(
+    used: &mut (usize, usize, u64),
+    added: (usize, usize, u64),
+    limits: &crate::dex::ScanLimits,
+) -> Result<(), Error> {
+    used.0 = used.0.saturating_add(added.0);
+    used.1 = used.1.saturating_add(added.1);
+    used.2 = used.2.saturating_add(added.2);
+    if used.0 > limits.max_result_items || used.1 > limits.max_result_bytes
+        || used.2 > limits.max_reference_locations {
+        return Err(Error::resource_limit(format!(
+            "operation result uses {} items, {} estimated bytes, {} locations; limits are {}, {}, {}",
+            used.0, used.1, used.2, limits.max_result_items, limits.max_result_bytes,
+            limits.max_reference_locations,
+        )));
+    }
+    Ok(())
+}
+
+fn reference_size(row: &crate::model::Reference) -> (usize, usize, u64) {
+    // Same structural coefficients as the scanner, plus variable text storage.
+    fn text(value: &DexText) -> usize { value.unit_len().saturating_mul(2) }
+    fn prototype(value: &Prototype) -> usize {
+        value.parameters().iter().fold(text(value.return_type()), |n, p| n.saturating_add(text(p)))
+    }
+    use crate::model::TargetValue;
+    let caller = row.caller();
+    let mut bytes = 320usize.saturating_add(text(caller.owner()))
+        .saturating_add(text(caller.name())).saturating_add(prototype(caller.prototype()))
+        .saturating_add(caller.dex().raw_entry_name().len());
+    let mut locations = 0u64;
+    for target in row.targets() {
+        let count = target.code_unit_offsets().len();
+        locations = locations.saturating_add(count as u64);
+        let value_bytes = match target.value() {
+            TargetValue::String(t) | TargetValue::Type(t) => text(t),
+            TargetValue::Field { owner, name, field_type } => text(owner).saturating_add(text(name)).saturating_add(text(field_type)),
+            TargetValue::Method { owner, name, prototype: p } => text(owner).saturating_add(text(name)).saturating_add(prototype(p)),
+        };
+        bytes = bytes.saturating_add(64).saturating_add(count.saturating_mul(8)).saturating_add(value_bytes);
+    }
+    (1, bytes, locations)
+}
+
 /// The selected logical DEX entries: identity, names, version, header offset.
 /// A DEX-less archive yields a successful empty catalog.
-pub fn dexes(artifact: &Artifact, control: &OperationControl) -> Result<Report<Vec<DexEntry>>, Error> {
-    let (rows, diagnostics) = artifact.fold_roots(control, |_entry, views, _probe| {
+fn dexes(artifact: &Artifact, control: &OperationControl) -> Result<Report<Vec<DexEntry>>, Error> {
+    let (rows, diagnostics) = artifact.fold_roots(control, |entry: &DexEntry| (1, 128 + entry.raw_entry_name().len(), 0), |_entry, views, _probe| {
         let mut rows = Vec::with_capacity(views.views.len());
         for logical in 0..views.views.len() {
             rows.push(views.dex_entry(logical));
@@ -449,7 +498,7 @@ pub fn dexes(artifact: &Artifact, control: &OperationControl) -> Result<Report<V
 /// (entry, logical, class_def) order, filtered by Java-name substring. All
 /// definitions are kept: the identity is the class_def index, never the
 /// descriptor.
-pub fn classes(
+fn classes(
     artifact: &Artifact,
     filter: &ClassFilter,
     control: &OperationControl,
@@ -459,7 +508,11 @@ pub fn classes(
     // (class, descriptor) pairs: duplicates are counted across every
     // definition before the filter (a filtered-out duplicate is still a
     // duplicate definition).
-    let (pairs, mut diagnostics) = artifact.fold_roots(control, |_entry, views, probe| {
+    let (pairs, mut diagnostics) = artifact.fold_roots(control, |(class, _): &(Class, String)| {
+        if filter.matches(class.java_name()) {
+            (1, 320 + class.descriptor().as_str().len() * 8 + class.dex().raw_entry_name().len(), 0)
+        } else { (0, 0, 0) }
+    }, |_entry, views, probe| {
         let mut pairs = Vec::new();
         for (logical, view) in views.views.iter().enumerate() {
             let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
@@ -500,14 +553,14 @@ pub fn classes(
 /// Reference hits for one structured query, in (entry, logical, method_idx)
 /// order. An empty result is a success: the class walk still certifies the
 /// selected entries' structure.
-pub fn references(
+fn references(
     artifact: &Artifact,
     query: &crate::model::ReferenceQuery,
     control: &OperationControl,
 ) -> Result<Report<Vec<crate::model::Reference>>, Error> {
     artifact.require_roots()?;
     let scan_limits = artifact.limits.scan;
-    let (rows, diagnostics) = artifact.fold_roots(control, |_entry, views, probe| {
+    let (rows, diagnostics) = artifact.fold_roots(control, reference_size, |_entry, views, probe| {
         let mut rows = Vec::new();
         for (logical, view) in views.views.iter().enumerate() {
             let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
@@ -530,137 +583,88 @@ pub fn references(
 /// the default descriptor resolution takes the first (entry, logical,
 /// class_def) definition and reports duplicates.
 #[cfg(feature = "decompile")]
-pub fn decompile(
+fn decompile(
     artifact: &Artifact,
     selector: &ClassSelector,
     control: &OperationControl,
 ) -> Result<Report<Source>, Error> {
     artifact.require_roots()?;
-    // Resolution pass: inflate + validate entries in ordinal order until the
-    // selector hits. A broken entry before the hit is the operation's error;
-    // entries after the hit are validated in the completion pass below (a
-    // complete success certifies every selected entry).
     struct Resolved {
         entry_index: usize,
         logical: usize,
         class_def_idx: u32,
-        duplicates: usize,
+    }
+    if let ClassSelector::Id(id) = selector
+        && id.dex().artifact() != artifact.id {
+        return Err(Error::invalid_query("class id belongs to a different artifact"));
+    }
+    if let ClassSelector::Descriptor(_, Some(id)) = selector
+        && id.artifact() != artifact.id {
+        return Err(Error::invalid_query("DEX id belongs to a different artifact"));
     }
     let guard = ControlGuard::new(control);
     let probe = guard.probe();
     let decoded = AtomicU64::new(0);
     let mut resolution: Option<Resolved> = None;
-    let mut integrity = Vec::new();
+    let mut selected_bytes = None;
+    let mut definitions = 0usize;
+    let mut diagnostics = artifact.open_diagnostics.clone();
+    // Visit the entire selected scope, keeping only the chosen entry alive.
+    // This both certifies later entries and charges each inflation once.
     for (entry_index, root) in artifact.roots.iter().enumerate() {
         probe.check()?;
-        #[allow(unused_assignments)] // Raw input never fills the buffer
-        let mut data_buffer = None;
-        let data: &[u8] = match &root.source {
-            RootSource::Archive(entry) => {
-                data_buffer = Some(zip::read_entry(
-                    &artifact.bytes,
-                    entry,
-                    &artifact.limits.input(),
-                    &decoded,
-                    &probe,
-                )?);
-                data_buffer.as_deref().expect("just assigned")
-            }
-            RootSource::Raw => &artifact.bytes,
+        let buffer = match &root.source {
+            RootSource::Archive(entry) => Some(zip::read_entry(
+                &artifact.bytes, entry, &artifact.limits.input(), &decoded, &probe,
+            )?),
+            RootSource::Raw => None,
         };
-        let (views, entry_integrity) =
-            container::validate_dex_entry(artifact.id, root.ordinal, &root.raw_name, data, &probe)?;
-        integrity.extend(entry_integrity);
-        'members: for (logical, view) in views.views.iter().enumerate() {
-            match selector {
+        let data = buffer.as_deref().unwrap_or(&artifact.bytes);
+        let (views, integrity) = container::validate_dex_entry(
+            artifact.id, root.ordinal, &root.raw_name, data, &probe,
+        )?;
+        diagnostics.extend(integrity);
+        let mut chose_entry = false;
+        for (logical, view) in views.views.iter().enumerate() {
+            let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
+            let hits = match selector {
                 ClassSelector::Descriptor(descriptor, pinned) => {
-                    if let Some(pinned_id) = pinned
-                        && view.id() != *pinned_id
-                    {
-                        continue;
-                    }
-                    let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
-                    let hits =
-                        dex::locate_class(&dex_view, descriptor, &artifact.limits.scan, Some(&probe))?;
-                    if let Some(&class_def_idx) = hits.first() {
-                        resolution = Some(Resolved {
-                            entry_index,
-                            logical,
-                            class_def_idx,
-                            duplicates: hits.len().saturating_sub(1),
-                        });
-                        break 'members;
-                    }
+                    if pinned.is_some_and(|id| id != view.id()) { continue; }
+                    dex::locate_class(&dex_view, descriptor, &artifact.limits.scan, Some(&probe))?
                 }
                 ClassSelector::Id(class_id) => {
-                    if class_id.dex().artifact() != artifact.id {
-                        return Err(Error::invalid_query(format!(
-                            "class id {class_id:?} belongs to a different artifact"
-                        )));
+                    if view.id() != class_id.dex() { continue; }
+                    let classes = dex::list_classes(&dex_view, &artifact.limits.scan, Some(&probe))?;
+                    if !classes.iter().any(|class| class.id() == *class_id) {
+                        return Err(Error::invalid_query("class_def index does not exist"));
                     }
-                    if views.views[logical].id() == class_id.dex() {
-                        resolution = Some(Resolved {
-                            entry_index,
-                            logical,
-                            class_def_idx: class_id.class_def_idx(),
-                            duplicates: 0,
-                        });
-                        break 'members;
-                    }
+                    vec![class_id.class_def_idx()]
                 }
+            };
+            definitions += hits.len();
+            if resolution.is_none()
+                && let Some(&class_def_idx) = hits.first() {
+                resolution = Some(Resolved { entry_index, logical, class_def_idx });
+                chose_entry = true;
             }
         }
-        if resolution.is_some() {
-            break;
-        }
+        if chose_entry { selected_bytes = buffer; }
     }
-    let Some(resolved) = resolution else {
-        let diagnostics = artifact
-            .open_diagnostics
-            .iter()
-            .cloned()
-            .chain(integrity.iter().cloned())
-            .collect();
-        return Err(Error::new(ErrorKind::NotFound)
-            .with_context("no selected DEX entry defines this class")
-            .with_diagnostics(diagnostics));
-    };
-    let mut diagnostics: Vec<Diagnostic> =
-        artifact.open_diagnostics.iter().cloned().chain(integrity.iter().cloned()).collect();
-    if resolved.duplicates > 0 {
+    let resolved = resolution.ok_or_else(|| Error::new(ErrorKind::NotFound)
+        .with_context("no selected DEX entry defines this class")
+        .with_diagnostics(diagnostics.clone()))?;
+    if definitions > 1 {
         diagnostics.push(Diagnostic::new(
-            DiagnosticCode::DuplicateClassDefinition,
-            Severity::Warning,
-            Stage::Dex,
-            format!(
-                "the descriptor is defined {} times; the first (entry, logical, class_def) \
-                 identity was decompiled",
-                resolved.duplicates + 1
-            ),
+            DiagnosticCode::DuplicateClassDefinition, Severity::Warning, Stage::Dex,
+            format!("the descriptor is defined {definitions} times; the first (entry, logical, class_def) identity was decompiled"),
         ));
     }
-
-    // Backend parse + checked decompile over the resolved entry's bytes
-    // (041 members go through the operation-local scratch normalization).
     let root = &artifact.roots[resolved.entry_index];
-    #[allow(unused_assignments)] // Raw input never fills the buffer
-    let mut data_buffer = None;
-    let data: &[u8] = match &root.source {
-        RootSource::Archive(entry) => {
-            data_buffer = Some(zip::read_entry(
-                &artifact.bytes,
-                entry,
-                &artifact.limits.input(),
-                &decoded,
-                &probe,
-            )?);
-            data_buffer.as_deref().expect("just assigned")
-        }
-        RootSource::Raw => &artifact.bytes,
-    };
-    let (views, entry_integrity) =
-        container::validate_dex_entry(artifact.id, root.ordinal, &root.raw_name, data, &probe)?;
-    diagnostics.extend(entry_integrity);
+    let data = selected_bytes.as_deref().unwrap_or(&artifact.bytes);
+    // Recreate borrowed views; integrity diagnostics were collected once above.
+    let (views, _) = container::validate_dex_entry(
+        artifact.id, root.ordinal, &root.raw_name, data, &probe,
+    )?;
     let view = &views.views[resolved.logical];
     // Only integrity findings about *this* view decide whether it needs the
     // normalization scratch; a checksum warning on another entry must not
@@ -678,7 +682,6 @@ pub fn decompile(
     // The host's cancel flag and deadline are mirrored into the backend
     // token/budget so the backend's own checkpoints honor them, and the
     // budget caps the parse at exactly this view's length.
-    guard.sync_backend();
     let budget = guard.backend_budget(u64::try_from(backend_bytes.len()).unwrap_or(u64::MAX));
     let parsed = droidsaw_dex::analysis::parse_for_analysis(
         backend_bytes,
@@ -687,11 +690,9 @@ pub fn decompile(
         &guard.backend,
     )
     .map_err(|error| {
-        Error::new(ErrorKind::MalformedInput)
-            .with_context(format!("backend parse: {error}"))
+        map_backend_error(error).with_context("backend parse")
             .with_diagnostics(diagnostics.clone())
     })?;
-    guard.sync_backend();
     let report = droidsaw_dex::analysis::decompile_checked(
         &parsed,
         resolved.class_def_idx as usize,
@@ -700,8 +701,7 @@ pub fn decompile(
         &guard.backend,
     )
     .map_err(|error| {
-        Error::new(ErrorKind::MalformedInput)
-            .with_context(format!("backend decompile: {error}"))
+        map_backend_error(error).with_context("backend decompile")
             .with_diagnostics(diagnostics.clone())
     })?;
 
@@ -741,7 +741,7 @@ pub fn decompile(
 /// The decoded manifest: last same-name entry wins. Requires only that one
 /// entry's bytes; DEX entries are not touched.
 #[cfg(feature = "manifest")]
-pub fn manifest(
+fn manifest(
     artifact: &Artifact,
     control: &OperationControl,
 ) -> Result<Report<crate::manifest::Manifest>, Error> {
@@ -776,6 +776,20 @@ pub fn manifest(
         diagnostics,
         OperationStats { result_items: 1, ..Default::default() },
     ))
+}
+
+#[cfg(feature = "decompile")]
+fn map_backend_error(error: droidsaw_dex::analysis::BackendError) -> Error {
+    use crate::error::CancelCause;
+    use droidsaw_dex::analysis::BackendError as Backend;
+    let kind = match &error {
+        Backend::Cancelled => ErrorKind::Cancelled { cause: CancelCause::User },
+        Backend::DeadlineExceeded => ErrorKind::Cancelled { cause: CancelCause::Deadline },
+        Backend::InputBudget { .. } => ErrorKind::ResourceLimit,
+        Backend::InvalidClassDefIndex { .. } => ErrorKind::InvalidQuery,
+        Backend::Dex(_) => ErrorKind::MalformedInput,
+    };
+    Error::new(kind).with_context(error.to_string())
 }
 
 // --- mapping helpers ---------------------------------------------------------
@@ -950,6 +964,7 @@ fn typed_to_encoded(value: &droidsaw_dex::analysis::TypedValue) -> crate::model:
     }
 }
 
+#[cfg(feature = "decompile")]
 fn map_annotation_target(target: droidsaw_dex::analysis::AnnotationTarget) -> AnnotationTarget {
     use droidsaw_dex::analysis::AnnotationTarget as Backend;
     match target {
@@ -975,6 +990,7 @@ fn map_annotation_visibility(
     }
 }
 
+#[cfg(feature = "decompile")]
 fn render_annotation_elements(elements: &[(String, String)]) -> String {
     elements
         .iter()
@@ -1037,9 +1053,38 @@ mod tests {
         OperationControl::new()
     }
 
+    #[test]
+    fn snapshot_stops_at_the_first_byte_above_the_actual_limit() {
+        let mut growing = std::io::Cursor::new(vec![0u8; 128 * 1024]);
+        let error = read_snapshot(&mut growing, 17, &no_control()).unwrap_err();
+        assert_eq!(error.kind(), &ErrorKind::ResourceLimit);
+        assert_eq!(growing.position(), 18, "do not read or retain the unbounded tail");
+        let small = read_snapshot(&mut std::io::Cursor::new(b"ok"), 2, &no_control()).unwrap();
+        assert_eq!(small, b"ok");
+    }
+
+    #[cfg(feature = "decompile")]
+    #[test]
+    fn backend_control_shares_live_cancellation_and_preserves_causes() {
+        use droidsaw_dex::analysis::BackendError;
+        use crate::error::CancelCause;
+        let flag = Arc::new(AtomicBool::new(false));
+        let control = OperationControl::new().with_cancel_flag(Arc::clone(&flag));
+        let guard = ControlGuard::new(&control);
+        assert!(!guard.backend.is_cancelled());
+        flag.store(true, Ordering::Release);
+        assert!(guard.backend.is_cancelled());
+        assert_eq!(map_backend_error(BackendError::Cancelled).kind(),
+            &ErrorKind::Cancelled { cause: CancelCause::User });
+        assert_eq!(map_backend_error(BackendError::DeadlineExceeded).kind(),
+            &ErrorKind::Cancelled { cause: CancelCause::Deadline });
+        assert_eq!(map_backend_error(BackendError::InputBudget { bytes: 2, cap: 1 }).kind(),
+            &ErrorKind::ResourceLimit);
+    }
+
     /// A fresh engine runtime for tests (each call = its own account).
     fn test_runtime() -> Arc<Runtime> {
-        Arc::new(Runtime::default())
+        Engine::new(EngineOptions::default()).unwrap().runtime
     }
 
     /// G02 bytes (static initial values), copied from the contract fixtures.
@@ -1103,7 +1148,9 @@ mod tests {
         let dex = g02_dex();
         let zip = build_zip(&[("classes.dex", &dex, true)]);
         let path = temp_apk("a07-g02", &zip);
-        let artifact = open_path(&path, &Limits::default(), &test_runtime(), &no_control()).unwrap();
+        // A one-entry query must not charge the selected DEX twice.
+        let limits = Limits { max_total_decoded_bytes: dex.len() as u64, ..Limits::default() };
+        let artifact = open_path(&path, &limits, &test_runtime(), &no_control()).unwrap();
         let selector = ClassSelector::Descriptor(
             ClassDescriptor::from_normalized("Lexample/Statics;".to_owned()).unwrap(),
             None,
@@ -1159,6 +1206,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
+    #[cfg(feature = "manifest")]
     #[test]
     fn manifest_decodes_through_the_structured_path() {
         let dex = const_string_fixture(1);
@@ -1345,8 +1393,7 @@ pub enum InputKind {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EngineOptions {
     pub limits: Limits,
-    /// Worker threads for the parallel entry fold. `None` uses the rayon
-    /// global pool (all cores); `Some(0)` is rejected at construction.
+    /// Private worker count. `None` selects one worker; `Some(0)` is rejected.
     pub threads: Option<usize>,
 }
 
@@ -1354,18 +1401,18 @@ pub struct EngineOptions {
 /// active-bytes account and the worker pool. Clones share one runtime
 /// (interfaces.md §2: the Engine is a cloneable handle over one private
 /// runtime).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Runtime {
     /// Serial top-level admission: held for the duration of one operation.
-    /// Waiters poll with a bounded condvar timeout so a cancelled or
+    /// Waiters use a bounded lock poll so a cancelled or
     /// deadline-expired host never queues forever (interfaces.md §5).
     admission: Mutex<()>,
-    /// Engine-owned active bytes (inputs + catalogs of artifacts opened
-    /// through this engine, dropped with the artifact).
+    /// Retained input bytes (catalog/working allocations are tracked separately
+    /// in the embedding audit debt). Inputs are opened
+    /// through this engine and released with the artifact.
     active_bytes: AtomicU64,
-    /// The engine's own worker pool when `EngineOptions::threads` was set;
-    /// `None` runs the parallel fold on the rayon global pool.
-    pool: Option<Arc<rayon::ThreadPool>>,
+    /// Every parallel analysis stage, including vendor parsing, uses this pool.
+    pool: Arc<rayon::ThreadPool>,
 }
 
 /// A long-lived analysis engine: holds the runtime limits and hands out
@@ -1378,24 +1425,14 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(options: EngineOptions) -> Result<Engine, Error> {
-        let pool = match options.threads {
-            None => None,
-            Some(0) => {
-                return Err(Error::invalid_query(
-                    "worker threads must be greater than zero",
-                ));
-            }
-            Some(count) => {
-                let built = rayon::ThreadPoolBuilder::new()
-                    .num_threads(count)
-                    .build()
-                    .map_err(|error| {
-                        Error::new(ErrorKind::InvalidQuery)
-                            .with_context(format!("worker pool: {error}"))
-                    })?;
-                Some(Arc::new(built))
-            }
-        };
+        let count = options.threads.unwrap_or(1);
+        if count == 0 {
+            return Err(Error::invalid_query("worker threads must be greater than zero"));
+        }
+        let pool = Arc::new(rayon::ThreadPoolBuilder::new()
+            .num_threads(count)
+            .build()
+            .map_err(|error| Error::invalid_query(format!("worker pool: {error}")))?);
         let runtime = Arc::new(Runtime {
             admission: Mutex::new(()),
             active_bytes: AtomicU64::new(0),
@@ -1505,7 +1542,7 @@ impl Engine {
     ) -> Result<Report<Source>, Error> {
         let _admission = self.admit(control)?;
         self.check_ownership(artifact)?;
-        decompile(artifact, selector, control)
+        self.runtime.pool.install(|| decompile(artifact, selector, control))
     }
 
     #[cfg(feature = "manifest")]
@@ -1527,34 +1564,8 @@ fn open_dex_path(
     runtime: &Arc<Runtime>,
     control: &OperationControl,
 ) -> Result<Artifact, Error> {
-    let mut file =
-        File::open(path).map_err(|error| Error::new(ErrorKind::NotFound).with_context(format!("open {path:?}: {error}")))?;
-    let metadata = file
-        .metadata()
-        .map_err(|error| Error::new(ErrorKind::NotFound).with_context(format!("stat {path:?}: {error}")))?;
-    if !metadata.is_file() {
-        return Err(Error::new(ErrorKind::UnsupportedFormat).with_context(format!("{path:?} is not a regular file")));
-    }
-    if metadata.len() > limits.max_input_bytes {
-        return Err(Error::resource_limit(format!(
-            "{path:?} is {} bytes, above the {} input limit",
-            metadata.len(),
-            limits.max_input_bytes
-        )));
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        control.check()?;
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| Error::new(ErrorKind::MalformedInput).with_context(format!("read {path:?}: {error}")))?;
-        if read == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&buffer[..read]);
-    }
-    open_dex_bytes(Arc::from(bytes.into_boxed_slice()), limits, runtime, control)
+    let bytes = read_path_snapshot(path, limits.max_input_bytes, control)?;
+    open_dex_bytes(bytes, limits, runtime, control)
 }
 
 /// Opens an owned raw DEX byte stream: entry ordinal 0, display name
@@ -1567,7 +1578,7 @@ fn open_dex_bytes(
     runtime: &Arc<Runtime>,
     control: &OperationControl,
 ) -> Result<Artifact, Error> {
-    let _ = control;
+    control.check()?;
     let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     if len > limits.max_input_bytes {
         return Err(Error::resource_limit(format!(
@@ -1575,8 +1586,8 @@ fn open_dex_bytes(
             limits.max_input_bytes
         )));
     }
+    let id = ArtifactId::from_digest(crate::bytes::sha256_controlled(&bytes, control)?);
     reserve_bytes(runtime, len, limits.max_engine_owned_bytes)?;
-    let id = ArtifactId::from_digest(crate::bytes::sha256(&bytes));
     let roots = vec![Root { ordinal: 0, raw_name: b"<memory.dex>".to_vec(), source: RootSource::Raw }];
     let artifact = Artifact {
         id,

@@ -4,11 +4,11 @@ context: |
   Language: zh-CN
   All artifacts must be written in zh-CN.
   Keep OpenSpec structural headings and SHALL/MUST keywords in English.
-  项目只做 CLI；不记录或规划图形界面能力。
-  当前为审计与计划阶段；后续收到实施指令时按工作包执行，未验收任务保持未勾选。
+  项目提供 asc-core 通用分析库和 rasc 薄 CLI；不记录图形界面能力。
+  已获实施授权；每个修改先有 OpenSpec，未验收任务保持未勾选。
   工作分支 lordcasser/main，起点 rust e809c7b4b454ebc8eb4467f56d44a82e6139472b。
-  specs 的初始内容描述 Python main ccc6bae7704f5c5ef1a7271e27314837079621fb，
-  不是 Rust 已实现声明，也不是要求保留 Python 的缺陷。
+  历史 Python 基线为 ccc6bae7704f5c5ef1a7271e27314837079621fb；
+  specs 随已验证 change 合并，历史验收不能代替当前提交复验。
   audits/cli-parity 记录证据；changes 记录尚未实施的目标契约。
   如非必要勿增实体，不考虑旧 API/文本格式兼容；保留分析能力与正确性。
   自有产品层只有 core library 和薄 CLI 两个 crate；允许必要的 patched vendor，特性完整度优先。

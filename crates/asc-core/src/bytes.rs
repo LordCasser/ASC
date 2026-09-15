@@ -309,7 +309,16 @@ mod tests {
 ///
 /// Same reasoning as `sha1`: hand-rolled so the dependency set stays
 /// integration-owner controlled; verified against the FIPS 180-4 vectors.
+#[cfg(test)]
 pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
+    sha256_controlled(data, &OperationControl::new()).expect("uncontrolled hashing cannot cancel")
+}
+
+pub(crate) fn sha256_controlled(
+    data: &[u8],
+    control: &OperationControl,
+) -> Result<[u8; 32], crate::error::Error> {
+    control.check()?;
     let mut state: [u32; 8] = [
         0x6a09_e667, 0xbb67_ae85, 0x3c6e_f372, 0xa54f_f53a, 0x510e_527f, 0x9b05_688c, 0x1f83_d9ab,
         0x5be0_cd19,
@@ -317,7 +326,10 @@ pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
     let bit_length = (data.len() as u64).wrapping_mul(8);
     let mut chunks = data.chunks_exact(64);
     let mut block = [0u8; 64];
-    for chunk in &mut chunks {
+    for (index, chunk) in chunks.by_ref().enumerate() {
+        if index % (CHECKPOINT_SPACING / 64) == 0 {
+            control.check()?;
+        }
         block.copy_from_slice(chunk);
         sha256_compress(&mut state, &block);
     }
@@ -335,7 +347,8 @@ pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
     for (index, word) in state.iter().enumerate() {
         out[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
     }
-    out
+    control.check()?;
+    Ok(out)
 }
 
 fn sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) {

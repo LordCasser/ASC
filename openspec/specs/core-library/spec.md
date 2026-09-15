@@ -2,7 +2,7 @@
 
 ## Purpose
 
-见 change 归档说明。
+定义 asc-core 对嵌入消费者提供的领域模型、不可变输入身份、受控执行与错误合同。CLI 和 reverse-engine 通过公开 Engine 调用通用分析，不复制业务规则，也不把宿主协议带入核心库。
 
 ## Requirements
 

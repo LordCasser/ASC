@@ -16,9 +16,13 @@
 
 use asc_core::engine::{Engine, EngineOptions, InputKind};
 use asc_core::bytes::OperationControl;
-use asc_core::model::{ClassDescriptor, ClassSelector, ClassFilter};
+use asc_core::model::ClassFilter;
+#[cfg(feature = "decompile")]
+use asc_core::model::{ClassDescriptor, ClassSelector};
+#[cfg(feature = "decompile")]
 use asc_core::query;
 
+#[cfg(feature = "decompile")]
 #[test]
 fn scan_never_initializes_the_backend() {
     let dex = std::fs::read(concat!(
@@ -51,6 +55,7 @@ fn scan_never_initializes_the_backend() {
     assert_eq!(before.value(), after.value(), "scan results must not drift after backend use");
 }
 
+#[cfg(feature = "decompile")]
 #[test]
 fn decompile_is_deterministic() {
     let dex = std::fs::read(concat!(

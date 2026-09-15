@@ -43,7 +43,7 @@
 //! global-pool init — cannot change results or error selection.
 
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -181,7 +181,7 @@ pub struct Budget {
 /// delivering a report.
 #[derive(Debug, Clone, Default)]
 pub struct Control {
-    cancelled: Arc<AtomicUsize>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl Control {
@@ -191,15 +191,22 @@ impl Control {
         Self::default()
     }
 
+    /// Share the host's cancellation flag; changes are observed at every
+    /// backend checkpoint, including while a checked call is in progress.
+    #[must_use]
+    pub fn from_cancel_flag(cancelled: Arc<AtomicBool>) -> Self {
+        Self { cancelled }
+    }
+
     /// Request cancellation.
     pub fn cancel(&self) {
-        self.cancelled.store(1, Ordering::Release);
+        self.cancelled.store(true, Ordering::Release);
     }
 
     /// Whether [`Control::cancel`] was called.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire) != 0
+        self.cancelled.load(Ordering::Acquire)
     }
 }
 

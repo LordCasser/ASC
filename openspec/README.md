@@ -1,40 +1,19 @@
-# ASC 规格与架构计划
+# ASC 规格与实现
 
-当前 Rust 与 Python CLI **不完全一致**。已复现正则查询缺失、静态字段初始化值丢失、无校验和 DEX 的反编译接受范围不同；调试流、排序和重复条目处理也有差异。具体证据见 [CLI 审计](audits/cli-parity/report.md)。
+当前产品是 `asc-core` 通用分析库与 `rasc` 薄 CLI；维护分支为 `lordcasser/main`。`specs/` 是已合并合同，`changes/` 是待实施或待验收目标，`changes/archive/` 保存历史变更。历史 A00–A14 证据不能当作当前提交的测试结果。
 
-本目录只维护 CLI 及支撑它的核心分析能力。本次没有改动业务代码。
+## 当前工作
 
-## 基线与状态
+- [嵌入审计](audits/embedding/report.md)：固定 c42e7e6，记录复现、修复和独立债务。
+- [嵌入合同修复](changes/archive/2026-09-15-harden-embedded-core-contracts/proposal.md)：独立 feature、输入控制、全 DEX 校验、私有 pool 和跨 DEX 结果预算。
+- [历史 CLI 审计](audits/cli-parity/report.md) 与 [验收矩阵](implementation/acceptance.md)：保留原始基线和未验证平台，不能把目录归档理解为所有声明都已验证。
 
-| 对象 | 固定版本 | 用途 |
-|---|---|---|
-| Python main | `ccc6bae7704f5c5ef1a7271e27314837079621fb` | 从源码提取初始规格 |
-| Rust rust | `e809c7b4b454ebc8eb4467f56d44a82e6139472b` | 审计对象、新分支起点 |
-| 工作分支 | `lordcasser/main` | 保存规格与计划 |
-
-`specs/` 当前是 Python 的行为基线，不能据此宣称 Rust 已符合这些规格。`changes/` 是目标行为和架构；只在对应实现与验收完成后归档、合并 delta。历史差异保留在审计目录。后续重新对照必须固定新的两侧 SHA，不能让候选分支成为自己的基线。
-
-## 阅读顺序
-
-1. [特性审计及证据](audits/cli-parity/report.md)：哪些一致、哪些缺失、哪些应该主动改变。
-2. [Python CLI](specs/command-line/spec.md)、[APK 与逻辑 DEX](specs/apk-input/spec.md)、[查询与引用](specs/reference-search/spec.md)、[类反编译](specs/class-decompilation/spec.md)：现有行为。
-3. [补齐分析契约](changes/complete-cli-analysis-contracts/proposal.md)：先决定并验证正确行为。
-4. [独立 core 与薄 CLI](changes/extract-publishable-core/design.md)：两 crate 的依赖、API、生命周期与发布设计。
-5. [第三方依赖决策](changes/extract-publishable-core/dependencies.md)：以特性完整度为先，保留必要补丁及后续退出条件。
-6. [受控 vendor 维护](changes/maintain-patched-analysis-backends/proposal.md)：后端修复、补丁账本、独立派生包。
-7. [Agent 实施入口](execution-plan.md)：15 个工作包、依赖顺序、文件所有权和交接规则。
-
-## 后续执行
-
-2026-09-14 更新：用户允许在保证特性完整度的前提下维护部分 patched vendor。采用现有 droidsaw-dex / axmldecoder 为起点，先修复与验证，使用独立派生 package 发布；候选替换是后续优化，不再阻断本轮实施。两个产品 crate 加最多两个现有第三方派生包，不扩展为通用后端框架。
-
-按 [执行计划](execution-plan.md) 完成行为与后端修复，再迁移 library。三个 change 通过工作包依赖连接；同一个任务只有一个所有者。所有实施任务仍未勾选，本次只更新规格，不开始功能实施或发布。
+reverse-engine 以 submodule 的 path crate 消费此库。通用解析原语和 vendor 修复在本仓按 OpenSpec 开发；MCP、IDA、样本任务和 artifact 发布在消费者中实现。库不依赖 CLI 或外部进程。
 
 ```sh
+scripts/check-core-features.sh
+cargo test -p asc-droidsaw-dex --test asc_contracts --locked
 openspec validate --all --strict --no-interactive
-openspec status --change complete-cli-analysis-contracts
-openspec status --change extract-publishable-core
-openspec status --change maintain-patched-analysis-backends
 ```
 
-采用 OpenSpec `spec-driven` 的 proposal / specs / design / tasks 结构，本次用 CLI `1.11.0` 验证。[OpenSpec 官方说明](https://github.com/Fission-AI/OpenSpec/blob/main/docs/concepts.md)
+分发脚本 `scripts/verify-distribution.py` 验证 registry staging，不执行正式发布；path/submodule 集成不要求先发布 registry。确认新的审计证据后才能更新对应 task 的勾选状态。

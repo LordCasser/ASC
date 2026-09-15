@@ -2,7 +2,7 @@
 
 ## Purpose
 
-见 change 归档说明。
+定义 asc-core、薄 CLI 与自维护派生依赖包的独立构建和分发合同。验证真实归档、仓外消费者与依赖闭包，区分本地 path 可用、staging 验证和正式 registry 发布三种事实。
 
 ## Requirements
 
