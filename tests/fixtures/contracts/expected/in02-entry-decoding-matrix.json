@@ -1,0 +1,37 @@
+{
+ "facts_kind": "dex-catalog",
+ "dex_catalog": [
+  {
+   "entry_ordinal": 0,
+   "logical_ordinal": 0,
+   "raw_entry_name": "classes.dex",
+   "version": "035",
+   "header_offset": 0,
+   "uncompressed_size": 432
+  },
+  {
+   "entry_ordinal": 1,
+   "logical_ordinal": 0,
+   "raw_entry_name": "classes2.dex",
+   "version": "035",
+   "header_offset": 0,
+   "uncompressed_size": 432
+  },
+  {
+   "entry_ordinal": 2,
+   "logical_ordinal": 0,
+   "raw_entry_name": "classes3.dex",
+   "version": "035",
+   "header_offset": 0,
+   "uncompressed_size": 432
+  },
+  {
+   "entry_ordinal": 3,
+   "logical_ordinal": 0,
+   "raw_entry_name": "classes4.dex",
+   "version": "035",
+   "header_offset": 0,
+   "uncompressed_size": 432
+  }
+ ]
+}

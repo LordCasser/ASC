@@ -1,0 +1,21 @@
+{
+ "facts_kind": "dex-catalog",
+ "dex_catalog": [
+  {
+   "entry_ordinal": 0,
+   "logical_ordinal": 0,
+   "raw_entry_name": "a.dex",
+   "version": "035",
+   "header_offset": 0,
+   "uncompressed_size": 432
+  },
+  {
+   "entry_ordinal": 1,
+   "logical_ordinal": 0,
+   "raw_entry_name": "b.dex",
+   "version": "035",
+   "header_offset": 0,
+   "uncompressed_size": 432
+  }
+ ]
+}

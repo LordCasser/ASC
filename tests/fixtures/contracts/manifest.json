@@ -273,19 +273,23 @@
       "source": {
         "origin": "generated",
         "license": "Apache-2.0 (ASC test support)",
-        "generator": null,
+        "generator": "fixtures::references::pool_a v1 (FixtureDex builder)",
         "seed": 0,
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/ref02-mutf8-strings.dex",
+        "sha256": "af2869248859be7e071269d76e5e47c9ea6f21aea654f810236fd342fd9879a1",
+        "size": 588
+      },
       "expected": {
         "outcome": "pass",
-        "facts_path": null,
+        "facts_path": "expected/ref02-mutf8-surrogate-strings.json",
         "facts_kind": "references"
       },
-      "status": "planned",
-      "notes": "String pool with BMP, non-BMP, NUL-containing and unpaired-surrogate values across string/type/member/class queries; non-MUTF-8 tails, non-contiguous pools and repeated string offsets; MUTF-8 length/terminator edge cases. A03 extends the DEX builder for multi-byte MUTF-8 pools."
+      "status": "active",
+      "notes": "String pool with BMP, non-BMP (U+1F600 as a surrogate pair), embedded NUL and an aliased string offset; string/type/field/method queries (literal+regex) against one main() method whose insns reference every kind. Facts hand-derived from the builder layout in tests/fixtures/contracts/references/mod.rs: const-string hits at code units 0/2/4/6/8, const-class type@3 at 10, sget field@0 at 12, invoke-static method@1 at 14, alias const-string at 17. Regex tok.n matches nothing (per-candidate matching, never across pool entries); the alias surfaces as a second target index with the same value."
     },
     {
       "case_id": "ref03-opcode-family-matrix",
@@ -300,19 +304,23 @@
       "source": {
         "origin": "generated",
         "license": "Apache-2.0 (ASC test support)",
-        "generator": null,
+        "generator": "fixtures::references::opcode_families(MapStyle::Full) v1 (FixtureDex builder)",
         "seed": 0,
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/ref03-opcode-families.dex",
+        "sha256": "b873ab368999dfca0e1ab99ccd36a7bbb707e0f9f0325e25a9c58073a6f88794",
+        "size": 1204
+      },
       "expected": {
         "outcome": "pass",
-        "facts_path": null,
+        "facts_path": "expected/ref03-opcode-family-matrix.json",
         "facts_kind": "references"
       },
-      "status": "planned",
-      "notes": "Every reference opcode family (string/type/field/method incl. jumbo 0x1b and fa/fb), call-site/handle/proto items not misclassified, immediate/payload pseudo-opcode traps avoided, and map-fallback hits preserved."
+      "status": "active",
+      "notes": "Every reference opcode family in dedicated methods: const-string + jumbo (mstrings), the seven type-carrying forms 0x1c/0x1f/0x20/0x22/0x23/0x24/0x25 (mtypes, offsets 0..13), twelve iget/iput/sget/sput family ops (mfields, offsets 0..22), 5x 35c + 5x 3rc invokes (minvoke, offsets 0..27) and fa/fb invoke-polymorphic whose first operand carries the method index (mpoly, offsets 0 and 4). mtrap embeds reference-like bytes in const/16 and const-wide immediates and mpayload hides them inside packed-switch/sparse-switch/fill-array payloads; the string query \"str\" walks both and must produce no extra rows. invoke-custom/-range, const-method-handle and const-method-type stay kindless. The method query name \"m\" matches eight targets that nothing invokes, locking the empty result."
     },
     {
       "case_id": "ref03-unknown-instruction-fails",
@@ -326,19 +334,23 @@
       "source": {
         "origin": "generated",
         "license": "Apache-2.0 (ASC test support)",
-        "generator": null,
+        "generator": "fixtures::references::unknown_opcode v1 (FixtureDex builder)",
         "seed": 0,
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/ref03-unknown-instruction.dex",
+        "sha256": "122082e4b3a54038342569fa58878968c6010f2fdd93d9cc6e9e569700dcb68d",
+        "size": 404
+      },
       "expected": {
         "outcome": "error:MalformedInput",
         "facts_path": null,
         "facts_kind": "references"
       },
-      "status": "planned",
-      "notes": "Unknown or truncated instruction inside a scanned code_item fails the operation instead of silently skipping hits."
+      "status": "active",
+      "notes": "Method 0 body starts with unused opcode 0x73; any reference scan (even with an empty target set) must fail MalformedInput naming method #0 instead of skipping the body. The in-test variants patch 0xe3/0xf9 and use truncated_insns (declared insns_size 4096 over a 4-unit body), which fail the same way."
     },
     {
       "case_id": "ref04-shared-code-item-and-overloads",
@@ -353,19 +365,23 @@
       "source": {
         "origin": "generated",
         "license": "Apache-2.0 (ASC test support)",
-        "generator": "support::dex::make_dex v1 (method 0 + shared code_item base)",
+        "generator": "fixtures::references::identity v1 (FixtureDex builder)",
         "seed": 0,
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/ref04-shared-code-and-overloads.dex",
+        "sha256": "d4634c22f052507c1607a7f77afa69fa362c30afb02f4c076aba7fb14a6606c8",
+        "size": 772
+      },
       "expected": {
         "outcome": "pass",
-        "facts_path": null,
+        "facts_path": "expected/ref04-shared-code-item-and-overloads.json",
         "facts_kind": "references"
       },
-      "status": "planned",
-      "notes": "method_idx 0, two methods sharing one code_item (already present in make_dex bytes: first/second share code), same-name overloads, one method hitting a target at several offsets and several targets in one method, plus control characters/separators in names. Full identity and numeric-index comparisons, no display-string matching. The G02/G01 APKs are reused as inputs."
+      "status": "active",
+      "notes": "Five methods (main, run()V, run(I)V overload, alpha, beta with byte-identical shared bodies) referenced by full numeric identity. main references tok at code units 0 and 2, a\\tb\\nc at 4, Lctrl/Type; at 6, run()V at 8, run(I)V at 11 and f\\nield at 14. Rows ascend by method_idx with overloads kept distinct; targets ascend by table index."
     },
     {
       "case_id": "in01-root-dex-priority-and-dupes",
@@ -385,13 +401,17 @@
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/in01-root-dex-priority-and-dupes.apk",
+        "sha256": "7bcadca6e11a39d1f6a2f0cb95892860f058cd2b462132e3d5c2799badb56f5a",
+        "size": 2491
+      },
       "expected": {
         "outcome": "pass",
-        "facts_path": null,
-        "facts_kind": "classes"
+        "facts_path": "expected/in01-root-dex-priority-and-dupes.json",
+        "facts_kind": "dex-catalog"
       },
-      "status": "planned",
+      "status": "active",
       "notes": "Root selection: classes*.dex priority over fallback *.dex, nested archives ignored, both duplicate-name resolution flavors taking the first entry with a warning; a manifest-only APK succeeds for manifest while DEX queries fail. A02 builds the multi-entry APKs from the existing DEX builders."
     },
     {
@@ -411,13 +431,17 @@
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/in01-no-dex-query-notfound.apk",
+        "sha256": "456fcdc0aae46b37d30c1b8290e5285beedd0d13d7c560c5c3262a2d3de55b5a",
+        "size": 147
+      },
       "expected": {
         "outcome": "error:NotFound",
         "facts_path": null,
-        "facts_kind": "classes"
+        "facts_kind": "dex-catalog"
       },
-      "status": "planned",
+      "status": "active",
       "notes": "APK without any DEX entry: dexes returns an empty catalog and classes/references/getclass fail with NotFound while manifest still works on a manifest-bearing variant."
     },
     {
@@ -438,13 +462,17 @@
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/in02-entry-decoding-matrix.apk",
+        "sha256": "430c22abc29b27eb1820e668bb1a7c09cd8c81bc7d9be612064e0a3ec70fd20a",
+        "size": 2045
+      },
       "expected": {
         "outcome": "pass",
-        "facts_path": null,
+        "facts_path": "expected/in02-entry-decoding-matrix.json",
         "facts_kind": "dex-catalog"
       },
-      "status": "planned",
+      "status": "active",
       "notes": "Stored, deflate, empty streams, data descriptors with and without the signature, local/central header agreement, and trailing-stream rejection after the declared size. Requires extending support::apk to emit deflate and descriptor variants."
     },
     {
@@ -465,13 +493,17 @@
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/in02-bad-crc.apk",
+        "sha256": "e7b25e7d06f0a5cb552eabb2ec82c08c57b9a92c583c013a63e18af8c9045a18",
+        "size": 685
+      },
       "expected": {
         "outcome": "error:MalformedInput",
         "facts_path": null,
         "facts_kind": "dex-catalog"
       },
-      "status": "planned",
+      "status": "active",
       "notes": "Selected DEX entry whose stored CRC disagrees with its bytes: the operation must fail rather than skip verification; unrelated entries with bad CRC stay irrelevant."
     },
     {
@@ -491,13 +523,17 @@
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/in02-zip64-rejected.apk",
+        "sha256": "bc24d935e4ff981412a5df32c515f17f863c9c1227e28b5239037463c216a07b",
+        "size": 552
+      },
       "expected": {
         "outcome": "error:UnsupportedFormat",
         "facts_path": null,
         "facts_kind": "dex-catalog"
       },
-      "status": "planned",
+      "status": "active",
       "notes": "ZIP64 placeholder markers (0xffffffff sizes / EOCD64) are explicitly rejected as unsupported, not misparsed."
     },
     {
@@ -517,13 +553,17 @@
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/in02-encrypted-rejected.apk",
+        "sha256": "f32581e53017db8290b8067f3dc27e69ccab1952b75a3d066427163a64aeb611",
+        "size": 552
+      },
       "expected": {
         "outcome": "error:UnsupportedFormat",
         "facts_path": null,
         "facts_kind": "dex-catalog"
       },
-      "status": "planned",
+      "status": "active",
       "notes": "Entries with the encryption flag or multi-volume markers are rejected as unsupported with a precise diagnostic."
     },
     {
@@ -543,13 +583,17 @@
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/in03-dex-versions.apk",
+        "sha256": "19df9e694c7f1b920e5efd76fc3ab34b8177d536c91abc3fde3532b5514073ee",
+        "size": 2258
+      },
       "expected": {
         "outcome": "pass",
-        "facts_path": null,
+        "facts_path": "expected/in03-dex-version-headers.json",
         "facts_kind": "dex-catalog"
       },
-      "status": "planned",
+      "status": "active",
       "notes": "Real fixtures for each accepted version (035/037/038/039/040) with the version-appropriate header/opcode content - not just a magic-number patch. The existing builder produces 035; versioned builders extend it."
     },
     {
@@ -569,13 +613,17 @@
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/in03-container-041-members.apk",
+        "sha256": "db4196f6e5278288bc0fa391e907f2dfb90be2cb93f7b4456a6ec81ef917ec2f",
+        "size": 1248
+      },
       "expected": {
         "outcome": "pass",
-        "facts_path": null,
+        "facts_path": "expected/in03-container-041-members.json",
         "facts_kind": "dex-catalog"
       },
-      "status": "planned",
+      "status": "active",
       "notes": "041 container with one and several logical members, including cross-member section addresses (the src/dex/container.rs test builder already produces this shape)."
     },
     {
@@ -595,13 +643,17 @@
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/in03-compactdex-odex-rejected.apk",
+        "sha256": "a881dd3c6194777bb8d7bf2b48ee229008e22f741cf3ef85493d35144013bd02",
+        "size": 262
+      },
       "expected": {
         "outcome": "error:UnsupportedFormat",
         "facts_path": null,
         "facts_kind": "dex-catalog"
       },
-      "status": "planned",
+      "status": "active",
       "notes": "CompactDex and ODEX magic inputs are rejected as unsupported formats."
     },
     {
@@ -621,13 +673,17 @@
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/in03-bad-container-rejected.apk",
+        "sha256": "3c02932f230fd6d25353a61325b0ad17ae50b257dc8000cf223890bde593141e",
+        "size": 2744
+      },
       "expected": {
         "outcome": "error:MalformedInput",
         "facts_path": null,
         "facts_kind": "dex-catalog"
       },
-      "status": "planned",
+      "status": "active",
       "notes": "Structurally broken containers: zero-length members, member loops, out-of-range or overflowing section offsets, unknown version strings."
     },
     {
@@ -647,13 +703,17 @@
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/in04-sha1-mismatch.apk",
+        "sha256": "b47a583e3d801d0ae2495a003275b56068bcf12148a130b99f64ae920a608cc5",
+        "size": 552
+      },
       "expected": {
         "outcome": "pass",
-        "facts_path": null,
-        "facts_kind": "source"
+        "facts_path": "expected/in04-sha1-mismatch-warning.json",
+        "facts_kind": "dex-catalog"
       },
-      "status": "planned",
+      "status": "active",
       "notes": "SHA-1 signature corrupted but checksum recomputed: analysis still succeeds with a warning; repeated decompile/references produce identical results and leave the input bytes unchanged. Complements the zero-checksum G03 case with the mismatch flavor."
     },
     {
@@ -849,19 +909,23 @@
       "source": {
         "origin": "generated",
         "license": "Apache-2.0 (ASC test support)",
-        "generator": null,
+        "generator": "tests/fixtures/contracts/manifest v1 (stored_zip + AXML builder, UTF-8 pool)",
         "seed": 0,
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/man01-last-manifest-entry.apk",
+        "sha256": "abb2b133db2852790548fa13f855e761b83162a9c8b0b9273d3b62c340528247",
+        "size": 1241
+      },
       "expected": {
         "outcome": "pass",
-        "facts_path": null,
+        "facts_path": "expected/man01-last-manifest-entry.json",
         "facts_kind": "manifest"
       },
-      "status": "planned",
-      "notes": "Duplicate manifest names resolve to the last entry; UTF-8 plain-XML and binary AML inputs, long UTF-8/UTF-16 string lengths, style span metadata preserved."
+      "status": "active",
+      "notes": "Two AndroidManifest.xml entries; the last (binary AXML, UTF-8 pool) wins over an older plain-XML twin. The AXML carries a 200-character package string (two-byte UTF-8 length form), a style-span pool string kept as metadata, an escaped attribute value and CDATA with a ']]>' split. Facts compare the full ordered tree (nodes + rendered XML, which covers text and tails) plus raw typed data and styles."
     },
     {
       "case_id": "man01-missing-manifest-notfound",
@@ -875,19 +939,23 @@
       "source": {
         "origin": "generated",
         "license": "Apache-2.0 (ASC test support)",
-        "generator": null,
+        "generator": "tests/fixtures/contracts/manifest v1 (stored_zip)",
         "seed": 0,
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/man01-missing-manifest.apk",
+        "sha256": "b819492db5d39f7b23e67310811ecd7a00214352bffe6fa298754fc63617239b",
+        "size": 257
+      },
       "expected": {
         "outcome": "error:NotFound",
         "facts_path": null,
         "facts_kind": "manifest"
       },
-      "status": "planned",
-      "notes": "APK without a manifest entry fails the manifest operation with NotFound; the manifest operation does not require any DEX to be present or valid."
+      "status": "active",
+      "notes": "APK without any manifest entry: the entry scan finds nothing to decode. The A06 contract test pins the boundary fact (no AndroidManifest.xml in the central directory); A07's read_entry-to-Engine wiring surfaces it as the NotFound error kind this case names. The manifest operation never requires a DEX entry to exist or be valid."
     },
     {
       "case_id": "man01-plain-xml-text-rejected",
@@ -901,19 +969,23 @@
       "source": {
         "origin": "generated",
         "license": "Apache-2.0 (ASC test support)",
-        "generator": null,
+        "generator": "tests/fixtures/contracts/manifest v1 (stored_zip)",
         "seed": 0,
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/man01-plain-xml-text-rejected.apk",
+        "sha256": "c8e5746e7ecd1f579f58688c7ea6108c06510017eb1bbf6ef2ec9bd79d74bfb8",
+        "size": 201
+      },
       "expected": {
         "outcome": "error:MalformedInput",
         "facts_path": null,
         "facts_kind": "manifest"
       },
-      "status": "planned",
-      "notes": "A manifest entry that is actually plain XML text (or wrongly encoded bytes) is rejected instead of being rendered as an empty document."
+      "status": "active",
+      "notes": "A manifest entry that starts like XML text but has an unclosed tag: rejected as MalformedInput instead of the old verbatim passthrough that rendered fake text as a success. Wrongly encoded (non-UTF-8, UTF-16 BOM) variants are pinned in the A06 contract tests alongside this registered input."
     },
     {
       "case_id": "man02-typed-value-matrix",
@@ -925,19 +997,23 @@
       "source": {
         "origin": "generated",
         "license": "Apache-2.0 (ASC test support)",
-        "generator": null,
+        "generator": "tests/fixtures/contracts/manifest v1 (AXML builder, UTF-16 pool)",
         "seed": 0,
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/man02-typed-value-matrix.apk",
+        "sha256": "565daa039ccc1100dba1b4a61fab541412ba9d98726c9968f700e09264bdaf91",
+        "size": 1582
+      },
       "expected": {
         "outcome": "pass",
-        "facts_path": null,
+        "facts_path": "expected/man02-typed-value-matrix.json",
         "facts_kind": "manifest"
       },
-      "status": "planned",
-      "notes": "Every typed value: reference/attribute, string, boolean, signed/hex integers, raw float bits, dimension/fraction, the four color forms, unknown/reserved/dynamic raw type+data; all preserved with correct XML escaping."
+      "status": "active",
+      "notes": "A UTF-16-pool AXML with attributes n01..n33 covering every typed value form: app/android references and attributes, string with raw value, float raw bits (2.0, +/-inf, NaN), all six dimension units plus an unknown unit, fractions (% and %p), signed/hex integers including INT_MIN and -1, booleans, the four AOSP colour types, dynamic reference/attribute (0x07/0x08), reserved 0x13, unknown 0x33 and null 0x00. Facts keep the raw type/data numbers beside the formatted value so precision is compared, not just rendered text."
     },
     {
       "case_id": "man03-cdata-pi-node-order",
@@ -949,19 +1025,52 @@
       "source": {
         "origin": "generated",
         "license": "Apache-2.0 (ASC test support)",
-        "generator": null,
+        "generator": "tests/fixtures/contracts/manifest v1 (AXML builder, UTF-8 pool)",
         "seed": 0,
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/man03-cdata-pi-node-order.apk",
+        "sha256": "45aed21d03f619ba21429a7cb4dc22c04917b540cb3952772997db5342b5365b",
+        "size": 1002
+      },
       "expected": {
         "outcome": "pass",
-        "facts_path": null,
+        "facts_path": "expected/man03-cdata-pi-node-order.json",
         "facts_kind": "manifest"
       },
-      "status": "planned",
-      "notes": "Prefix shadowing, end namespaces, default and attribute namespaces, node order with text/tail/CDATA/comments/processing instructions, prolog/epilog placement, mixed whitespace; missing declarations get a defined diagnostic policy and single-root trailing structure must be consumed. XML comparison must include text/tail."
+      "status": "active",
+      "notes": "AXML namespace scopes: prefix 'app' bound on the root, shadowed to a second URI on an inner element and restored after it, plus a default-namespace element and namespaced attributes. The android namespace is never declared: the canonical binding is added explicitly with one inferred-namespace-binding warning. Node order keeps two CDATA siblings with their exact text (including the tail-flavoured second one); the namespace end after the root close is consumed as epilog structure. Comments ride as element metadata."
+    },
+    {
+      "case_id": "man03-plain-xml-tree",
+      "matrix_ids": [
+        "MAN-03",
+        "MAN-01"
+      ],
+      "audit_refs": [],
+      "owner_package": "A06",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": "tests/fixtures/contracts/manifest v1 (stored_zip, fixed text)",
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": {
+        "path": "inputs/man03-plain-xml-tree.apk",
+        "sha256": "ed4b0ce6f3f6a966134ddd5e5cd26f3d90f14507412477918b4afa02dfac8a8f",
+        "size": 510
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/man03-plain-xml-tree.json",
+        "facts_kind": "manifest"
+      },
+      "status": "active",
+      "notes": "Plain-XML entry parsed into the domain model: prolog/epilog comments, PIs and whitespace in position; mixed content with text before/after child elements (text and tails are ordered Text nodes, compared one by one); CDATA; predefined and numeric character references round-tripped (a newline char reference stays a reference in attributes); an undeclared attribute prefix is kept verbatim rather than guessed. Added by A06 to give the plain-XML tree shape its own pinned facts."
     },
     {
       "case_id": "man04-malformed-axml-rejected",
@@ -973,19 +1082,23 @@
       "source": {
         "origin": "generated",
         "license": "Apache-2.0 (ASC test support)",
-        "generator": null,
+        "generator": "tests/fixtures/contracts/manifest v1 (AXML builder)",
         "seed": 0,
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/man04-second-root.apk",
+        "sha256": "751c45024297939789814af0160a6d24cb1fbc2f6140974d26198ea4ee12c86f",
+        "size": 323
+      },
       "expected": {
         "outcome": "error:MalformedInput",
         "facts_path": null,
         "facts_kind": "manifest"
       },
-      "status": "planned",
-      "notes": "Broken chunk/string-pool/indices, stack mismatches, duplicate attributes, a second root, and EOF truncations all fail cleanly; release profile shows no input-triggered panic."
+      "status": "active",
+      "notes": "Registered flavor: a second root element after a complete first root. The A06 contract tests additionally pin (without separate inputs) the other structural rejections: unmatched end element/namespace indices, duplicate attributes, truncated documents, trailing bytes past the declared size, unknown node chunk types, out-of-pool string indices and non-XML garbage. A mutation smoke over every fixture returns errors, never panics, in debug and release profiles."
     },
     {
       "case_id": "man04-dtd-rejected",
@@ -997,19 +1110,23 @@
       "source": {
         "origin": "generated",
         "license": "Apache-2.0 (ASC test support)",
-        "generator": null,
+        "generator": "tests/fixtures/contracts/manifest v1 (stored_zip, fixed text)",
         "seed": 0,
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/man04-dtd-rejected.apk",
+        "sha256": "87b4bcdbd9673b62fe4aeb593d88f34c3c275b0791fc36da660f50630d707608",
+        "size": 261
+      },
       "expected": {
         "outcome": "error:UnsupportedFormat",
         "facts_path": null,
         "facts_kind": "manifest"
       },
-      "status": "planned",
-      "notes": "DTDs and custom/external entities are rejected without any I/O, and non-UTF-8/XML-1.0 declarations report unsupported rather than being guessed."
+      "status": "active",
+      "notes": "A DOCTYPE declaration (internal or external) is rejected as UnsupportedFormat without any I/O: the reader never opens files, URLs or entity resolvers. Non-UTF-8 declared encodings and XML versions other than 1.0 report unsupported too; unknown entities without a DTD are malformed. These variants are pinned in the A06 contract tests alongside this registered input."
     },
     {
       "case_id": "man04-limit-boundaries",
@@ -1021,19 +1138,23 @@
       "source": {
         "origin": "generated",
         "license": "Apache-2.0 (ASC test support)",
-        "generator": null,
+        "generator": "tests/fixtures/contracts/manifest v1 (AXML builder)",
         "seed": 0,
         "url": null,
         "version": null
       },
-      "input": null,
+      "input": {
+        "path": "inputs/man04-limit-boundaries.apk",
+        "sha256": "f6d3965f696657ac0cf30f17c5597ed875f5c487f5dd4038284fc3a0b120b36c",
+        "size": 384
+      },
       "expected": {
         "outcome": "error:ResourceLimit",
         "facts_path": null,
         "facts_kind": "manifest"
       },
-      "status": "planned",
-      "notes": "Depth, node count, attribute count and output-size limits each reject on the exceeding side with ResourceLimit, using small overrides."
+      "status": "active",
+      "notes": "Three nested elements: decoding with a depth limit of two fails with ResourceLimit while the default limits succeed - the boundary is exercised from the exceeding side with a small override. The A06 contract tests sweep the remaining limits (nodes, attributes, string units, output bytes, render depth) the same way, each rejecting on the exceeding side only."
     },
     {
       "case_id": "back01-vendor-archive-and-patch-inventory",
@@ -1582,6 +1703,67 @@
       },
       "status": "active",
       "notes": "Corpus sample corpus-reference-workload: multi_dex=False, dex entries 0. Manifest complexity: 不适用（裸 DEX，无 APK 容器）. Pinned reference outputs under corpus/expected/corpus-reference-workload/ (four findrefs kinds non-empty + classes + manifest + getclass spot facts); provenance in provenance.json. Expected outputs are the Python baseline's behavior record, not a correctness oracle (known reference defects: G02/D03/V04 identity)."
+    },
+    {
+      "case_id": "in01-fallback-duplicate-names",
+      "matrix_ids": [
+        "IN-01"
+      ],
+      "audit_refs": [
+        "C03",
+        "D03"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": "tests/contract_input.rs a02_fixture_inputs v1",
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": {
+        "path": "inputs/in01-fallback-duplicate-names.apk",
+        "sha256": "78d8cd6b21a20922b58452cd66234ccb9e659e49bae9e380fedb001178fc1158",
+        "size": 2062
+      },
+      "expected": {
+        "outcome": "pass",
+        "facts_path": "expected/in01-fallback-duplicate-names.json",
+        "facts_kind": "dex-catalog"
+      },
+      "status": "active",
+      "notes": "Fallback tier (no root classes*.dex): root a.dex/b.dex selected in central-directory order, the second a.dex copy kept visible as a duplicate with both ordinals, nested assets/deep/nested.dex ignored. Complements the classes*.dex-priority case with the fallback flavor."
+    },
+    {
+      "case_id": "in03-unknown-version-rejected",
+      "matrix_ids": [
+        "IN-03"
+      ],
+      "audit_refs": [
+        "C06"
+      ],
+      "owner_package": "A02",
+      "source": {
+        "origin": "generated",
+        "license": "Apache-2.0 (ASC test support)",
+        "generator": "tests/contract_input.rs a02_fixture_inputs v1",
+        "seed": 0,
+        "url": null,
+        "version": null
+      },
+      "input": {
+        "path": "inputs/in03-unknown-version-rejected.apk",
+        "sha256": "2e16e3fa8f67e7c472e0d48cca9b0ca8fbb7152687f8542e0dbfc04508ab429b",
+        "size": 1028
+      },
+      "expected": {
+        "outcome": "error:UnsupportedFormat",
+        "facts_path": null,
+        "facts_kind": "dex-catalog"
+      },
+      "status": "active",
+      "notes": "Real structurally valid images whose only difference from the accepted 037 is the magic tail (036 below the matrix floor, 099 far ahead): both rejected as UnsupportedFormat naming the version matrix, not misparsed as 035."
     }
   ]
 }

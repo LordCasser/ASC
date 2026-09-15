@@ -1,0 +1,19 @@
+{
+ "facts_kind": "dex-catalog",
+ "dex_catalog": [
+  {
+   "entry_ordinal": 0,
+   "logical_ordinal": 0,
+   "raw_entry_name": "classes.dex",
+   "version": "035",
+   "header_offset": 0,
+   "uncompressed_size": 432
+  }
+ ],
+ "expected_diagnostics": [
+  {
+   "code": "dex-signature-mismatch",
+   "severity": "warning"
+  }
+ ]
+}
