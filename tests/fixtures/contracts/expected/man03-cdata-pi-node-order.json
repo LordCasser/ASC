@@ -1,0 +1,166 @@
+{
+  "xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<manifest xmlns:app=\"http://a\" xmlns:android=\"http://schemas.android.com/apk/res/android\" android:label=\"Example\">\n    <outer>\n        <inner xmlns:app=\"http://b\" app:tag=\"x\" android:label=\"Example\"><![CDATA[a ]]]]><![CDATA[> b]]><![CDATA[ tail text ]]></inner>\n        <dchild xmlns=\"http://d\" />\n        <child />\n    </outer>\n</manifest>",
+  "nodes": [
+    {
+      "d": 0,
+      "k": "element",
+      "name": "manifest",
+      "prefix": null,
+      "ns": null,
+      "attrs": [
+        {
+          "name": "app",
+          "prefix": "xmlns",
+          "ns": null,
+          "value": "http://a",
+          "ty": null,
+          "data": null,
+          "raw": null
+        },
+        {
+          "name": "android",
+          "prefix": "xmlns",
+          "ns": null,
+          "value": "http://schemas.android.com/apk/res/android",
+          "ty": null,
+          "data": null,
+          "raw": null
+        },
+        {
+          "name": "label",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "Example",
+          "ty": 3,
+          "data": 9,
+          "raw": "Example"
+        }
+      ],
+      "line": 7,
+      "comment": null
+    },
+    {
+      "d": 1,
+      "k": "element",
+      "name": "outer",
+      "prefix": null,
+      "ns": null,
+      "attrs": [],
+      "line": 7,
+      "comment": null
+    },
+    {
+      "d": 2,
+      "k": "element",
+      "name": "inner",
+      "prefix": null,
+      "ns": null,
+      "attrs": [
+        {
+          "name": "app",
+          "prefix": "xmlns",
+          "ns": null,
+          "value": "http://b",
+          "ty": null,
+          "data": null,
+          "raw": null
+        },
+        {
+          "name": "tag",
+          "prefix": "app",
+          "ns": "http://b",
+          "value": "x",
+          "ty": 3,
+          "data": 7,
+          "raw": "x"
+        },
+        {
+          "name": "label",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "Example",
+          "ty": 3,
+          "data": 9,
+          "raw": "Example"
+        }
+      ],
+      "line": 7,
+      "comment": "note"
+    },
+    {
+      "d": 3,
+      "k": "cdata",
+      "data": "a ]]> b"
+    },
+    {
+      "d": 3,
+      "k": "cdata",
+      "data": " tail text "
+    },
+    {
+      "d": 2,
+      "k": "element",
+      "name": "dchild",
+      "prefix": null,
+      "ns": "http://d",
+      "attrs": [
+        {
+          "name": "xmlns",
+          "prefix": null,
+          "ns": null,
+          "value": "http://d",
+          "ty": null,
+          "data": null,
+          "raw": null
+        }
+      ],
+      "line": 7,
+      "comment": null
+    },
+    {
+      "d": 2,
+      "k": "element",
+      "name": "child",
+      "prefix": null,
+      "ns": null,
+      "attrs": [],
+      "line": 7,
+      "comment": null
+    }
+  ],
+  "namespaces": [
+    {
+      "d": 0,
+      "k": "start",
+      "prefix": "app",
+      "uri": "http://a"
+    },
+    {
+      "d": 2,
+      "k": "start",
+      "prefix": "app",
+      "uri": "http://b"
+    },
+    {
+      "d": 2,
+      "k": "start",
+      "prefix": "",
+      "uri": "http://d"
+    }
+  ],
+  "prolog": [],
+  "epilog": [],
+  "styles": [],
+  "diagnostics": [
+    {
+      "code": "inferred-namespace-binding",
+      "severity": "warning",
+      "stage": "manifest"
+    }
+  ],
+  "meta": {
+    "kind": "axml",
+    "utf8_pool": true,
+    "strings": 18
+  }
+}

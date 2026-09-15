@@ -1,0 +1,161 @@
+{
+  "xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!--built by hand-->\n<?tool mode=gen?>\n<manifest package=\"com.example\" extra=\"line&#10;break&amp;more\">\n    <uses-sdk android:minSdkVersion=\"21\" />\n    <!--inner comment-->\n    <activity name=\".Main\">text before <intent-filter /> tail &amp; after A<![CDATA[raw <> &]]> end</activity>\n</manifest>\n<?epilog pi?>\n<!--epilog comment-->",
+  "nodes": [
+    {
+      "d": 0,
+      "k": "element",
+      "name": "manifest",
+      "prefix": null,
+      "ns": null,
+      "attrs": [
+        {
+          "name": "package",
+          "prefix": null,
+          "ns": null,
+          "value": "com.example",
+          "ty": null,
+          "data": null,
+          "raw": null
+        },
+        {
+          "name": "extra",
+          "prefix": null,
+          "ns": null,
+          "value": "line\nbreak&more",
+          "ty": null,
+          "data": null,
+          "raw": null
+        }
+      ],
+      "line": null,
+      "comment": null
+    },
+    {
+      "d": 1,
+      "k": "element",
+      "name": "uses-sdk",
+      "prefix": null,
+      "ns": null,
+      "attrs": [
+        {
+          "name": "minSdkVersion",
+          "prefix": "android",
+          "ns": null,
+          "value": "21",
+          "ty": null,
+          "data": null,
+          "raw": null
+        }
+      ],
+      "line": null,
+      "comment": null
+    },
+    {
+      "d": 1,
+      "k": "comment",
+      "text": "inner comment"
+    },
+    {
+      "d": 1,
+      "k": "element",
+      "name": "activity",
+      "prefix": null,
+      "ns": null,
+      "attrs": [
+        {
+          "name": "name",
+          "prefix": null,
+          "ns": null,
+          "value": ".Main",
+          "ty": null,
+          "data": null,
+          "raw": null
+        }
+      ],
+      "line": null,
+      "comment": null
+    },
+    {
+      "d": 2,
+      "k": "text",
+      "text": "text before "
+    },
+    {
+      "d": 2,
+      "k": "element",
+      "name": "intent-filter",
+      "prefix": null,
+      "ns": null,
+      "attrs": [],
+      "line": null,
+      "comment": null
+    },
+    {
+      "d": 2,
+      "k": "text",
+      "text": " tail & after A"
+    },
+    {
+      "d": 2,
+      "k": "cdata",
+      "data": "raw <> &"
+    },
+    {
+      "d": 2,
+      "k": "text",
+      "text": " end"
+    }
+  ],
+  "namespaces": [],
+  "prolog": [
+    {
+      "k": "text",
+      "text": "\n"
+    },
+    {
+      "k": "comment",
+      "text": "built by hand"
+    },
+    {
+      "k": "text",
+      "text": "\n"
+    },
+    {
+      "k": "pi",
+      "target": "tool",
+      "data": "mode=gen"
+    },
+    {
+      "k": "text",
+      "text": "\n"
+    }
+  ],
+  "epilog": [
+    {
+      "k": "text",
+      "text": "\n"
+    },
+    {
+      "k": "pi",
+      "target": "epilog",
+      "data": "pi"
+    },
+    {
+      "k": "text",
+      "text": "\n"
+    },
+    {
+      "k": "comment",
+      "text": "epilog comment"
+    },
+    {
+      "k": "text",
+      "text": "\n"
+    }
+  ],
+  "styles": [],
+  "diagnostics": [],
+  "meta": {
+    "kind": "plain-xml"
+  }
+}

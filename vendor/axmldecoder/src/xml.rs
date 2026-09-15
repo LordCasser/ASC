@@ -1,231 +1,14 @@
-use indexmap::IndexMap;
-use std::rc::Rc;
+//! Attribute-name table for framework resource ids (AX-P04).
+//!
+//! When a binary XML attribute has an empty name string, the name string's
+//! *index* doubles as an index into the document's resource map; the resulting
+//! framework resource id (0x0101xxxx) is translated with the table below, the
+//! same one `axmldec` and the reference implementation use.
 
-use crate::binaryxml::{
-    BinaryXmlDocument, XmlCdata, XmlNodeType, XmlStartElement, XmlStartNameSpace,
-};
-use crate::stringpool::StringPool;
-use crate::ParseError;
-
-///Struct representing a parsed XML document.
-#[derive(Debug)]
-pub struct XmlDocument {
-    root: Option<Node>,
-}
-
-impl XmlDocument {
-    pub(crate) fn new(binaryxml: BinaryXmlDocument) -> Result<Self, ParseError> {
-        let string_pool = binaryxml.string_pool;
-        let resource_map = binaryxml.resource_map;
-
-        let mut namespaces = IndexMap::new();
-
-        // There are some files without the XmlStartNameSpace element.
-        // We should assume that the android namespace is always present even
-        // if not explicitly defined in the document.
-        //
-        // examples/AndroidManifestNoNamespace.xml
-        namespaces.insert(
-            Rc::new("http://schemas.android.com/apk/res/android".to_string()),
-            Rc::new("android".to_string()),
-        );
-
-        let mut element_tracker: Vec<Element> = Vec::new();
-        for node in binaryxml.elements {
-            match node.element {
-                XmlNodeType::XmlStartNameSpace(e) => {
-                    let (uri, prefix) = Self::process_start_namespace(&e, &string_pool)?;
-                    namespaces.insert(uri.clone(), prefix.clone());
-                }
-                XmlNodeType::XmlEndNameSpace(_) => {}
-                XmlNodeType::XmlStartElement(e) => {
-                    element_tracker.push(Self::process_start_element(
-                        &e,
-                        &string_pool,
-                        &namespaces,
-                        &resource_map.resource_ids,
-                    )?);
-                }
-                XmlNodeType::XmlEndElement(_) => {
-                    // PATCHED (rasc): a stray end tag is a malformed document, not a panic.
-                    let e = element_tracker.pop().ok_or(ParseError::DekuError(
-                        deku::DekuError::Parse("end element without a start element".to_string()),
-                    ))?;
-
-                    if element_tracker.is_empty() {
-                        return Ok(XmlDocument {
-                            root: Some(Node::Element(e)),
-                        });
-                    }
-
-                    element_tracker
-                        .last_mut()
-                        .unwrap()
-                        .insert_children(Node::Element(e));
-                }
-                XmlNodeType::XmlCdata(e) => {
-                    let cdata = Self::process_cdata(&e, &string_pool)?;
-                    // PATCHED (rasc): character data outside any element is a malformed
-                    // document, not a panic.
-                    element_tracker
-                        .last_mut()
-                        .ok_or(ParseError::DekuError(deku::DekuError::Parse(
-                            "character data without an enclosing element".to_string(),
-                        )))?
-                        .insert_children(Node::Cdata(cdata));
-                }
-            };
-        }
-
-        Ok(Self { root: None })
-    }
-
-    ///Returns the root [Element] of the XML document.
-    #[must_use]
-    pub fn get_root(&self) -> &Option<Node> {
-        &self.root
-    }
-
-    fn process_cdata(e: &XmlCdata, string_pool: &StringPool) -> Result<Cdata, ParseError> {
-        Ok(Cdata {
-            data: string_pool
-                .get(usize::try_from(e.data).unwrap())
-                .ok_or(ParseError::StringNotFound(e.data))?
-                .to_string(),
-        })
-    }
-
-    fn process_start_namespace(
-        e: &XmlStartNameSpace,
-        string_pool: &StringPool,
-    ) -> Result<(Rc<String>, Rc<String>), ParseError> {
-        let uri = string_pool
-            .get(usize::try_from(e.uri).unwrap())
-            .ok_or(ParseError::StringNotFound(e.uri))?;
-        let prefix = string_pool
-            .get(usize::try_from(e.prefix).unwrap())
-            .ok_or(ParseError::StringNotFound(e.prefix))?;
-
-        Ok((uri, prefix))
-    }
-
-    fn process_start_element(
-        e: &XmlStartElement,
-        string_pool: &StringPool,
-        namespaces: &IndexMap<Rc<String>, Rc<String>>,
-        resource_map: &[u32],
-    ) -> Result<Element, ParseError> {
-        let name = string_pool
-            .get(usize::try_from(e.attr_ext.name).unwrap())
-            .ok_or(ParseError::StringNotFound(e.attr_ext.name))?;
-        let name = (*name).clone();
-
-        let mut attributes: IndexMap<String, String> = IndexMap::new();
-
-        // Specially handle the <manifest> element by adding the namespace
-        // attributes to it.
-        if name == "manifest" {
-            for (url, name) in namespaces.iter() {
-                attributes.insert(format!("xmlns:{}", name), url.to_string());
-            }
-        }
-
-        for attr in &e.attributes {
-            let ns = string_pool.get(usize::try_from(attr.ns).unwrap());
-            let name = string_pool
-                .get(usize::try_from(attr.name).unwrap())
-                .ok_or(ParseError::StringNotFound(attr.name))?;
-            let value = attr.typed_value.get_value(string_pool);
-
-            let mut final_name = String::new();
-            if name.is_empty() {
-                let resource_id = resource_map
-                    .get(usize::try_from(attr.name).unwrap())
-                    .ok_or(ParseError::ResourceIdNotFound(attr.name))?;
-                let resource_str = get_resource_string(*resource_id)
-                    .ok_or(ParseError::UnknownResourceString(*resource_id))?;
-                final_name.push_str(&resource_str);
-            } else {
-                if let Some(n) = ns {
-                    // There are samples where the namespace value is the
-                    // raw string instead of a URI found in a namespace chunk.
-                    // For now, skip appending the namespace for those cases.
-                    //
-                    // examples/AndroidManifestUnknownNamespace
-                    if let Some(n) = namespaces.get(&n) {
-                        final_name.push_str(n);
-                        final_name.push(':');
-                    };
-                }
-                final_name.push_str(&name);
-            }
-
-            attributes.insert(final_name, value.to_string());
-        }
-
-        Ok(Element {
-            attributes,
-            tag: name,
-            children: Vec::new(),
-        })
-    }
-}
-
-///Enum representing possible nodes within the parsed XML document.
-#[derive(Debug)]
-pub enum Node {
-    Element(Element),
-    Cdata(Cdata),
-}
-
-///Struct representing an element within the parsed XML document.
-#[derive(Debug)]
-pub struct Element {
-    attributes: IndexMap<String, String>,
-    tag: String,
-    children: Vec<Node>,
-}
-
-impl Element {
-    ///Returns a map of attributes associated with the element.
-    #[must_use]
-    pub fn get_attributes(&self) -> &IndexMap<String, String> {
-        &self.attributes
-    }
-
-    ///Returns the element tag.
-    #[must_use]
-    pub fn get_tag(&self) -> &str {
-        &self.tag
-    }
-
-    ///Returns a list of child nodes.
-    #[must_use]
-    pub fn get_children(&self) -> &Vec<Node> {
-        &self.children
-    }
-
-    fn insert_children(&mut self, child: Node) {
-        self.children.push(child);
-    }
-}
-
-///Struct representing a Cdata element within the parsed XML document.
-#[derive(Debug)]
-pub struct Cdata {
-    data: String,
-}
-
-impl Cdata {
-    #[must_use]
-    pub fn get_data(&self) -> &str {
-        &self.data
-    }
-}
-
-// Logic borrowed from:
-// https://github.com/ytsutano/axmldec/blob/master/lib/jitana/util/axml_parser.cpp#L504
-fn get_resource_string(resource_id: u32) -> Option<String> {
+/// The attribute name for a framework resource id, or `None` when the id is
+/// outside the known table (the table contains explicit `UNKNOWN` slots and
+/// past-the-end indices both map to `None`).
+pub(crate) fn attribute_name_for_resource(resource_id: u32) -> Option<&'static str> {
     const RESOURCE_STRINGS: &[&str] = &[
         "theme",
         "label",
@@ -362,7 +145,7 @@ fn get_resource_string(resource_id: u32) -> Option<String> {
         "textViewStyle",
         "webViewStyle",
         "dropDownItemStyle",
-        "spinnerDropDownItemStyle",
+        "spinnerDropDownStyle",
         "dropDownHintAppearance",
         "spinnerItemStyle",
         "mapViewStyle",
@@ -1285,13 +1068,6 @@ fn get_resource_string(resource_id: u32) -> Option<String> {
         "UNKNOWN",
         "UNKNOWN",
         "UNKNOWN",
-        "UNKNOWN",
-        "UNKNOWN",
-        "UNKNOWN",
-        "UNKNOWN",
-        "UNKNOWN",
-        "UNKNOWN",
-        "UNKNOWN",
         "colorControlNormal",
         "colorControlActivated",
         "colorButtonNormal",
@@ -1558,7 +1334,7 @@ fn get_resource_string(resource_id: u32) -> Option<String> {
         "colorSecondary",
     ];
 
-    let i = resource_id - 0x0101_0000;
-
-    Some((*RESOURCE_STRINGS.get(usize::try_from(i).unwrap())?).to_string())
+    let index = resource_id.checked_sub(0x0101_0000)?;
+    let name = *RESOURCE_STRINGS.get(index as usize)?;
+    (name != "UNKNOWN").then_some(name)
 }

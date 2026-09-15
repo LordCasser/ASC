@@ -1,0 +1,101 @@
+{
+  "xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"com.example.llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\" android:versionCode=\"42\">\n    <application android:label=\"Example &amp; &lt;app&gt;&quot;q\"><![CDATA[a ]]]]><![CDATA[> b]]></application>\n</manifest>",
+  "nodes": [
+    {
+      "d": 0,
+      "k": "element",
+      "name": "manifest",
+      "prefix": null,
+      "ns": null,
+      "attrs": [
+        {
+          "name": "android",
+          "prefix": "xmlns",
+          "ns": null,
+          "value": "http://schemas.android.com/apk/res/android",
+          "ty": null,
+          "data": null,
+          "raw": null
+        },
+        {
+          "name": "package",
+          "prefix": null,
+          "ns": null,
+          "value": "com.example.llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
+          "ty": 3,
+          "data": 4,
+          "raw": "com.example.llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll"
+        },
+        {
+          "name": "versionCode",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "42",
+          "ty": 16,
+          "data": 42,
+          "raw": null
+        }
+      ],
+      "line": 7,
+      "comment": null
+    },
+    {
+      "d": 1,
+      "k": "element",
+      "name": "application",
+      "prefix": null,
+      "ns": null,
+      "attrs": [
+        {
+          "name": "label",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "Example & <app>\"q",
+          "ty": 3,
+          "data": 7,
+          "raw": "Example & <app>\"q"
+        }
+      ],
+      "line": 7,
+      "comment": "note"
+    },
+    {
+      "d": 2,
+      "k": "cdata",
+      "data": "a ]]> b"
+    }
+  ],
+  "namespaces": [
+    {
+      "d": 0,
+      "k": "start",
+      "prefix": "android",
+      "uri": "http://schemas.android.com/apk/res/android"
+    }
+  ],
+  "prolog": [],
+  "epilog": [],
+  "styles": [
+    {
+      "index": 9,
+      "spans": [
+        [
+          6,
+          0,
+          5
+        ],
+        [
+          6,
+          6,
+          16
+        ]
+      ]
+    }
+  ],
+  "diagnostics": [],
+  "meta": {
+    "kind": "axml",
+    "utf8_pool": true,
+    "strings": 12
+  }
+}

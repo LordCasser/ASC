@@ -1,685 +1,1599 @@
-//! AndroidManifest.xml decoding: verbatim passthrough for a plain XML entry and
-//! binary AXML decode plus indented printing for the compiled form.
+//! AndroidManifest.xml domain decoding: the ordered manifest document model,
+//! the AXML/plain-XML entries that build it, and bounded XML serialization.
+//!
+//! Layering (openspec interfaces §1/§3): the vendored AXML backend turns
+//! bytes into a bounded ordered vendor model; this module owns the *domain*
+//! model — ordered nodes with namespace decomposition, typed raw values with
+//! a readable projection, string styles and resource ids in metadata — and
+//! never leaks vendor types. Plain-XML entries are read here with quick-xml
+//! in pure pull mode: UTF-8, XML 1.0, predefined/numeric character references
+//! only, no DTD and no I/O of any kind.
+//!
+//! Rendering contract: XML declaration, four-space indentation, LF; elements
+//! with non-whitespace text or CDATA content stay inline so indentation can
+//! never change text; illegal XML characters and names are errors, never
+//! silent replacements; output length is bounded.
 
-use anyhow::{Context, Result, bail};
-use axmldecoder::{Node, XmlDocument};
-use std::fmt::Write;
+use crate::error::{CancelCause, Error, ErrorKind};
+use crate::model::{Diagnostic, DiagnosticCode, DexText, Report, Severity, Stage};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
-pub fn decode(data: &[u8]) -> Result<String> {
-    if let Ok(text) = std::str::from_utf8(data)
-        && text.trim_start().starts_with('<')
-    {
-        return Ok(text.to_owned());
-    }
-    validate_chunks(data)?;
-    let document = axmldecoder::parse(data).context("decode binary Android XML")?;
-    render(&document)
+const ANDROID_RES_URI: &str = "http://schemas.android.com/apk/res/android";
+const CANONICAL_ANDROID_PREFIX: &str = "android";
+
+// ---------------------------------------------------------------------------
+// Limits, control, render options
+// ---------------------------------------------------------------------------
+
+/// Decode budgets for the manifest entries; defaults are the initial values
+/// from interfaces.md §5 (depth 256, xml-nodes/xml-attributes 1_000_000,
+/// string-units 1_048_576).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct XmlDecodeLimits {
+    pub max_depth: usize,
+    pub max_nodes: usize,
+    pub max_attributes: usize,
+    pub max_string_units: usize,
 }
 
-/// Checks the chunk skeleton before handing the bytes to `axmldecoder`.
-///
-/// The decoder unwraps its reads and asserts on a few structural details, and the
-/// release profile builds with `panic = "abort"`, so a truncated or crafted
-/// manifest would abort the process instead of reporting an error. Everything
-/// checked here is something the decoder would otherwise panic on: chunk sizes
-/// that leave the buffer, a string pool whose declared size cannot hold its own
-/// offsets, and a string pool with styles (the decoder asserts `style_count == 0`).
-///
-/// Residual risk: a document with a consistent skeleton but inconsistent contents
-/// (a string offset pointing outside the pool, a string longer than 32767
-/// characters) is still rejected by the decoder's own unwraps rather than here.
-fn validate_chunks(data: &[u8]) -> Result<()> {
-    const DOCUMENT: u16 = 0x0003;
-    const STRING_POOL: u16 = 0x0001;
-    const RESOURCE_MAP: u16 = 0x0180;
-    const STRING_POOL_HEADER: usize = 28;
+impl Default for XmlDecodeLimits {
+    fn default() -> Self {
+        Self {
+            max_depth: 256,
+            max_nodes: 1_000_000,
+            max_attributes: 1_000_000,
+            max_string_units: 1_048_576,
+        }
+    }
+}
 
-    let document = chunk_header(data, 0).context("read document chunk")?;
-    if document.typ != DOCUMENT {
-        bail!("binary XML does not start with a document chunk");
-    }
-    let end = document.size;
+/// Serialization budgets; defaults are `result-bytes` (128 MiB) and `depth`
+/// (256) from interfaces.md §5.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct XmlRenderOptions {
+    pub max_output_bytes: usize,
+    pub max_depth: usize,
+}
 
-    // The decoder reads exactly these two chunks unconditionally before it starts
-    // on the node list, so they are the ones worth checking up front; node chunks
-    // are read by bounded counts and already fail as parse errors.
-    let pool_start = usize::from(document.header_size);
-    let pool = chunk_header(&data[..end], pool_start).context("read string pool chunk")?;
-    if pool.typ != STRING_POOL {
-        bail!("binary XML does not start with a string pool");
+impl Default for XmlRenderOptions {
+    fn default() -> Self {
+        Self { max_output_bytes: 128 * 1024 * 1024, max_depth: 256 }
     }
-    if pool.size < STRING_POOL_HEADER {
-        bail!("string pool cannot hold its own header");
+}
+
+/// Cancellation/deadline handle for the manifest operations. This is the
+/// manifest-local stand-in for the engine-level control (A10/A11 freeze the
+/// shared shape); it already carries the contract that matters here: checks
+/// are cooperative, cancellation maps to `Cancelled` with a cause, and
+/// nothing installs signal handlers or spawns threads.
+#[derive(Clone, Default)]
+pub struct OperationControl {
+    cancel: Option<Arc<AtomicBool>>,
+    deadline: Option<Instant>,
+}
+
+impl OperationControl {
+    pub fn new() -> Self {
+        Self::default()
     }
-    let fields = data
-        .get(
-            usize::from(document.header_size)
-                ..usize::from(document.header_size) + STRING_POOL_HEADER,
-        )
-        .context("truncated string pool header")?;
-    let string_count = u32::from_le_bytes(fields[8..12].try_into().unwrap()) as usize;
-    let style_count = u32::from_le_bytes(fields[12..16].try_into().unwrap());
-    let flags = u32::from_le_bytes(fields[16..20].try_into().unwrap());
-    let strings_start = u32::from_le_bytes(fields[20..24].try_into().unwrap()) as usize;
-    if string_count * 4 > pool.size - STRING_POOL_HEADER {
-        bail!("string pool cannot hold its own offsets");
+
+    // The builder methods are part of the frozen control shape; the engine
+    // integration (A07/A10) is their first caller.
+    #[allow(dead_code)]
+    pub fn with_cancel_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(flag);
+        self
     }
-    if style_count != 0 {
-        bail!("string pool with styles is not supported");
+
+    #[allow(dead_code)]
+    pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
     }
-    if !(STRING_POOL_HEADER..=pool.size).contains(&strings_start) {
-        bail!("string pool declares an impossible string start");
+
+    /// One cooperative checkpoint; called by the decoders and the writer.
+    pub fn check(&self) -> Result<(), Error> {
+        if let Some(deadline) = self.deadline
+            && Instant::now() >= deadline
+        {
+            return Err(Error::new(ErrorKind::Cancelled { cause: CancelCause::Deadline })
+                .with_context("manifest operation passed its deadline"));
+        }
+        if self.cancel.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Err(Error::new(ErrorKind::Cancelled { cause: CancelCause::User })
+                .with_context("manifest operation was cancelled"));
+        }
+        Ok(())
     }
-    // The decoder calls `unimplemented!()` on the two-byte length form and indexes
-    // strings without bounds checks, so walk the offsets here.
-    let utf8 = flags & 0x0000_0100 != 0;
-    let strings_base = pool_start + strings_start;
-    for index in 0..string_count {
-        let entry = data
-            .get(
-                pool_start + STRING_POOL_HEADER + index * 4
-                    ..pool_start + STRING_POOL_HEADER + index * 4 + 4,
-            )
-            .context("truncated string pool offsets")?;
-        let mut cursor = strings_base + u32::from_le_bytes(entry.try_into().unwrap()) as usize;
-        // A UTF-8 entry stores the UTF-16 length and then the byte length, either of
-        // which may use the extended form; a UTF-16 entry stores its length as one or
-        // two units. Both were rejected here before rasc patched its decoder.
-        let length = if utf8 {
-            let _utf16_len = pool_length_8(data, &mut cursor)?;
-            pool_length_8(data, &mut cursor)?
-        } else {
-            let units = pool_length_16(data, &mut cursor)?;
-            units * 2
-        };
-        let end_of_string = cursor
-            .checked_add(length)
-            .context("string length overflow in the string pool")?;
-        if end_of_string > pool_start + pool.size || end_of_string > data.len() {
-            bail!("string runs past the string pool");
+}
+
+// ---------------------------------------------------------------------------
+// Domain model
+// ---------------------------------------------------------------------------
+
+/// A namespace binding event recorded on the element whose scope it opens or
+/// closes, in stream order. `prefix == ""` is the default namespace.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NamespaceEvent {
+    Start { prefix: String, uri: String },
+    End { prefix: String, uri: String },
+}
+
+/// An attribute: decomposed name plus its value. `namespace` is the bound URI
+/// when the name carried a resolvable prefix; `prefix` is the prefix exactly
+/// as the source spelled it (`None` for unprefixed names).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct XmlAttribute {
+    pub(crate) namespace: Option<String>,
+    pub(crate) prefix: Option<String>,
+    pub(crate) local_name: String,
+    pub(crate) value: ManifestValue,
+}
+
+// The public readers below are the A07/A08 surface (and the contract-test
+// facts projection); the binary target itself has no caller for them until
+// the engine integration lands.
+#[allow(dead_code)]
+impl XmlAttribute {
+    pub fn namespace(&self) -> Option<String> {
+        self.namespace.clone()
+    }
+
+    pub fn prefix(&self) -> Option<String> {
+        self.prefix.clone()
+    }
+
+    pub fn local_name(&self) -> &str {
+        &self.local_name
+    }
+
+    pub fn value(&self) -> &ManifestValue {
+        &self.value
+    }
+}
+
+/// An attribute value: plain text (plain-XML entries and AXML raw strings)
+/// or an AXML typed value whose raw `type`/`data` pair is the single fact.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ManifestValue {
+    Text(DexText),
+    Typed(TypedValue),
+}
+
+impl ManifestValue {
+    /// The value as renderable text; `None` only for a typed value whose
+    /// raw string contains an unpaired surrogate (impossible via the
+    /// decoders, which reject invalid UTF-16).
+    pub fn as_text(&self) -> Option<String> {
+        match self {
+            ManifestValue::Text(text) => text.as_str(),
+            ManifestValue::Typed(value) => Some(value.format()),
         }
     }
 
-    let map_offset = usize::from(document.header_size) + pool.size;
-    let map = chunk_header(&data[..end], map_offset).context("read resource map chunk")?;
-    if map.typ != RESOURCE_MAP {
-        bail!("binary XML has no resource map after its string pool");
+    #[allow(dead_code)]
+    pub fn raw_typed(&self) -> Option<&TypedValue> {
+        match self {
+            ManifestValue::Text(_) => None,
+            ManifestValue::Typed(value) => Some(value),
+        }
     }
-    // The decoder derives its entry count as `(size - header_size) / 4` in u32,
-    // so a chunk declaring a size below its header size wraps to ~1e9 entries.
-    // Nothing else validates this chunk.
-    if map.header_size != 8 || map.size < 8 || (map.size - 8) % 4 != 0 {
-        bail!(
-            "binary XML resource map chunk is malformed: header_size={}, size={}",
-            map.header_size,
-            map.size
-        );
-    }
-    let nodes = map_offset + map.size;
-    if nodes >= end {
-        bail!("binary XML has no node chunks");
-    }
-    Ok(())
-}
-/// One string length from a UTF-8 pool: one byte, or two when the high bit of the
-/// first is set.
-fn pool_length_8(data: &[u8], cursor: &mut usize) -> Result<usize> {
-    let first = *data.get(*cursor).context("truncated string length")?;
-    *cursor += 1;
-    if first & 0x80 == 0 {
-        return Ok(usize::from(first));
-    }
-    let second = *data.get(*cursor).context("truncated string length")?;
-    *cursor += 1;
-    Ok((usize::from(first & 0x7f) << 8) | usize::from(second))
 }
 
-/// One string length from a UTF-16 pool: one unit, or two when the high bit of the
-/// first is set (the value is then in UTF-16 units, which the caller scales).
-fn pool_length_16(data: &[u8], cursor: &mut usize) -> Result<usize> {
-    let first = u16::from_le_bytes(
-        data.get(*cursor..*cursor + 2)
-            .context("truncated string length")?
-            .try_into()
-            .unwrap(),
-    );
-    *cursor += 2;
-    if first & 0x8000 == 0 {
-        return Ok(usize::from(first));
-    }
-    let second = u16::from_le_bytes(
-        data.get(*cursor..*cursor + 2)
-            .context("truncated string length")?
-            .try_into()
-            .unwrap(),
-    );
-    *cursor += 2;
-    Ok(((usize::from(first & 0x7fff)) << 16) | usize::from(second))
+/// One AXML typed value kept bit-exact: `type_byte` and `data` exactly as the
+/// document stored them, plus the raw string the attribute carried when the
+/// encoder wrote one. `format()` projects to the readable form the Android
+/// toolchain prints; it is derived data, never the source of truth.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypedValue {
+    pub type_byte: u8,
+    pub data: u32,
+    /// Raw string index content (`rawValue`), when present.
+    pub raw_string: Option<DexText>,
 }
 
-/// One binary-XML chunk header: type, header size and total size.
-struct ChunkHeader {
-    typ: u16,
-    header_size: u16,
-    size: usize,
+#[allow(dead_code)]
+impl TypedValue {
+    pub fn type_byte(&self) -> u8 {
+        self.type_byte
+    }
+
+    pub fn data(&self) -> u32 {
+        self.data
+    }
+
+    pub fn raw_string(&self) -> Option<&DexText> {
+        self.raw_string.as_ref()
+    }
+
+    /// The readable projection (aapt/Androguard-compatible formatting,
+    /// including the `<0x.., type 0x..>` fallback for unnamed types).
+    pub fn format(&self) -> String {
+        // The exact powers of two (2^-8, 2^-15, 2^-23, 2^-31). Rounding them
+        // to seven digits shifts a large mantissa in the sixth decimal
+        // (fraction mantissa 16384, radix 1 must print 50.000000%).
+        const RADIX_MULTS: [f64; 4] = [
+            0.003_906_25,
+            3.051_757_812_5e-05,
+            1.192_092_895_507_812_5e-07,
+            4.656_612_873_077_393e-10,
+        ];
+        const DIMENSION_UNITS: [&str; 6] = ["px", "dip", "sp", "pt", "in", "mm"];
+        const FRACTION_UNITS: [&str; 2] = ["%", "%p"];
+
+        let data = self.data;
+        let package = if data >> 24 == 1 { "android:" } else { "" };
+        // AXML integers are signed; the reference sign-extends from bit 31.
+        let signed =
+            i64::from(data & 0x7fff_ffff) - if data > 0x7fff_ffff { i64::from(0x8000_0000u32) } else { 0 };
+        let complex = f64::from(data & 0xffff_ff00) * RADIX_MULTS[((data >> 4) & 3) as usize];
+        let unit = (data & 0x0f) as usize;
+
+        match self.type_byte {
+            0x01 => format!("@{package}{data:08X}"),
+            0x02 => format!("?{package}{data:08X}"),
+            0x03 => self
+                .raw_string
+                .as_ref()
+                .and_then(DexText::as_str)
+                .unwrap_or_default(),
+            0x04 => format!("{:.6}", f64::from(f32::from_bits(data))),
+            0x05 => format!(
+                "{complex:.6}{}",
+                DIMENSION_UNITS.get(unit).copied().unwrap_or("")
+            ),
+            0x06 => format!(
+                "{:.6}{}",
+                complex * 100.0,
+                FRACTION_UNITS.get(unit).copied().unwrap_or("")
+            ),
+            0x10 => format!("{signed}"),
+            0x11 => format!("0x{data:08X}"),
+            0x12 => (if data == 0 { "false" } else { "true" }).to_string(),
+            0x1c..=0x1f => format!("#{data:08X}"),
+            _ => format!("<0x{data:X}, type 0x{:02X}>", self.type_byte),
+        }
+    }
 }
 
-fn chunk_header(data: &[u8], offset: usize) -> Result<ChunkHeader> {
-    let bytes = data
-        .get(offset..offset + 8)
-        .context("binary XML is shorter than a chunk header")?;
-    let size = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
-    if size > data.len() - offset {
-        bail!("binary XML chunk at {offset} runs past the end of the input");
+/// One string style span from the AXML string pool, kept as metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StringStyleSpan {
+    pub name_index: u32,
+    pub first_char: u32,
+    pub last_char: u32,
+}
+
+/// A styled string retained as metadata.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StringStyle {
+    pub string_index: u32,
+    pub spans: Vec<StringStyleSpan>,
+}
+
+/// Where the manifest document came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManifestSource {
+    BinaryAxml { utf8_pool: bool, string_count: usize },
+    PlainXml,
+}
+
+/// Document-level metadata the XML text cannot carry.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ManifestMetadata {
+    pub source: Option<ManifestSource>,
+    pub string_styles: Vec<StringStyle>,
+    pub resource_map: Vec<u32>,
+}
+
+/// Element-level metadata: AXML line numbers and comments, plus the
+/// namespace events recorded on this element.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ElementMetadata {
+    pub line_number: Option<u32>,
+    pub comment: Option<String>,
+    pub namespace_events: Vec<NamespaceEvent>,
+}
+
+/// One element. Children keep document order; text between child nodes is a
+/// `Text` child in its position, so node order plus text nodes fully cover
+/// text *and* tail text without a separate tail field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct XmlElement {
+    pub(crate) namespace: Option<String>,
+    pub(crate) prefix: Option<String>,
+    pub(crate) local_name: String,
+    pub(crate) attributes: Vec<XmlAttribute>,
+    pub(crate) children: Vec<XmlNode>,
+    pub(crate) metadata: ElementMetadata,
+}
+
+#[allow(dead_code)]
+impl XmlElement {
+    pub fn namespace(&self) -> Option<String> {
+        self.namespace.clone()
     }
-    Ok(ChunkHeader {
-        typ: u16::from_le_bytes(bytes[..2].try_into().unwrap()),
-        header_size: u16::from_le_bytes(bytes[2..4].try_into().unwrap()),
-        size,
+
+    pub fn prefix(&self) -> Option<String> {
+        self.prefix.clone()
+    }
+
+    pub fn local_name(&self) -> &str {
+        &self.local_name
+    }
+
+    pub fn attributes(&self) -> &[XmlAttribute] {
+        &self.attributes
+    }
+
+    pub fn children(&self) -> &[XmlNode] {
+        &self.children
+    }
+
+    pub fn metadata(&self) -> &ElementMetadata {
+        &self.metadata
+    }
+}
+
+/// A node inside an element.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum XmlNode {
+    Text { text: DexText },
+    Cdata { data: DexText },
+    Comment { text: String },
+    Pi { target: String, data: String },
+    Element(XmlElement),
+}
+
+/// Prolog/epilog items (comments, processing instructions, whitespace text)
+/// in document position.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Misc {
+    Text(DexText),
+    Comment(String),
+    Pi { target: String, data: String },
+}
+
+/// The manifest document: declaration, ordered prolog, single root, ordered
+/// epilog, and the metadata no XML projection can carry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Manifest {
+    pub(crate) declaration: Option<XmlDeclaration>,
+    pub(crate) prolog: Vec<Misc>,
+    pub(crate) root: XmlElement,
+    pub(crate) epilog: Vec<Misc>,
+    pub(crate) metadata: ManifestMetadata,
+    /// Reserved: verbatim source bytes for the plain-XML raw-bytes exception
+    /// (interfaces §6: a legal UTF-8 plain-XML manifest may keep its original
+    /// bytes, preserving original newlines/BOM). The CLI output wiring that
+    /// consumes it lands with A07/A08; until then it stays `None`.
+    pub(crate) raw_bytes: Option<Vec<u8>>,
+}
+
+/// The XML declaration of a plain-XML entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct XmlDeclaration {
+    pub version: String,
+    pub encoding: Option<String>,
+    pub standalone: Option<String>,
+}
+
+#[allow(dead_code)]
+impl Manifest {
+    pub fn declaration(&self) -> Option<&XmlDeclaration> {
+        self.declaration.as_ref()
+    }
+
+    pub fn prolog(&self) -> &[Misc] {
+        &self.prolog
+    }
+
+    pub fn root(&self) -> &XmlElement {
+        &self.root
+    }
+
+    pub fn epilog(&self) -> &[Misc] {
+        &self.epilog
+    }
+
+    pub fn metadata(&self) -> &ManifestMetadata {
+        &self.metadata
+    }
+
+    /// Reserved raw-bytes field (see the struct docs).
+    pub fn raw_bytes(&self) -> Option<&[u8]> {
+        self.raw_bytes.as_deref()
+    }
+
+    /// Serializes the document to canonical XML: declaration, four-space
+    /// indentation, LF. Mixed-text elements stay inline; illegal characters
+    /// or names are errors; output length and depth are bounded.
+    pub fn to_xml(&self, options: &XmlRenderOptions, control: &OperationControl) -> Result<String, Error> {
+        control.check()?;
+        let mut writer = BoundedWriter::new(options.max_output_bytes, control);
+        // Join semantics: the declaration line, every layout item (comments,
+        // PIs) and the root are joined with single newlines, so the last line
+        // carries no trailing newline and whitespace Misc items (which only
+        // pin document position) contribute nothing to the text.
+        writer.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>")?;
+        // The declaration line is written content, so every following item
+        // starts on its own line.
+        for item in &self.prolog {
+            render_misc(item, 0, &mut writer, true)?;
+        }
+        writer.push_str("\n")?;
+        render_element(&self.root, 0, &mut writer, options)?;
+        for item in &self.epilog {
+            render_misc(item, 0, &mut writer, true)?;
+        }
+        Ok(writer.finish())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entry points
+// ---------------------------------------------------------------------------
+
+/// Decodes one manifest entry's bytes into the domain document.
+///
+/// Dispatch: valid UTF-8 whose first non-whitespace character is `<` (after a
+/// UTF-8 BOM) is read as plain XML; a binary-XML document chunk is read as
+/// AXML; anything else — including wrongly encoded text — is a malformed
+/// input.
+pub fn decode_manifest_entry(
+    bytes: &[u8],
+    limits: &XmlDecodeLimits,
+    control: &OperationControl,
+) -> Result<Report<Manifest>, Error> {
+    control.check()?;
+    if let Some(utf16_bom) = utf16_bom(bytes) {
+        return Err(Error::new(ErrorKind::UnsupportedFormat).with_context(format!(
+            "plain XML with a UTF-16 BOM ({utf16_bom}) is outside the supported matrix; \
+             only UTF-8 is accepted"
+        )));
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        if text.trim_start().starts_with('<') {
+            return decode_plain_xml(text, limits, control);
+        }
+    }
+    if looks_like_axml(bytes) {
+        return decode_axml(bytes, limits, control);
+    }
+    Err(Error::malformed_input(
+        "manifest entry is neither a binary AXML document nor UTF-8 XML text",
+    ))
+}
+
+fn utf16_bom(bytes: &[u8]) -> Option<&'static str> {
+    match bytes {
+        [0xFF, 0xFE, ..] => Some("FF FE"),
+        [0xFE, 0xFF, ..] => Some("FE FF"),
+        _ => None,
+    }
+}
+
+fn looks_like_axml(bytes: &[u8]) -> bool {
+    if bytes.len() < 8 {
+        return false;
+    }
+    let type_word = u16::from_le_bytes([bytes[0], bytes[1]]);
+    let header_size = u16::from_le_bytes([bytes[2], bytes[3]]);
+    let size = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    type_word == 0x0003 && header_size >= 8 && usize::try_from(size).is_ok_and(|s| s <= bytes.len())
+}
+
+fn malformed(message: impl Into<String>) -> Error {
+    Error::malformed_input(message)
+}
+
+fn unsupported_format(message: impl Into<String>) -> Error {
+    Error::new(ErrorKind::UnsupportedFormat).with_context(message)
+}
+
+fn resource_limit(message: impl Into<String>) -> Error {
+    Error::resource_limit(message)
+}
+
+// ---------------------------------------------------------------------------
+// AXML entry: vendor document -> domain document
+// ---------------------------------------------------------------------------
+
+struct AxmlConverter {
+    diagnostics: Vec<Diagnostic>,
+    inferred_namespace: bool,
+}
+
+/// One binding on the namespace scope stack; `prefix == ""` is the default.
+struct Binding {
+    prefix: String,
+    uri: String,
+}
+
+fn decode_axml(
+    bytes: &[u8],
+    limits: &XmlDecodeLimits,
+    control: &OperationControl,
+) -> Result<Report<Manifest>, Error> {
+    let vendor_limits = axmldecoder::DecodeLimits {
+        max_depth: limits.max_depth,
+        max_nodes: limits.max_nodes,
+        max_attributes: limits.max_attributes,
+        max_string_units: limits.max_string_units,
+    };
+    let document = axmldecoder::parse_document(bytes, &vendor_limits).map_err(|error| match error {
+        axmldecoder::ParseError::Malformed(message) => malformed(message),
+        axmldecoder::ParseError::Limit(message) => resource_limit(message),
+    })?;
+    control.check()?;
+
+    let mut converter = AxmlConverter { diagnostics: Vec::new(), inferred_namespace: false };
+    let mut scopes: Vec<Binding> = Vec::new();
+    let mut node_count: usize = 0;
+    let root = convert_element(&document.root, &mut scopes, &mut converter, limits, &mut node_count, control)?;
+
+    let metadata = ManifestMetadata {
+        source: Some(ManifestSource::BinaryAxml {
+            utf8_pool: document.string_pool.is_utf8,
+            string_count: document.string_pool.strings.len(),
+        }),
+        string_styles: document
+            .string_pool
+            .styles
+            .iter()
+            .map(|(index, spans)| StringStyle {
+                string_index: *index,
+                spans: spans
+                    .iter()
+                    .map(|span| StringStyleSpan {
+                        name_index: span.name,
+                        first_char: span.first_char,
+                        last_char: span.last_char,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        resource_map: document.resource_map.clone(),
+    };
+    Ok(Report::new(
+        Manifest { declaration: None, prolog: Vec::new(), root, epilog: Vec::new(), metadata, raw_bytes: None },
+        converter.diagnostics,
+        crate::model::OperationStats::default(),
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn convert_element(
+    element: &axmldecoder::Element,
+    scopes: &mut Vec<Binding>,
+    converter: &mut AxmlConverter,
+    limits: &XmlDecodeLimits,
+    node_count: &mut usize,
+    control: &OperationControl,
+) -> Result<XmlElement, Error> {
+    *node_count += 1;
+    if *node_count > limits.max_nodes {
+        return Err(resource_limit(format!(
+            "document exceeds the node limit of {}",
+            limits.max_nodes
+        )));
+    }
+    if scopes.len() + 1 > limits.max_depth {
+        return Err(resource_limit(format!(
+            "document nesting exceeds the depth limit of {}",
+            limits.max_depth
+        )));
+    }
+    let scope_depth = scopes.len();
+    let mut attributes: Vec<XmlAttribute> = Vec::new();
+    let mut events: Vec<NamespaceEvent> = Vec::new();
+
+    // Namespace starts recorded on this element become explicit xmlns
+    // attributes; ends unwind their binding. Events apply before names
+    // resolve, matching the AXML stream where the start chunk precedes the
+    // element it binds for.
+    for event in &element.namespace_events {
+        match event {
+            axmldecoder::NamespaceEvent::Start { prefix, uri } => {
+                scopes.push(Binding { prefix: prefix.clone(), uri: uri.clone() });
+                events.push(NamespaceEvent::Start { prefix: prefix.clone(), uri: uri.clone() });
+                // The binding becomes an explicit xmlns attribute; the empty
+                // prefix is the default namespace (`xmlns="..."`).
+                let (attr_prefix, attr_local) = if prefix.is_empty() {
+                    (None, "xmlns".to_owned())
+                } else {
+                    (Some("xmlns".to_owned()), prefix.clone())
+                };
+                attributes.push(XmlAttribute {
+                    namespace: None,
+                    prefix: attr_prefix,
+                    local_name: attr_local,
+                    value: ManifestValue::Text(DexText::from_str_lossless(uri)),
+                });
+            }
+            axmldecoder::NamespaceEvent::End { prefix, uri } => {
+                events.push(NamespaceEvent::End { prefix: prefix.clone(), uri: uri.clone() });
+                let position = scopes
+                    .iter()
+                    .rposition(|binding| &binding.prefix == prefix && &binding.uri == uri)
+                    .ok_or_else(|| {
+                        malformed(format!(
+                            "end namespace ({prefix}, {uri}) has no matching binding in scope"
+                        ))
+                    })?;
+                scopes.truncate(position);
+            }
+        }
+    }
+
+    let prefix_for = |scopes: &mut Vec<Binding>,
+                      converter: &mut AxmlConverter,
+                      uri: &str,
+                      attributes: &mut Vec<XmlAttribute>,
+                      allow_default: bool|
+     -> Result<Option<String>, Error> {
+        if let Some(prefix) = find_prefix(scopes, uri, allow_default) {
+            if !allow_default && prefix.is_empty() {
+                return Err(malformed(format!(
+                    "namespace {uri} is only bound as the default namespace, which attributes \
+                     cannot use"
+                )));
+            }
+            return Ok(Some(prefix));
+        }
+        if uri == ANDROID_RES_URI {
+            // The declaration is missing but the URI is unambiguous; add the
+            // explicit canonical binding and report it once.
+            scopes.push(Binding {
+                prefix: CANONICAL_ANDROID_PREFIX.to_owned(),
+                uri: uri.to_owned(),
+            });
+            attributes.push(XmlAttribute {
+                namespace: None,
+                prefix: Some("xmlns".to_owned()),
+                local_name: CANONICAL_ANDROID_PREFIX.to_owned(),
+                value: ManifestValue::Text(DexText::from_str_lossless(ANDROID_RES_URI)),
+            });
+            if !converter.inferred_namespace {
+                converter.inferred_namespace = true;
+                converter.diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::InferredNamespaceBinding,
+                    Severity::Warning,
+                    Stage::Manifest,
+                    format!(
+                        "the document declares no namespace binding for {ANDROID_RES_URI}; \
+                         the canonical prefix '{CANONICAL_ANDROID_PREFIX}' was added explicitly"
+                    ),
+                ));
+            }
+            return Ok(Some(CANONICAL_ANDROID_PREFIX.to_owned()));
+        }
+        Err(malformed(format!(
+            "cannot determine a prefix for namespace URI {uri}: the document declares no \
+             binding for it"
+        )))
+    };
+
+    let prefix = match &element.namespace {
+        Some(uri) => {
+            let prefix = prefix_for(scopes, converter, uri, &mut attributes, true)?;
+            // The default namespace renders without a prefix.
+            match prefix.as_deref() {
+                Some("") | None => None,
+                Some(prefix) => Some(prefix.to_owned()),
+            }
+        }
+        None => None,
+    };
+
+    for attribute in &element.attributes {
+        let attr_prefix = match &attribute.namespace {
+            Some(uri) => {
+                let found = prefix_for(scopes, converter, uri, &mut attributes, false)?;
+                match found {
+                    Some(p) if !p.is_empty() => Some(p),
+                    _ => {
+                        return Err(malformed(format!(
+                            "attribute {} is in namespace {uri} which is only bound as the \
+                             default namespace; attributes need an explicit prefix",
+                            attribute.name
+                        )))
+                    }
+                }
+            }
+            None => None,
+        };
+        let value = ManifestValue::Typed(TypedValue {
+            type_byte: attribute.value.type_byte,
+            data: attribute.value.data,
+            raw_string: attribute.raw_value.as_deref().map(DexText::from_str_lossless),
+        });
+        attributes.push(XmlAttribute {
+            namespace: attribute.namespace.clone(),
+            prefix: attr_prefix,
+            local_name: attribute.name.clone(),
+            value,
+        });
+    }
+
+    let mut children = Vec::new();
+    for child in &element.children {
+        match child {
+            axmldecoder::Node::Element(inner) => {
+                let converted =
+                    convert_element(inner, scopes, converter, limits, node_count, control)?;
+                children.push(XmlNode::Element(converted));
+            }
+            axmldecoder::Node::Cdata(cdata) => {
+                *node_count += 1;
+                if *node_count > limits.max_nodes {
+                    return Err(resource_limit(format!(
+                        "document exceeds the node limit of {}",
+                        limits.max_nodes
+                    )));
+                }
+                control.check()?;
+                children.push(XmlNode::Cdata { data: DexText::from_str_lossless(&cdata.data) });
+            }
+        }
+    }
+
+    scopes.truncate(scope_depth);
+    Ok(XmlElement {
+        namespace: element.namespace.clone(),
+        prefix,
+        local_name: element.name.clone(),
+        attributes,
+        children,
+        metadata: ElementMetadata {
+            line_number: Some(element.line_number),
+            comment: element.comment.clone(),
+            namespace_events: events,
+        },
     })
 }
 
-fn render(document: &XmlDocument) -> Result<String> {
-    let root = document
-        .get_root()
-        .as_ref()
-        .context("AndroidManifest.xml has no root element")?;
-    let mut output = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
-    render_node(root, 0, &mut output)?;
-    Ok(output)
+/// Innermost non-default prefix bound to `uri` (`allow_default` accepts the
+/// empty prefix, which only elements may use).
+fn find_prefix(scopes: &[Binding], uri: &str, allow_default: bool) -> Option<String> {
+    scopes
+        .iter()
+        .rev()
+        .find(|binding| binding.uri == uri && (allow_default || !binding.prefix.is_empty()))
+        .map(|binding| binding.prefix.clone())
 }
 
-fn render_node(node: &Node, depth: usize, output: &mut String) -> Result<()> {
-    match node {
-        Node::Cdata(cdata) => {
-            indent(depth, output);
-            output.push_str("<![CDATA[");
-            output.push_str(&cdata.get_data().replace("]]>", "]] ]]><![CDATA[>"));
-            output.push_str("]]>");
+// ---------------------------------------------------------------------------
+// Plain-XML entry (quick-xml pull reader)
+// ---------------------------------------------------------------------------
+
+struct PlainXmlBuilder {
+    declaration: Option<XmlDeclaration>,
+    prolog: Vec<Misc>,
+    epilog: Vec<Misc>,
+    stack: Vec<PlainOpenElement>,
+    scopes: Vec<Binding>,
+    root: Option<XmlElement>,
+    node_count: usize,
+    attribute_count: usize,
+}
+
+struct PlainOpenElement {
+    namespace: Option<String>,
+    prefix: Option<String>,
+    local_name: String,
+    qname: String,
+    attributes: Vec<XmlAttribute>,
+    children: Vec<XmlNode>,
+    events: Vec<NamespaceEvent>,
+}
+
+fn decode_plain_xml(
+    text: &str,
+    limits: &XmlDecodeLimits,
+    control: &OperationControl,
+) -> Result<Report<Manifest>, Error> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    let mut reader = Reader::from_str(text);
+    let config = reader.config_mut();
+    config.check_end_names = true;
+    config.check_comments = true;
+    config.expand_empty_elements = false;
+
+    let mut builder = PlainXmlBuilder {
+        declaration: None,
+        prolog: Vec::new(),
+        epilog: Vec::new(),
+        stack: Vec::new(),
+        scopes: Vec::new(),
+        root: None,
+        node_count: 0,
+        attribute_count: 0,
+    };
+    // A pending text run: quick-xml 0.42 splits text at entity references, so
+    // raw segments and reassembled `&..;` forms accumulate here and unescape
+    // once, when the run ends.
+    let mut pending_text = String::new();
+
+    loop {
+        control.check()?;
+        let event = reader
+            .read_event()
+            .map_err(|error| malformed(format!("plain XML is not well-formed: {error}")))?;
+        let is_text_like = matches!(event, Event::Text(_) | Event::GeneralRef(_));
+        if !is_text_like && !pending_text.is_empty() {
+            let text = flush_text(&mut pending_text)?;
+            push_plain_text(&mut builder, text, limits.max_nodes)?;
         }
-        Node::Element(element) => {
-            let tag = element.get_tag();
-            if tag.is_empty() {
-                bail!("binary XML contains an empty element name");
+        match event {
+            Event::Decl(decl) => {
+                if builder.declaration.is_some() || !builder.stack.is_empty() || builder.root.is_some() {
+                    return Err(malformed("XML declaration appears after the document start"));
+                }
+                let version = decl
+                    .version()
+                    .map_err(|error| malformed(format!("unreadable XML declaration: {error}")))?
+                    .to_string();
+                if version != "1.0" {
+                    return Err(unsupported_format(format!(
+                        "XML version '{version}' is outside the supported matrix; only 1.0 is accepted"
+                    )));
+                }
+                let encoding = match decl.encoding() {
+                    Some(Ok(encoding)) => {
+                        if !encoding.eq_ignore_ascii_case("utf-8") {
+                            return Err(unsupported_format(format!(
+                                "declared XML encoding '{encoding}' is outside the supported \
+                                 matrix; only UTF-8 is accepted"
+                            )));
+                        }
+                        Some(encoding.to_string())
+                    }
+                    Some(Err(error)) => {
+                        return Err(malformed(format!("unreadable encoding declaration: {error}")))
+                    }
+                    None => None,
+                };
+                let standalone = match decl.standalone() {
+                    Some(Ok(standalone)) => Some(standalone.to_string()),
+                    Some(Err(error)) => {
+                        return Err(malformed(format!("unreadable standalone declaration: {error}")))
+                    }
+                    None => None,
+                };
+                builder.declaration =
+                    Some(XmlDeclaration { version, encoding, standalone });
             }
-            indent(depth, output);
-            write!(output, "<{tag}")?;
-            for (name, value) in element.get_attributes() {
-                write!(output, " {name}=\"")?;
-                escape_xml(value, true, output);
-                output.push('"');
+            Event::DocType(_) => {
+                return Err(unsupported_format(
+                    "DTD/DOCTYPE declarations are rejected: no DTD subset is processed and no \
+                     external entity or file access of any kind is performed",
+                ));
             }
-            if element.get_children().is_empty() {
-                output.push_str(" />");
-                return Ok(());
+            Event::PI(pi) => {
+                let target = pi.target().to_owned();
+                // The whitespace separating the target from the content is
+                // not part of the content (XML 1.0 PI production).
+                let data = pi
+                    .content()
+                    .trim_start_matches([' ', '\t', '\r', '\n'])
+                    .to_owned();
+                if target.eq_ignore_ascii_case("xml") {
+                    return Err(malformed("reserved processing-instruction target 'xml'"));
+                }
+                if !is_valid_xml_name(&target) {
+                    return Err(malformed(format!("invalid processing-instruction target {target:?}")));
+                }
+                builder.node_count += 1;
+                check_node_limit(builder.node_count, limits)?;
+                let node = Misc::Pi { target, data };
+                place_misc(&mut builder, node)?;
             }
-            output.push('>');
-            for child in element.get_children() {
-                output.push('\n');
-                render_node(child, depth + 1, output)?;
+            Event::Comment(comment) => {
+                let text = comment.as_ref().to_owned();
+                if text.contains("--") || text.ends_with('-') {
+                    return Err(malformed("comment content contains a forbidden '--' sequence"));
+                }
+                builder.node_count += 1;
+                check_node_limit(builder.node_count, limits)?;
+                let node = Misc::Comment(text);
+                place_misc(&mut builder, node)?;
             }
-            output.push('\n');
-            indent(depth, output);
-            write!(output, "</{tag}>")?;
+            Event::Text(text) => {
+                pending_text.push_str(&text.xml10_content());
+            }
+            Event::GeneralRef(reference) => {
+                pending_text.push('&');
+                pending_text.push_str(reference.as_ref());
+                pending_text.push(';');
+            }
+            Event::CData(cdata) => {
+                builder.node_count += 1;
+                check_node_limit(builder.node_count, limits)?;
+                if let Some(open) = builder.stack.last_mut() {
+                    open.children
+                        .push(XmlNode::Cdata { data: DexText::from_str_lossless(cdata.as_ref()) });
+                } else {
+                    return Err(malformed(
+                        "CDATA is not allowed outside the root element",
+                    ));
+                }
+            }
+            Event::Start(start) => {
+                let element = open_plain_element(&mut builder, &start, limits)?;
+                builder.stack.push(element);
+                if builder.stack.len() > limits.max_depth {
+                    return Err(resource_limit(format!(
+                        "document nesting exceeds the depth limit of {}",
+                        limits.max_depth
+                    )));
+                }
+            }
+            Event::Empty(start) => {
+                let element = open_plain_element(&mut builder, &start, limits)?;
+                close_plain_element(&mut builder, element)?;
+            }
+            Event::End(end) => {
+                let open = builder.stack.pop().ok_or_else(|| {
+                    malformed(format!(
+                        "end tag </{}> without a matching start tag",
+                        end.as_ref()
+                    ))
+                })?;
+                if open.qname != end.as_ref() {
+                    return Err(malformed(format!(
+                        "end tag </{}> does not match the open start tag <{}>",
+                        end.as_ref(),
+                        open.qname
+                    )));
+                }
+                let element = finish_plain_element(open);
+                attach_plain_element(&mut builder, element)?;
+            }
+            Event::Eof => break,
+        }
+    }
+    if !pending_text.is_empty() {
+        let text = flush_text(&mut pending_text)?;
+        push_plain_text(&mut builder, text, limits.max_nodes)?;
+    }
+    if !builder.stack.is_empty() {
+        return Err(malformed("unclosed element at the end of the document"));
+    }
+    let root = builder.root.take().ok_or_else(|| malformed("plain XML has no root element"))?;
+    control.check()?;
+    Ok(Report::new(
+        Manifest {
+            declaration: builder.declaration.take(),
+            prolog: builder.prolog,
+            root,
+            epilog: builder.epilog,
+            metadata: ManifestMetadata {
+                source: Some(ManifestSource::PlainXml),
+                string_styles: Vec::new(),
+                resource_map: Vec::new(),
+            },
+            raw_bytes: None,
+        },
+        Vec::new(),
+        crate::model::OperationStats::default(),
+    ))
+}
+
+fn check_node_limit(count: usize, limits: &XmlDecodeLimits) -> Result<(), Error> {
+    if count > limits.max_nodes {
+        return Err(resource_limit(format!(
+            "document exceeds the node limit of {}",
+            limits.max_nodes
+        )));
+    }
+    Ok(())
+}
+
+/// Unescapes one accumulated text run; only the predefined entities and
+/// numeric character references are legal without a DTD.
+fn flush_text(pending: &mut String) -> Result<DexText, Error> {
+    let text = quick_xml::escape::unescape(pending)
+        .map_err(|error| malformed(format!("undefined entity or bad character reference: {error}")))?
+        .into_owned();
+    pending.clear();
+    Ok(DexText::from_str_lossless(&text))
+}
+
+fn push_plain_text(builder: &mut PlainXmlBuilder, text: DexText, max_nodes: usize) -> Result<(), Error> {
+    let is_whitespace =
+        text.as_str().is_some_and(|text| text.chars().all(char::is_whitespace));
+    if builder.stack.last().is_some() && is_whitespace {
+        // Layout whitespace between an element's tags is ignorable: the AXML
+        // twin never carries it, so the domain model does not either. (Text
+        // with any non-whitespace content, including leading/trailing
+        // whitespace around it, is kept verbatim.)
+        return Ok(());
+    }
+    builder.node_count += 1;
+    if builder.node_count > max_nodes {
+        return Err(resource_limit(format!(
+            "document exceeds the node limit of {max_nodes}"
+        )));
+    }
+    if let Some(open) = builder.stack.last_mut() {
+        open.children.push(XmlNode::Text { text });
+        Ok(())
+    } else if is_whitespace {
+        // Whitespace between prolog/epilog items is legal Misc filler.
+        let misc = Misc::Text(text);
+        place_misc(builder, misc)
+    } else {
+        Err(malformed("text content outside the root element"))
+    }
+}
+
+/// Places a comment/PI/whitespace item in the prolog (before the root), the
+/// current element, or the epilog.
+fn place_misc(builder: &mut PlainXmlBuilder, node: Misc) -> Result<(), Error> {
+    if let Some(open) = builder.stack.last_mut() {
+        let node = match node {
+            Misc::Comment(text) => XmlNode::Comment { text },
+            Misc::Pi { target, data } => XmlNode::Pi { target, data },
+            Misc::Text(text) => XmlNode::Text { text },
+        };
+        open.children.push(node);
+        Ok(())
+    } else if builder.root.is_none() {
+        builder.prolog.push(node);
+        Ok(())
+    } else {
+        builder.epilog.push(node);
+        Ok(())
+    }
+}
+
+fn open_plain_element(
+    builder: &mut PlainXmlBuilder,
+    start: &quick_xml::events::BytesStart<'_>,
+    limits: &XmlDecodeLimits,
+) -> Result<PlainOpenElement, Error> {
+    builder.node_count += 1;
+    check_node_limit(builder.node_count, limits)?;
+    if builder.stack.is_empty() && builder.root.is_some() {
+        return Err(malformed("document has a second root element"));
+    }
+    let qname = start.name().as_ref().to_owned();
+    let (local_name, prefix) = split_qname(&qname);
+    if !is_valid_xml_name(local_name) {
+        return Err(malformed(format!("invalid element name {qname:?}")));
+    }
+    let mut open = PlainOpenElement {
+        namespace: None,
+        prefix: prefix.map(str::to_owned),
+        local_name: local_name.to_owned(),
+        qname,
+        attributes: Vec::new(),
+        children: Vec::new(),
+        events: Vec::new(),
+    };
+    // Element bindings from xmlns attributes enter scope for this element.
+    let mut new_bindings: Vec<Binding> = Vec::new();
+    for attribute in start.attributes().with_checks(true) {
+        let attribute =
+            attribute.map_err(|error| malformed(format!("malformed attribute: {error}")))?;
+        let key = attribute.key.as_ref();
+        let value = attribute
+            .normalized_value(quick_xml::XmlVersion::Explicit1_0)
+            .map_err(|error| malformed(format!("malformed attribute value: {error}")))?
+            .into_owned();
+        if open.attributes.iter().any(|existing| {
+            attribute_prefix_of(key) == existing.prefix && local_of(key) == existing.local_name
+        }) {
+            return Err(malformed(format!("duplicate attribute {key:?}")));
+        }
+        if key == "xmlns" {
+            new_bindings.push(Binding { prefix: String::new(), uri: value.clone() });
+            open.events.push(NamespaceEvent::Start { prefix: String::new(), uri: value.clone() });
+            open.attributes.push(XmlAttribute {
+                namespace: None,
+                prefix: None,
+                local_name: "xmlns".to_owned(),
+                value: ManifestValue::Text(DexText::from_str_lossless(&value)),
+            });
+        } else if let Some(bound_prefix) = key.strip_prefix("xmlns:") {
+            if !is_valid_xml_name(bound_prefix) {
+                return Err(malformed(format!("invalid namespace prefix in {key:?}")));
+            }
+            new_bindings.push(Binding { prefix: bound_prefix.to_owned(), uri: value.clone() });
+            open.events
+                .push(NamespaceEvent::Start { prefix: bound_prefix.to_owned(), uri: value.clone() });
+            open.attributes.push(XmlAttribute {
+                namespace: None,
+                prefix: Some("xmlns".to_owned()),
+                local_name: bound_prefix.to_owned(),
+                value: ManifestValue::Text(DexText::from_str_lossless(&value)),
+            });
+        } else {
+            let (attr_local, attr_prefix) = split_qname(key);
+            if let Some(prefix) = attr_prefix
+                && !is_valid_xml_name(prefix)
+            {
+                return Err(malformed(format!("invalid attribute name {key:?}")));
+            }
+            if !is_valid_xml_name(attr_local) {
+                return Err(malformed(format!("invalid attribute name {key:?}")));
+            }
+            open.attributes.push(XmlAttribute {
+                namespace: None,
+                prefix: attr_prefix.map(str::to_owned),
+                local_name: attr_local.to_owned(),
+                value: ManifestValue::Text(DexText::from_str_lossless(&value)),
+            });
+        }
+        builder.attribute_count += 1;
+        if builder.attribute_count > limits.max_attributes {
+            return Err(resource_limit(format!(
+                "document exceeds the attribute limit of {}",
+                limits.max_attributes
+            )));
+        }
+    }
+    open.namespace = open
+        .prefix
+        .as_deref()
+        .and_then(|prefix| find_uri(&builder.scopes, prefix).or_else(|| find_uri(&new_bindings, prefix)));
+    builder.scopes.append(&mut new_bindings);
+    // All of this element's xmlns declarations apply to its own prefixed
+    // names too, wherever in the tag they appeared; resolve them now that
+    // the bindings are in scope. An undeclared prefix keeps `namespace: None`
+    // (the document stays well-formed XML, just not namespace-well-formed).
+    for attribute in &mut open.attributes {
+        if let Some(prefix) = attribute.prefix.as_deref()
+            && prefix != "xmlns"
+            && attribute.namespace.is_none()
+        {
+            attribute.namespace = find_uri(&builder.scopes, prefix);
+        }
+    }
+    Ok(open)
+}
+
+fn find_uri(scopes: &[Binding], prefix: &str) -> Option<String> {
+    scopes
+        .iter()
+        .rev()
+        .find(|binding| binding.prefix == prefix)
+        .map(|binding| binding.uri.clone())
+}
+
+fn split_qname(qname: &str) -> (&str, Option<&str>) {
+    match qname.split_once(':') {
+        Some((prefix, local)) => (local, Some(prefix)),
+        None => (qname, None),
+    }
+}
+
+fn local_of(key: &str) -> &str {
+    split_qname(key).0
+}
+
+fn attribute_prefix_of(key: &str) -> Option<String> {
+    split_qname(key).1.map(str::to_owned)
+}
+
+fn close_plain_element(builder: &mut PlainXmlBuilder, open: PlainOpenElement) -> Result<(), Error> {
+    let element = finish_plain_element(open);
+    attach_plain_element(builder, element)
+}
+
+fn finish_plain_element(open: PlainOpenElement) -> XmlElement {
+    XmlElement {
+        namespace: open.namespace,
+        prefix: open.prefix,
+        local_name: open.local_name,
+        attributes: open.attributes,
+        children: open.children,
+        metadata: ElementMetadata {
+            line_number: None,
+            comment: None,
+            namespace_events: open.events,
+        },
+    }
+}
+
+fn attach_plain_element(builder: &mut PlainXmlBuilder, element: XmlElement) -> Result<(), Error> {
+    // Each xmlns declaration on this element pushed one binding.
+    let pushed = element.metadata.namespace_events.len();
+    match builder.stack.last_mut() {
+        Some(parent) => parent.children.push(XmlNode::Element(element)),
+        None => builder.root = Some(element),
+    }
+    let target = builder.scopes.len().saturating_sub(pushed);
+    builder.scopes.truncate(target);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// XML serialization
+// ---------------------------------------------------------------------------
+
+/// Output writer with a hard byte budget and cooperative cancellation
+/// checkpoints every 64 KiB.
+struct BoundedWriter<'a> {
+    out: String,
+    max: usize,
+    since_check: usize,
+    control: &'a OperationControl,
+}
+
+const CONTROL_CHECK_INTERVAL: usize = 64 * 1024;
+
+impl BoundedWriter<'_> {
+    fn new(max: usize, control: &OperationControl) -> BoundedWriter<'_> {
+        BoundedWriter { out: String::new(), max, since_check: 0, control }
+    }
+
+    fn push_str(&mut self, chunk: &str) -> Result<(), Error> {
+        if self.out.len().saturating_add(chunk.len()) > self.max {
+            return Err(resource_limit(format!(
+                "serialized XML exceeds the output limit of {} bytes",
+                self.max
+            )));
+        }
+        self.since_check += chunk.len();
+        if self.since_check >= CONTROL_CHECK_INTERVAL {
+            self.control.check()?;
+            self.since_check = 0;
+        }
+        self.out.push_str(chunk);
+        Ok(())
+    }
+
+    fn indent(&mut self, depth: usize) -> Result<(), Error> {
+        for _ in 0..depth {
+            self.push_str("    ")?;
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> String {
+        self.out
+    }
+}
+
+/// Renders one prolog/epilog item; returns whether it contributed content
+/// (whitespace text only pins document position and writes nothing). When
+/// `pending_separator` is set the item starts on a fresh line.
+fn render_misc(
+    item: &Misc,
+    depth: usize,
+    writer: &mut BoundedWriter<'_>,
+    pending_separator: bool,
+) -> Result<bool, Error> {
+    match item {
+        Misc::Text(text) => {
+            let text = text_string(text)?;
+            if !text.chars().all(char::is_whitespace) {
+                return Err(malformed("non-whitespace text outside the root element"));
+            }
+            Ok(false)
+        }
+        Misc::Comment(text) => {
+            if pending_separator {
+                writer.push_str("\n")?;
+            }
+            writer.indent(depth)?;
+            write_comment(text, writer)?;
+            Ok(true)
+        }
+        Misc::Pi { target, data } => {
+            if pending_separator {
+                writer.push_str("\n")?;
+            }
+            writer.indent(depth)?;
+            if !is_valid_xml_name(target) || target.eq_ignore_ascii_case("xml") {
+                return Err(malformed(format!("invalid processing-instruction target {target:?}")));
+            }
+            writer.push_str("<?")?;
+            write_verbatim(target, writer)?;
+            writer.push_str(" ")?;
+            write_verbatim(data, writer)?;
+            writer.push_str("?>")?;
+            Ok(true)
+        }
+    }
+}
+
+/// Comment content: raw text, characters validated, no escaping (comments
+/// have no entities and escaping would change their content).
+fn write_comment(text: &str, writer: &mut BoundedWriter<'_>) -> Result<(), Error> {
+    if text.contains("--") || text.ends_with('-') {
+        return Err(malformed("comment content contains a forbidden '--' sequence"));
+    }
+    writer.push_str("<!--")?;
+    write_verbatim(text, writer)?;
+    writer.push_str("-->")
+}
+
+/// Validates every character and writes the text unchanged.
+fn write_verbatim(text: &str, writer: &mut BoundedWriter<'_>) -> Result<(), Error> {
+    for character in text.chars() {
+        check_xml_char(character)?;
+        writer.push_char(character)?;
+    }
+    Ok(())
+}
+
+/// `Err` only for unpaired surrogates, which the decoders reject; the model
+/// can only hold them if constructed by hand.
+fn text_string(text: &DexText) -> Result<String, Error> {
+    text.as_str()
+        .ok_or_else(|| Error::unsupported_encoding("text contains an unpaired UTF-16 surrogate"))
+}
+
+fn render_element(
+    element: &XmlElement,
+    depth: usize,
+    writer: &mut BoundedWriter<'_>,
+    options: &XmlRenderOptions,
+) -> Result<(), Error> {
+    if depth + 1 > options.max_depth {
+        return Err(resource_limit(format!(
+            "serialized XML nesting exceeds the render depth limit of {}",
+            options.max_depth
+        )));
+    }
+    writer.indent(depth)?;
+    render_element_inline(element, depth, writer, options)
+}
+
+/// The element body without leading indentation; mixed content runs inline so
+/// indentation can never change text (interfaces §1).
+fn render_element_inline(
+    element: &XmlElement,
+    depth: usize,
+    writer: &mut BoundedWriter<'_>,
+    options: &XmlRenderOptions,
+) -> Result<(), Error> {
+    if depth + 1 > options.max_depth {
+        return Err(resource_limit(format!(
+            "serialized XML nesting exceeds the render depth limit of {}",
+            options.max_depth
+        )));
+    }
+    writer.push_str("<")?;
+    write_qualified_name(element.prefix.as_deref(), &element.local_name, writer)?;
+    for attribute in &element.attributes {
+        writer.push_str(" ")?;
+        write_qualified_name(attribute.prefix.as_deref(), &attribute.local_name, writer)?;
+        writer.push_str("=\"")?;
+        let value = attribute.value.as_text().ok_or_else(|| {
+            Error::unsupported_encoding("attribute value contains an unpaired UTF-16 surrogate")
+        })?;
+        escape_attribute_value(&value, writer)?;
+        writer.push_str("\"")?;
+    }
+    if element.children.is_empty() {
+        writer.push_str(" />")?;
+        return Ok(());
+    }
+    writer.push_str(">")?;
+    // Mixed content: any non-whitespace text or CDATA keeps the element
+    // inline, so indentation can never change text.
+    let mixed = element.children.iter().any(|child| match child {
+        XmlNode::Text { text } => !text
+            .as_str()
+            .map(|text| text.chars().all(char::is_whitespace))
+            .unwrap_or(false),
+        XmlNode::Cdata { .. } => true,
+        XmlNode::Comment { .. } | XmlNode::Pi { .. } | XmlNode::Element(_) => false,
+    });
+    if mixed {
+        for child in &element.children {
+            render_child_inline(child, depth, writer, options)?;
+        }
+    } else {
+        for child in &element.children {
+            match child {
+                XmlNode::Element(inner) => {
+                    writer.push_str("\n")?;
+                    render_element(inner, depth + 1, writer, options)?;
+                }
+                XmlNode::Text { .. } => {}
+                XmlNode::Comment { text } => {
+                    writer.push_str("\n")?;
+                    writer.indent(depth + 1)?;
+                    write_comment(text, writer)?;
+                }
+                XmlNode::Pi { target, data } => {
+                    writer.push_str("\n")?;
+                    writer.indent(depth + 1)?;
+                    writer.push_str("<?")?;
+                    write_verbatim(target, writer)?;
+                    writer.push_str(" ")?;
+                    write_verbatim(data, writer)?;
+                    writer.push_str("?>")?;
+                }
+                XmlNode::Cdata { data } => {
+                    writer.push_str("\n")?;
+                    writer.indent(depth + 1)?;
+                    write_cdata(data, writer)?;
+                }
+            }
+        }
+        writer.push_str("\n")?;
+        writer.indent(depth)?;
+    }
+    writer.push_str("</")?;
+    write_qualified_name(element.prefix.as_deref(), &element.local_name, writer)?;
+    writer.push_str(">")?;
+    Ok(())
+}
+
+fn render_child_inline(
+    child: &XmlNode,
+    depth: usize,
+    writer: &mut BoundedWriter<'_>,
+    options: &XmlRenderOptions,
+) -> Result<(), Error> {
+    match child {
+        XmlNode::Text { text } => {
+            let text = text_string(text)?;
+            escape_text(&text, writer)?;
+        }
+        XmlNode::Cdata { data } => write_cdata(data, writer)?,
+        XmlNode::Comment { text } => write_comment(text, writer)?,
+        XmlNode::Pi { target, data } => {
+            writer.push_str("<?")?;
+            write_verbatim(target, writer)?;
+            writer.push_str(" ")?;
+            write_verbatim(data, writer)?;
+            writer.push_str("?>")?;
+        }
+        XmlNode::Element(inner) => render_element_inline(inner, depth + 1, writer, options)?,
+    }
+    Ok(())
+}
+
+fn write_qualified_name(prefix: Option<&str>, local: &str, writer: &mut BoundedWriter<'_>) -> Result<(), Error> {
+    // Prefix and local part are each validated as XML `Name`s; the combined
+    // `prefix:local` form is exactly one colon apart, which the Name
+    // production itself forbids but a qualified name requires.
+    if !is_valid_xml_name(local) {
+        return Err(malformed(format!("invalid XML name {local:?}")));
+    }
+    let name = match prefix {
+        Some(prefix) if !prefix.is_empty() => {
+            if !is_valid_xml_name(prefix) {
+                return Err(malformed(format!("invalid XML name {prefix:?}")));
+            }
+            format!("{prefix}:{local}")
+        }
+        _ => local.to_owned(),
+    };
+    writer.push_str(&name)
+}
+
+fn write_cdata(data: &DexText, writer: &mut BoundedWriter<'_>) -> Result<(), Error> {
+    let data = data.as_str().ok_or_else(|| {
+        Error::unsupported_encoding("CDATA contains an unpaired UTF-16 surrogate")
+    })?;
+    writer.push_str("<![CDATA[")?;
+    // Split `]]>` without inserting characters: `]]]]><![CDATA[>`.
+    let mut rest = data.as_str();
+    while let Some(at) = rest.find("]]>") {
+        writer.push_str(&rest[..at + 2])?;
+        writer.push_str("]]>")?;
+        writer.push_str("<![CDATA[")?;
+        rest = &rest[at + 2..];
+    }
+    writer.push_str(rest)?;
+    writer.push_str("]]>")
+}
+
+/// Validates every character and escapes text content. `\r` becomes a
+/// character reference so a round trip cannot normalize it away.
+fn escape_text(text: &str, writer: &mut BoundedWriter<'_>) -> Result<(), Error> {
+    for character in text.chars() {
+        check_xml_char(character)?;
+        match character {
+            '&' => writer.push_str("&amp;")?,
+            '<' => writer.push_str("&lt;")?,
+            '>' => writer.push_str("&gt;")?,
+            '\r' => writer.push_str("&#13;")?,
+            _ => writer.push_char(character)?,
         }
     }
     Ok(())
 }
 
-fn indent(depth: usize, output: &mut String) {
-    for _ in 0..depth {
-        output.push_str("    ");
+/// Attribute values additionally escape the quotes and the whitespace that
+/// attribute-value normalization would otherwise rewrite.
+fn escape_attribute_value(value: &str, writer: &mut BoundedWriter<'_>) -> Result<(), Error> {
+    for character in value.chars() {
+        check_xml_char(character)?;
+        match character {
+            '&' => writer.push_str("&amp;")?,
+            '<' => writer.push_str("&lt;")?,
+            '>' => writer.push_str("&gt;")?,
+            '"' => writer.push_str("&quot;")?,
+            '\'' => writer.push_str("&apos;")?,
+            '\r' => writer.push_str("&#13;")?,
+            '\n' => writer.push_str("&#10;")?,
+            '\t' => writer.push_str("&#9;")?,
+            _ => writer.push_char(character)?,
+        }
+    }
+    Ok(())
+}
+
+impl BoundedWriter<'_> {
+    fn push_char(&mut self, character: char) -> Result<(), Error> {
+        let mut buffer = [0u8; 4];
+        self.push_str(character.encode_utf8(&mut buffer))
     }
 }
 
-fn escape_xml(value: &str, attribute: bool, output: &mut String) {
-    for ch in value.chars() {
-        match ch {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '"' if attribute => output.push_str("&quot;"),
-            '\'' if attribute => output.push_str("&apos;"),
-            _ => output.push(ch),
-        }
+fn check_xml_char(character: char) -> Result<(), Error> {
+    let code = character as u32;
+    let allowed = matches!(code, 0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD)
+        || (0x10000..=0x10FFFF).contains(&code);
+    if allowed {
+        Ok(())
+    } else {
+        Err(Error::unsupported_encoding(format!(
+            "character U+{code:04X} cannot be represented in XML"
+        )))
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Builds a minimal binary AndroidManifest.xml: a root element with a
-    /// namespaced attribute and a value that needs escaping, a nested element and
-    /// a CDATA child whose text contains `]]>`.
-    ///
-    /// Layout follows the binary XML chunks `axmldecoder` reads: a chunk header is
-    /// `type, headerSize, size`, a UTF-8 string pool stores `[utf16 len][utf8 len]
-    /// bytes 0` per string, and every XML node extends the 8-byte chunk header with
-    /// a line number and a comment index.
-    fn binary_manifest() -> Vec<u8> {
-        binary_manifest_with_cdata("a ]]> b")
+/// XML 1.0 `Name` production (fourth-edition ranges), sufficient for the
+/// names the decoders accept and the renderer emits.
+fn is_valid_xml_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    if !is_name_start_char(first) {
+        return false;
     }
+    characters.all(is_name_char)
+}
 
-    fn binary_manifest_with_cdata(cdata: &str) -> Vec<u8> {
-        const ANDROID_URI: &str = "http://schemas.android.com/apk/res/android";
-        const PACKAGE: &str = "com.example&app\"x";
-        let strings = vec![
-            "manifest",
-            ANDROID_URI,
-            "package",
-            PACKAGE,
-            "versionCode",
-            "42",
-            "application",
-            cdata,
-            "icon",
-            "protectionLevel",
-            "textSize",
-            "lineSpacingMultiplier",
-            "colorAccent",
-            "debuggable",
-            "theme",
-        ];
-        let index = |needle: &str| strings.iter().position(|s| *s == needle).unwrap() as u32;
+fn is_name_start_char(character: char) -> bool {
+    matches!(character,
+        'A'..='Z' | '_' | 'a'..='z' | '\u{C0}'..='\u{D6}' | '\u{D8}'..='\u{F6}'
+        | '\u{F8}'..='\u{2FF}' | '\u{370}'..='\u{37D}' | '\u{37F}'..='\u{1FFF}'
+        | '\u{200C}'..='\u{200D}' | '\u{2070}'..='\u{218F}' | '\u{2C00}'..='\u{2FEF}'
+        | '\u{3001}'..='\u{D7FF}' | '\u{F900}'..='\u{FDCF}' | '\u{FDF0}'..='\u{FFFD}'
+        | '\u{10000}'..='\u{EFFFF}')
+}
 
-        fn start_chunk(out: &mut Vec<u8>, typ: u16, header_size: u16) -> usize {
-            push_u16(out, typ);
-            push_u16(out, header_size);
-            push_u32(out, 0);
-            out.len() - 4
-        }
+fn is_name_char(character: char) -> bool {
+    is_name_start_char(character)
+        || matches!(character,
+            '-' | '.' | '0'..='9' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}')
+}
 
-        fn finish_chunk(out: &mut [u8], size_pos: usize) {
-            let size = (out.len() - (size_pos - 4)) as u32;
-            out[size_pos..size_pos + 4].copy_from_slice(&size.to_le_bytes());
-        }
+// ---------------------------------------------------------------------------
+// Legacy string bridge (A07 deletes this)
+// ---------------------------------------------------------------------------
 
-        fn push_u16(out: &mut Vec<u8>, value: u16) {
-            out.extend_from_slice(&value.to_le_bytes());
-        }
-
-        fn push_u32(out: &mut Vec<u8>, value: u32) {
-            out.extend_from_slice(&value.to_le_bytes());
-        }
-
-        /// One typed value: `size, res0, type, data`.
-        fn push_value(out: &mut Vec<u8>, value_type: u8, data: u32) {
-            push_u16(out, 8);
-            out.push(0);
-            out.push(value_type);
-            push_u32(out, data);
-        }
-
-        fn push_node_header(out: &mut Vec<u8>, typ: u16) -> usize {
-            let size_pos = start_chunk(out, typ, 16);
-            push_u32(out, 1); // line number
-            push_u32(out, u32::MAX); // comment: none
-            size_pos
-        }
-
-        fn push_element(out: &mut Vec<u8>, name: u32, attributes: &[(u32, u32, u8, u32)]) -> usize {
-            let size_pos = push_node_header(out, 0x0102);
-            push_u32(out, u32::MAX); // element namespace: none
-            push_u32(out, name);
-            push_u16(out, 20); // attribute_start
-            push_u16(out, 20); // attribute_size
-            push_u16(out, attributes.len() as u16);
-            push_u16(out, 0); // id_index
-            push_u16(out, 0); // class_index
-            push_u16(out, 0); // style_index
-            for (ns, name, value_type, data) in attributes {
-                push_u32(out, *ns);
-                push_u32(out, *name);
-                push_u32(out, u32::MAX); // raw value: none
-                push_value(out, *value_type, *data);
-            }
-            size_pos
-        }
-
-        // String pool.
-        let mut pool = Vec::new();
-        let size_pos = start_chunk(&mut pool, 0x0001, 28);
-        push_u32(&mut pool, strings.len() as u32);
-        push_u32(&mut pool, 0); // style count: the decoder requires zero
-        push_u32(&mut pool, 0x0000_0100); // UTF-8 flag
-        push_u32(&mut pool, 28 + 4 * strings.len() as u32); // strings start
-        push_u32(&mut pool, 0); // style start
-        let mut data = Vec::new();
-        let mut offsets = Vec::new();
-        for string in &strings {
-            offsets.push(data.len() as u32);
-            // AOSP writes a length as one byte, or as two when the high bit of the
-            // first marks the extended form; both the UTF-16 and the byte length
-            // use whichever form they need.
-            for length in [string.chars().count(), string.len()] {
-                if length >= 0x80 {
-                    data.push(0x80 | (length >> 8) as u8);
-                }
-                data.push(length as u8);
-            }
-            data.extend_from_slice(string.as_bytes());
-            data.push(0);
-        }
-        for offset in &offsets {
-            push_u32(&mut pool, *offset);
-        }
-        pool.extend_from_slice(&data);
-        while pool.len() % 4 != 0 {
-            pool.push(0);
-        }
-        finish_chunk(&mut pool, size_pos);
-
-        // Empty resource map: attribute names here are strings, not resource ids.
-        let mut map = Vec::new();
-        let size_pos = start_chunk(&mut map, 0x0180, 8);
-        finish_chunk(&mut map, size_pos);
-
-        // document nodes
-        let mut nodes = Vec::new();
-        let size_pos = push_element(
-            &mut nodes,
-            index("manifest"),
-            &[
-                (u32::MAX, index("package"), 0x03, index(PACKAGE)),
-                (index(ANDROID_URI), index("versionCode"), 0x10, 42),
-                (index(ANDROID_URI), index("icon"), 0x01, 0x7F0D_0001),
-                (
-                    index(ANDROID_URI),
-                    index("protectionLevel"),
-                    0x11,
-                    0x4000_3FB4,
-                ),
-                (index(ANDROID_URI), index("textSize"), 0x05, (16 << 8) | 1),
-                (
-                    index(ANDROID_URI),
-                    index("lineSpacingMultiplier"),
-                    0x04,
-                    0x4000_0000,
-                ),
-                (index(ANDROID_URI), index("colorAccent"), 0x1c, 0xFF11_2233),
-                (index(ANDROID_URI), index("debuggable"), 0x12, 1),
-                (index(ANDROID_URI), index("theme"), 0x01, 0x0103_0007),
-            ],
-        );
-        finish_chunk(&mut nodes, size_pos);
-        let size_pos = push_element(&mut nodes, index("application"), &[]);
-        finish_chunk(&mut nodes, size_pos);
-        let size_pos = push_node_header(&mut nodes, 0x0104);
-        push_u32(&mut nodes, index(cdata));
-        push_value(&mut nodes, 0x03, index(cdata));
-        finish_chunk(&mut nodes, size_pos);
-        for _ in 0..2 {
-            let size_pos = push_node_header(&mut nodes, 0x0103);
-            push_u32(&mut nodes, u32::MAX);
-            push_u32(&mut nodes, u32::MAX);
-            finish_chunk(&mut nodes, size_pos);
-        }
-
-        let mut out = Vec::new();
-        let size_pos = start_chunk(&mut out, 0x0003, 8);
-        out.extend_from_slice(&pool);
-        out.extend_from_slice(&map);
-        out.extend_from_slice(&nodes);
-        finish_chunk(&mut out, size_pos);
-        out
-    }
-
-    #[test]
-    fn decodes_binary_axml_with_escaping_and_indentation() {
-        let rendered = decode(&binary_manifest()).unwrap();
-        assert_eq!(
-            rendered,
-            concat!(
-                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n",
-                "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"",
-                " package=\"com.example&amp;app&quot;x\" android:versionCode=\"42\"",
-                " android:icon=\"@7F0D0001\" android:protectionLevel=\"0x40003FB4\"",
-                " android:textSize=\"16.000000dip\" android:lineSpacingMultiplier=\"2.000000\"",
-                " android:colorAccent=\"#FF112233\" android:debuggable=\"true\"",
-                " android:theme=\"@android:01030007\">\n",
-                "    <application>\n",
-                "        <![CDATA[a ]] ]]><![CDATA[> b]]>\n",
-                "    </application>\n",
-                "</manifest>",
-            )
-        );
-    }
-
-    #[test]
-    fn rejects_truncated_binary_axml_instead_of_aborting() {
-        // The decoder unwraps its own reads, and the release profile aborts on
-        // panic, so this has to be caught before it is handed over.
-        let mut data = binary_manifest();
-        data.truncate(data.len() / 2);
-        let error = format!("{:#}", decode(&data).unwrap_err());
-        assert!(
-            error.contains("runs past the end of the input"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn renders_every_typed_value_like_android_tooling() {
-        // The vendored decoder formats typed values; the forms mirror Androguard's
-        // `format_value`, which is what the reference implementation prints.
-        let rendered = decode(&binary_manifest()).unwrap();
-        for expected in [
-            "package=\"com.example&amp;app&quot;x\"",
-            "android:versionCode=\"42\"",
-            "android:icon=\"@7F0D0001\"",
-            "android:protectionLevel=\"0x40003FB4\"",
-            "android:textSize=\"16.000000dip\"",
-            "android:lineSpacingMultiplier=\"2.000000\"",
-            "android:colorAccent=\"#FF112233\"",
-            "android:debuggable=\"true\"",
-            "android:theme=\"@android:01030007\"",
-        ] {
-            assert!(
-                rendered.contains(expected),
-                "missing {expected} in {rendered}"
-            );
-        }
-        assert!(
-            !rendered.contains("ResourceValueType::"),
-            "placeholder leaked: {rendered}"
-        );
-    }
-
-    #[test]
-    fn rejects_a_document_whose_first_node_is_cdata() {
-        // A CDATA node outside any element used to reach an unwrap inside the
-        // vendored decoder; the patch turns it into a parse error.
-        let mut data = binary_manifest();
-        let pool = 8;
-        let pool_size = u32::from_le_bytes(data[pool + 4..pool + 8].try_into().unwrap()) as usize;
-        let map = pool + pool_size;
-        let map_size = u32::from_le_bytes(data[map + 4..map + 8].try_into().unwrap()) as usize;
-        let first_node = map + map_size;
-        data[first_node..first_node + 2].copy_from_slice(&0x0104u16.to_le_bytes());
-        data[first_node + 16..first_node + 20].copy_from_slice(&0u32.to_le_bytes());
-        data[first_node + 20..first_node + 22].copy_from_slice(&8u16.to_le_bytes());
-        data[first_node + 22] = 0;
-        data[first_node + 23] = 0x03;
-        data[first_node + 24..first_node + 28].copy_from_slice(&0u32.to_le_bytes());
-        // Keep only this node: the decoder reads the whole node list before building
-        // the tree, so a misaligned tail would hide the case under test.
-        let end_of_document = first_node + 28;
-        data[4..8].copy_from_slice(&(end_of_document as u32).to_le_bytes());
-        data.truncate(end_of_document);
-        let error = format!("{:#}", decode(&data).unwrap_err());
-        assert!(
-            error.contains("binary Android XML"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn decoded_manifest_carries_no_decoder_placeholders() {
-        let rendered = decode(&binary_manifest()).unwrap();
-        assert!(
-            rendered.contains("android:icon=\"@7F0D0001\""),
-            "unexpected manifest: {rendered}"
-        );
-        assert!(
-            !rendered.contains("ResourceValueType::"),
-            "placeholder leaked: {rendered}"
-        );
-    }
-
-    #[test]
-    fn decodes_strings_with_extended_lengths() {
-        // A 200-byte string is written with the two-byte length form, which the
-        // vendored decoder implements; upstream axmldecoder panicked on it.
-        let long = "x".repeat(200);
-        let rendered = decode(&binary_manifest_with_cdata(&long)).unwrap();
-        assert!(
-            rendered.contains(&long),
-            "long string missing from: {rendered}"
-        );
-    }
-
-    #[test]
-    fn rejects_binary_axml_with_a_styled_string_pool() {
-        // The decoder asserts style_count == 0; a crafted pool must be an error.
-        let mut data = binary_manifest();
-        let pool = 8; // the document chunk header comes first
-        data[pool + 12..pool + 16].copy_from_slice(&1u32.to_le_bytes());
-        let error = format!("{:#}", decode(&data).unwrap_err());
-        assert!(
-            error.contains("styles is not supported"),
-            "unexpected error: {error}"
-        );
-    }
-
-    /// First offset of `needle` in `haystack`.
-    fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-        haystack
-            .windows(needle.len())
-            .position(|window| window == needle)
-    }
-
-    #[test]
-    fn renders_unknown_typed_values_like_the_reference() {
-        // AXML defines types beyond the ones Androguard names (0x07 dynamic
-        // reference, 0x08 dynamic attribute, 0x13-0x1b, >= 0x20). The reference
-        // prints its `<0x.., type 0x..>` fallback rather than refusing the whole
-        // document, so an unknown type byte must decode.
-        let mut data = binary_manifest();
-        // `android:icon` is a reference value: size 8, res0 0, type 0x01, data 0x7F0D0001.
-        let icon = [0x08, 0x00, 0x00, 0x01, 0x01, 0x00, 0x0D, 0x7F];
-        let at = find_bytes(&data, &icon).expect("icon attribute value");
-        assert_eq!(
-            find_bytes(&data[at + 1..], &icon),
-            None,
-            "value pattern is not unique"
-        );
-        data[at + 3] = 0x07;
-        let rendered = decode(&data).unwrap();
-        assert!(
-            rendered.contains("android:icon=\"&lt;0x7F0D0001, type 0x07&gt;\""),
-            "unexpected rendering: {rendered}"
-        );
-    }
-
-    #[test]
-    fn reserved_types_keep_the_unknown_value_fallback() {
-        // 0x13-0x1B are reserved in AOSP. Androguard's integer branch spans
-        // 0x10-0x1F, so it prints them as decimals; claiming to know a reserved
-        // type is worse than showing the raw value, so they stay on the fallback.
-        let mut data = binary_manifest();
-        // `android:debuggable` is a boolean value: size 8, res0 0, type 0x12, data 1.
-        let debuggable = [0x08, 0x00, 0x00, 0x12, 0x01, 0x00, 0x00, 0x00];
-        let at = find_bytes(&data, &debuggable).expect("debuggable attribute value");
-        assert_eq!(
-            find_bytes(&data[at + 1..], &debuggable),
-            None,
-            "value pattern is not unique"
-        );
-        data[at + 3] = 0x13;
-        let rendered = decode(&data).unwrap();
-        assert!(
-            rendered.contains("android:debuggable=\"&lt;0x1, type 0x13&gt;\""),
-            "unexpected rendering: {rendered}"
-        );
-    }
-
-    #[test]
-    fn complex_values_use_exact_powers_of_two() {
-        // Fraction with mantissa 16384 and radix 1 is exactly 0.5, so 50.000000%.
-        // Androguard rounds its radix multiples to seven digits and prints
-        // 50.000003%; the exact value is kept deliberately.
-        let mut data = binary_manifest();
-        // `android:textSize` is a dimension: size 8, res0 0, type 0x05, data 0x1001.
-        let text_size = [0x08, 0x00, 0x00, 0x05, 0x01, 0x10, 0x00, 0x00];
-        let at = find_bytes(&data, &text_size).expect("textSize attribute value");
-        assert_eq!(
-            find_bytes(&data[at + 1..], &text_size),
-            None,
-            "value pattern is not unique"
-        );
-        data[at + 3] = 0x06; // dimension -> fraction
-        data[at + 4..at + 8].copy_from_slice(&0x0000_4010u32.to_le_bytes()); // mantissa 16384, radix 1, unit '%'
-        let rendered = decode(&data).unwrap();
-        assert!(
-            rendered.contains("android:textSize=\"50.000000%\""),
-            "unexpected rendering: {rendered}"
-        );
-    }
-
-    #[test]
-    fn rejects_a_resource_map_chunk_smaller_than_its_header() {
-        // The decoder computes its entry count as `(size - header_size) / 4` in
-        // u32, so a size below the header size wraps to ~1e9 entries. Nothing
-        // else in the pipeline validates this chunk.
-        let mut data = binary_manifest();
-        let map = find_chunk(&data, 0x0180).expect("fixture has a resource map");
-        data[map + 2..map + 4].copy_from_slice(&8u16.to_le_bytes());
-        data[map + 4..map + 8].copy_from_slice(&4u32.to_le_bytes());
-        let error = format!("{:#}", decode(&data).unwrap_err());
-        assert!(
-            error.contains("resource map chunk is malformed"),
-            "unexpected error: {error}"
-        );
-    }
-
-    /// Offset of the first chunk of `typ`, walking the fixture's chunk list.
-    fn find_chunk(data: &[u8], typ: u16) -> Option<usize> {
-        let mut offset = 8;
-        while offset + 8 <= data.len() {
-            let chunk_type = u16::from_le_bytes([data[offset], data[offset + 1]]);
-            let size =
-                u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap()) as usize;
-            if chunk_type == typ {
-                return Some(offset);
-            }
-            if size == 0 {
-                return None;
-            }
-            offset += size;
-        }
-        None
-    }
-
-    #[test]
-    fn rejects_input_that_is_not_a_document_chunk() {
-        let error = format!("{:#}", decode(&[0u8; 32]).unwrap_err());
-        assert!(
-            error.contains("document chunk"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn accepts_plain_xml_manifests() {
-        let input = b"<?xml version=\"1.0\"?><manifest package=\"example\"/>";
-        assert_eq!(decode(input).unwrap().as_bytes(), input);
-    }
-
-    #[test]
-    fn escapes_xml_attribute_values() {
-        let mut output = String::new();
-        escape_xml("a&<>'\"", true, &mut output);
-        assert_eq!(output, "a&amp;&lt;&gt;&apos;&quot;");
-    }
+/// Decodes one manifest entry and renders it to XML text.
+///
+/// Bridge for the current CLI path (`apk::read_entry` -> `manifest::decode`).
+/// The A07 integration routes `Engine::manifest` through
+/// [`decode_manifest_entry`] plus `Manifest::to_xml` and removes this
+/// function; it must not grow new callers. (Test targets compile it in via
+/// `#[path]` without calling it.)
+#[allow(dead_code)]
+pub fn decode(data: &[u8]) -> anyhow::Result<String> {
+    let control = OperationControl::new();
+    let report = decode_manifest_entry(data, &XmlDecodeLimits::default(), &control)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    report
+        .value
+        .to_xml(&XmlRenderOptions::default(), &control)
+        .map_err(|error| anyhow::anyhow!("{error}"))
 }

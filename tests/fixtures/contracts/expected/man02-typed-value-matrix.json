@@ -1,0 +1,339 @@
+{
+  "xml": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<matrix xmlns:android=\"http://schemas.android.com/apk/res/android\" android:n01=\"@7F0D0001\" android:n02=\"@android:01030007\" android:n03=\"?7F0D0002\" android:n04=\"?android:01030008\" android:n05=\"hello &amp; &lt;world&gt;\" android:n06=\"2.000000\" android:n07=\"inf\" android:n08=\"-inf\" android:n09=\"NaN\" android:n10=\"100.000000px\" android:n11=\"16.000000dip\" android:n12=\"20.000000sp\" android:n13=\"30.000000pt\" android:n14=\"40.000000in\" android:n15=\"50.000000mm\" android:n16=\"50.000000%\" android:n17=\"100.000000%p\" android:n18=\"42\" android:n19=\"-1\" android:n20=\"-2147483648\" android:n21=\"0x40003FB4\" android:n22=\"true\" android:n23=\"false\" android:n24=\"#FF112233\" android:n25=\"#00112233\" android:n26=\"#11223344\" android:n27=\"#AABBCCDD\" android:n28=\"&lt;0x7F000001, type 0x07&gt;\" android:n29=\"&lt;0x5, type 0x08&gt;\" android:n30=\"&lt;0x9, type 0x13&gt;\" android:n31=\"&lt;0x1234, type 0x33&gt;\" android:n32=\"&lt;0x0, type 0x00&gt;\" android:n33=\"7.000000\" />",
+  "nodes": [
+    {
+      "d": 0,
+      "k": "element",
+      "name": "matrix",
+      "prefix": null,
+      "ns": null,
+      "attrs": [
+        {
+          "name": "android",
+          "prefix": "xmlns",
+          "ns": null,
+          "value": "http://schemas.android.com/apk/res/android",
+          "ty": null,
+          "data": null,
+          "raw": null
+        },
+        {
+          "name": "n01",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "@7F0D0001",
+          "ty": 1,
+          "data": 2131558401,
+          "raw": null
+        },
+        {
+          "name": "n02",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "@android:01030007",
+          "ty": 1,
+          "data": 16973831,
+          "raw": null
+        },
+        {
+          "name": "n03",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "?7F0D0002",
+          "ty": 2,
+          "data": 2131558402,
+          "raw": null
+        },
+        {
+          "name": "n04",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "?android:01030008",
+          "ty": 2,
+          "data": 16973832,
+          "raw": null
+        },
+        {
+          "name": "n05",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "hello & <world>",
+          "ty": 3,
+          "data": 3,
+          "raw": "hello & <world>"
+        },
+        {
+          "name": "n06",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "2.000000",
+          "ty": 4,
+          "data": 1073741824,
+          "raw": null
+        },
+        {
+          "name": "n07",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "inf",
+          "ty": 4,
+          "data": 2139095040,
+          "raw": null
+        },
+        {
+          "name": "n08",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "-inf",
+          "ty": 4,
+          "data": 4286578688,
+          "raw": null
+        },
+        {
+          "name": "n09",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "NaN",
+          "ty": 4,
+          "data": 2143289344,
+          "raw": null
+        },
+        {
+          "name": "n10",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "100.000000px",
+          "ty": 5,
+          "data": 25600,
+          "raw": null
+        },
+        {
+          "name": "n11",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "16.000000dip",
+          "ty": 5,
+          "data": 4097,
+          "raw": null
+        },
+        {
+          "name": "n12",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "20.000000sp",
+          "ty": 5,
+          "data": 5122,
+          "raw": null
+        },
+        {
+          "name": "n13",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "30.000000pt",
+          "ty": 5,
+          "data": 7683,
+          "raw": null
+        },
+        {
+          "name": "n14",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "40.000000in",
+          "ty": 5,
+          "data": 10244,
+          "raw": null
+        },
+        {
+          "name": "n15",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "50.000000mm",
+          "ty": 5,
+          "data": 12805,
+          "raw": null
+        },
+        {
+          "name": "n16",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "50.000000%",
+          "ty": 6,
+          "data": 16400,
+          "raw": null
+        },
+        {
+          "name": "n17",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "100.000000%p",
+          "ty": 6,
+          "data": 257,
+          "raw": null
+        },
+        {
+          "name": "n18",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "42",
+          "ty": 16,
+          "data": 42,
+          "raw": null
+        },
+        {
+          "name": "n19",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "-1",
+          "ty": 16,
+          "data": 4294967295,
+          "raw": null
+        },
+        {
+          "name": "n20",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "-2147483648",
+          "ty": 16,
+          "data": 2147483648,
+          "raw": null
+        },
+        {
+          "name": "n21",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "0x40003FB4",
+          "ty": 17,
+          "data": 1073758132,
+          "raw": null
+        },
+        {
+          "name": "n22",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "true",
+          "ty": 18,
+          "data": 1,
+          "raw": null
+        },
+        {
+          "name": "n23",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "false",
+          "ty": 18,
+          "data": 0,
+          "raw": null
+        },
+        {
+          "name": "n24",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "#FF112233",
+          "ty": 28,
+          "data": 4279312947,
+          "raw": null
+        },
+        {
+          "name": "n25",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "#00112233",
+          "ty": 29,
+          "data": 1122867,
+          "raw": null
+        },
+        {
+          "name": "n26",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "#11223344",
+          "ty": 30,
+          "data": 287454020,
+          "raw": null
+        },
+        {
+          "name": "n27",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "#AABBCCDD",
+          "ty": 31,
+          "data": 2864434397,
+          "raw": null
+        },
+        {
+          "name": "n28",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "<0x7F000001, type 0x07>",
+          "ty": 7,
+          "data": 2130706433,
+          "raw": null
+        },
+        {
+          "name": "n29",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "<0x5, type 0x08>",
+          "ty": 8,
+          "data": 5,
+          "raw": null
+        },
+        {
+          "name": "n30",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "<0x9, type 0x13>",
+          "ty": 19,
+          "data": 9,
+          "raw": null
+        },
+        {
+          "name": "n31",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "<0x1234, type 0x33>",
+          "ty": 51,
+          "data": 4660,
+          "raw": null
+        },
+        {
+          "name": "n32",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "<0x0, type 0x00>",
+          "ty": 0,
+          "data": 0,
+          "raw": null
+        },
+        {
+          "name": "n33",
+          "prefix": "android",
+          "ns": "http://schemas.android.com/apk/res/android",
+          "value": "7.000000",
+          "ty": 5,
+          "data": 1801,
+          "raw": null
+        }
+      ],
+      "line": 7,
+      "comment": null
+    }
+  ],
+  "namespaces": [
+    {
+      "d": 0,
+      "k": "start",
+      "prefix": "android",
+      "uri": "http://schemas.android.com/apk/res/android"
+    }
+  ],
+  "prolog": [],
+  "epilog": [],
+  "styles": [],
+  "diagnostics": [],
+  "meta": {
+    "kind": "axml",
+    "utf8_pool": false,
+    "strings": 37
+  }
+}

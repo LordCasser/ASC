@@ -1,85 +1,83 @@
 //!Decoder for the binary XML format used by Android.
 //!
-//!This library implements the minimal amount of parsing required obtain
-//!useful information from a binary `AndroidManifest.xml`. It does not
-//!support parsing generic binary XML documents and does not have
-//!support for decoding resource identifiers. In return, the compiled
-//!footprint of the library is _much_ lighter as it does not have to
-//!link in Android's `resources.arsc` file.
+//!This is the rasc-maintained fork of `axmldecoder 0.5.0` (see PATCHES.md /
+//!UPSTREAM.md). The fork replaces the deku-derived readers with a validating
+//!cursor parser whose only job is to turn bytes into an **ordered, bounded,
+//!complete** document model: nodes in stream order, attributes with their raw
+//!typed values, namespace events with scopes, string-pool styles and the
+//!resource map. It deliberately does **not** format typed values into strings;
+//!the raw `type`/`data` pair is the single source of truth and projection into
+//!readable text is the consumer's job.
 //!
-//!For a full-featured Rust binary XML parser,
-//![abxml-rs](https://github.com/SUPERAndroidAnalyzer/abxml-rs)
-//!is highly recommended if it is acceptable to link a 30MB `resources.arsc`
-//!file into your compiled binary.
-//!
-//!Please file an issue with the relevant binary `AndroidManifest.xml` if
-//!if any issues are encountered.
+//!No path in this crate panics on input: every read is bounds-checked and
+//!every structural inconsistency is a `ParseError`.
 
 mod binaryxml;
+mod cursor;
 mod stringpool;
 mod xml;
 
 use thiserror::Error;
 
-use crate::binaryxml::BinaryXmlDocument;
-pub use crate::xml::{Cdata, Element, Node, XmlDocument};
+pub use crate::binaryxml::{Attribute, Cdata, Document, Element, NamespaceEvent, Node, RawValue};
+pub use crate::stringpool::{StringPoolData, StyleSpan};
 
-#[derive(Error, Debug)]
-pub enum ParseError {
-    #[error("parse error: {0}")]
-    DekuError(deku::DekuError),
-
-    #[error("StringPool missing index: {0}")]
-    StringNotFound(u32),
-
-    #[error("ResourceMap missing index: {0}")]
-    ResourceIdNotFound(u32),
-
-    #[error("Unknown resource string: {0}")]
-    UnknownResourceString(u32),
-
-    #[error(transparent)]
-    Utf8StringParseError(std::string::FromUtf8Error),
-
-    #[error(transparent)]
-    Utf16StringParseError(std::string::FromUtf16Error),
+/// Resource limits honoured by [`parse_document`]. Every field must be a
+/// positive finite number; the defaults mirror the ASC limits table
+/// (interfaces.md §5: depth 256, xml-nodes/xml-attributes 1_000_000,
+/// string-units 1_048_576).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DecodeLimits {
+    /// Maximum open-element nesting depth.
+    pub max_depth: usize,
+    /// Maximum number of nodes (elements + text/cdata) in the document.
+    pub max_nodes: usize,
+    /// Maximum number of attributes, counted cumulatively over the document.
+    pub max_attributes: usize,
+    /// Maximum UTF-16 units in one string-pool string.
+    pub max_string_units: usize,
 }
 
-///Parses an Android binary XML and returns a [`XmlDocument`] object.
-///
-/// # Errors
-///
-/// Will return `ParseError` if `input` cannot be parsed
-///```rust
-///use axmldecoder::parse;
-///# use axmldecoder::ParseError;
-///let data= include_bytes!("../examples/AndroidManifest.xml");
-///parse(data)?;
-///# Ok::<(), ParseError>(())
-///```
-pub fn parse(input: &[u8]) -> Result<XmlDocument, ParseError> {
-    let binaryxml = BinaryXmlDocument::try_from(input).map_err(ParseError::DekuError)?;
-    XmlDocument::new(binaryxml)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs::File;
-    use std::io::Read;
-    use std::path::PathBuf;
-
-    #[test]
-    fn test_parse() {
-        let mut examples = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        examples.push("examples");
-
-        for entry in std::fs::read_dir(examples).unwrap() {
-            let entry = entry.unwrap();
-            let mut f = File::open(entry.path()).unwrap();
-            let mut buf = Vec::new();
-            f.read_to_end(&mut buf).unwrap();
-            parse(&buf).unwrap_or_else(|_| panic!("{} failed to parse", entry.path().display()));
+impl Default for DecodeLimits {
+    fn default() -> Self {
+        Self {
+            max_depth: 256,
+            max_nodes: 1_000_000,
+            max_attributes: 1_000_000,
+            max_string_units: 1_048_576,
         }
     }
 }
+
+/// Everything that can go wrong while decoding a binary XML document.
+///
+/// `Malformed` maps to a structural error in the caller; `Limit` maps to a
+/// resource-limit error. Both carry a human message that is not a machine
+/// contract.
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum ParseError {
+    /// The byte stream is not a structurally valid binary XML document.
+    #[error("malformed binary XML: {0}")]
+    Malformed(String),
+    /// A decode limit from [`DecodeLimits`] was exceeded.
+    #[error("resource limit exceeded: {0}")]
+    Limit(String),
+}
+
+///Parses an Android binary XML into the ordered [`Document`] model.
+///
+/// The whole declared document length is consumed before success is returned:
+/// a second root element, trailing structural garbage, unmatched end tags or
+/// end namespaces, duplicate attributes, out-of-range string indices and
+/// oversized structures are all errors, never silent truncation.
+///
+/// # Errors
+///
+/// Returns [`ParseError`] if `input` cannot be parsed completely within
+/// `limits`.
+pub fn parse_document(input: &[u8], limits: &DecodeLimits) -> Result<Document, ParseError> {
+    binaryxml::parse(input, limits)
+}
+
+#[cfg(test)]
+mod tests;
