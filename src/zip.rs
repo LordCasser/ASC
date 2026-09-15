@@ -536,6 +536,14 @@ fn copy_chunked(compressed: &[u8], control: &ControlProbe<'_>) -> Result<Vec<u8>
     Ok(out)
 }
 
+/// Unchecked CRC-32 for test builders (no budget checkpoints).
+#[cfg(test)]
+pub(crate) fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = flate2::Crc::new();
+    crc.update(bytes);
+    crc.sum()
+}
+
 fn crc32_chunked(bytes: &[u8], control: &ControlProbe<'_>) -> Result<u32, Error> {
     let mut crc = flate2::Crc::new();
     let mut checkpoints = Checkpoints::new();
@@ -926,13 +934,17 @@ pub(crate) mod tests {
             } else {
                 payload.to_vec()
             };
+            // PATCHED (asc, A07): the A02 reader verifies CRC-32 and the
+            // local-header consistency, so the builder writes real values
+            // instead of zeros.
+            let crc = crate::zip::crc32(payload);
             let offset = local.len() as u32;
             local.extend_from_slice(b"PK\x03\x04");
             local.extend_from_slice(&20u16.to_le_bytes());
             local.extend_from_slice(&0u16.to_le_bytes());
             local.extend_from_slice(&if *deflated { 8u16 } else { 0u16 }.to_le_bytes());
             local.extend_from_slice(&[0; 4]);
-            local.extend_from_slice(&0u32.to_le_bytes());
+            local.extend_from_slice(&crc.to_le_bytes());
             local.extend_from_slice(&(stored.len() as u32).to_le_bytes());
             local.extend_from_slice(&(payload.len() as u32).to_le_bytes());
             local.extend_from_slice(&(name.len() as u16).to_le_bytes());
@@ -946,7 +958,7 @@ pub(crate) mod tests {
             central.extend_from_slice(&0u16.to_le_bytes());
             central.extend_from_slice(&if *deflated { 8u16 } else { 0u16 }.to_le_bytes());
             central.extend_from_slice(&[0; 4]);
-            central.extend_from_slice(&0u32.to_le_bytes());
+            central.extend_from_slice(&crc.to_le_bytes());
             central.extend_from_slice(&(stored.len() as u32).to_le_bytes());
             central.extend_from_slice(&(payload.len() as u32).to_le_bytes());
             central.extend_from_slice(&(name.len() as u16).to_le_bytes());

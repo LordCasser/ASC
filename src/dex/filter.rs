@@ -38,6 +38,7 @@ impl Targets {
         self.indices.contains(&index)
     }
 
+#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub(super) fn new(indices: impl IntoIterator<Item = u32>) -> Self {
         Self::with_prefilter(indices, true)
     }
@@ -101,9 +102,6 @@ fn contains_pair(code: &[u8], [first, second]: [u8; 2]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dex::tests::const_string_fixture;
-    use crate::dex::{Dex, PARALLEL_SCAN_CLASSES};
-    use crate::query::Query;
 
     #[test]
     fn pair_filter_finds_matches_at_both_edges() {
@@ -115,24 +113,9 @@ mod tests {
         assert!(!contains_pair(b"\x1a", [0x1a, 0x05]));
     }
 
-    #[test]
-    fn byte_filter_matches_the_unfiltered_scan() {
-        let data = const_string_fixture(PARALLEL_SCAN_CLASSES);
-        let dex = Dex::parse(&data).unwrap();
-        let (kind, targets) = dex
-            .resolve_targets(&Query::String("Authorization".to_owned()))
-            .unwrap();
-        let targets = Targets::new(targets);
-        assert!(targets.bytes.is_some(), "one target must stay filterable");
-        let filtered = dex.scan_all_classes(kind, &targets).unwrap();
-        let unfiltered = Targets {
-            indices: targets.indices.clone(),
-            bytes: None,
-        };
-        assert_eq!(filtered, dex.scan_all_classes(kind, &unfiltered).unwrap());
-        assert_eq!(filtered.len(), PARALLEL_SCAN_CLASSES);
-    }
-
+    /// Filter on/off equivalence lives in contract_references.rs through the
+    /// structured scanner (ScanOptions.prefilter); the legacy Dex-based copy
+    /// of this test left with the legacy scanner (A07).
     #[test]
     fn explicit_prefilter_switch_only_disables_acceleration() {
         let indices = [7u32, 0x1a2b];

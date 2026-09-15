@@ -51,6 +51,7 @@ impl DecodeError {
 /// terminator surfaces as `Truncated` or `IllegalContinuation`, both
 /// malformed. Surrogate-valued units are passed through untouched; they stay
 /// distinguishable in [`crate::model::DexText`].
+#[allow(dead_code)] // A03 contract surface; used by tests and A08
 pub(super) fn decode_into(data: &[u8], scratch: &mut Vec<u16>) -> Result<(), DecodeError> {
     scratch.clear();
     let mut index = 0;
@@ -161,6 +162,7 @@ pub(super) fn decode_units(
 }
 
 /// Allocating convenience over [`decode_into`].
+#[allow(dead_code)]
 pub(super) fn decode(data: &[u8]) -> Result<Vec<u16>, DecodeError> {
     let mut units = Vec::new();
     decode_into(data, &mut units)?;
@@ -170,6 +172,7 @@ pub(super) fn decode(data: &[u8]) -> Result<Vec<u16>, DecodeError> {
 /// Legacy-bridge helper: a `String` for display paths, replacing the previous
 /// `droidsaw_dex::mutf8` fallback. Undecodable input degrades to lossy UTF-8
 /// exactly like the old code did; the structured scanner never calls this.
+#[allow(dead_code)]
 pub(super) fn decode_lossy_string(data: &[u8]) -> String {
     match decode(data) {
         Ok(units) => String::from_utf16(&units)
@@ -179,6 +182,7 @@ pub(super) fn decode_lossy_string(data: &[u8]) -> String {
 }
 
 /// MUTF-8 encoding for query text (kept for the legacy byte-matching path).
+#[allow(dead_code)]
 pub(super) fn encode_mutf8(value: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(value.len());
     for unit in value.encode_utf16() {

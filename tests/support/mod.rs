@@ -1,3 +1,5 @@
+#![allow(dead_code)] // shared support: each including target uses a different subset
+
 //! In-crate test support for the A00-A14 contract fixture system.
 //!
 //! Shared by `tests/contract_harness.rs` and the later `contract_*`

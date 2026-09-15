@@ -580,14 +580,46 @@ const SCRATCH_REWRITES: &[&str] = &[
 
 /// Scratch for a 041 view; `None` for standard versions (backends take the
 /// original bytes, and no normalization is allowed to hide problems).
-pub(crate) fn backend_scratch(view: &ValidatedDexView<'_>) -> Option<BackendScratch> {
-    if view.version() != DexVersion::V041 {
+pub(crate) fn backend_scratch(
+    view: &ValidatedDexView<'_>,
+    integrity: &[crate::model::Diagnostic],
+) -> Option<BackendScratch> {
+    if view.version() == DexVersion::V041 {
+        return Some(BackendScratch {
+            bytes: normalize_041(view.bytes(), view.header_offset()),
+            source_header_offset: view.header_offset(),
+            rewrites: SCRATCH_REWRITES,
+        });
+    }
+    // PATCHED (asc, A07): a plain DEX whose checksum/signature integrity
+    // fields disagree gets the same treatment — the backend enforces both,
+    // so the checked path hands it a private copy with the fields
+    // recomputed. The original bytes are untouched and the copy is
+    // operation-local (G03 / IN-04).
+    let flagged = integrity.iter().any(|diagnostic| {
+        matches!(
+            diagnostic.code,
+            crate::model::DiagnosticCode::DexChecksumMismatch
+                | crate::model::DiagnosticCode::DexSignatureMismatch
+        )
+    });
+    if !flagged {
         return None;
     }
+    let mut copy = view.bytes().to_vec();
+    if copy.len() >= 32 {
+        // The signature rewrite must land BEFORE the checksum is computed:
+        // the Adler-32 span (12..) covers the signature bytes (12..32).
+        let signature = crate::bytes::sha1(&copy[32..]);
+        copy[0x0C..0x20].copy_from_slice(&signature);
+        let checksum = adler32_span(&copy[12..], &ControlProbe::never())
+            .expect("the never probe cannot cancel");
+        copy[0x08..0x0C].copy_from_slice(&checksum.to_le_bytes());
+    }
     Some(BackendScratch {
-        bytes: normalize_041(view.bytes(), view.header_offset()),
+        bytes: copy,
         source_header_offset: view.header_offset(),
-        rewrites: SCRATCH_REWRITES,
+        rewrites: &["checksum", "signature"],
     })
 }
 
@@ -1075,7 +1107,7 @@ mod tests {
             "logical ordinals must be stable and derive from the chain order"
         );
         let original = data.clone();
-        let scratch = backend_scratch(second).expect("041 needs scratch");
+        let scratch = backend_scratch(second, &[]).expect("041 needs scratch");
         assert_eq!(scratch.source_header_offset, member_size);
         assert_eq!(read_u32(&scratch.bytes, 0x74).unwrap(), member_size as u32);
         assert_eq!(read_u32(&scratch.bytes, 0x24).unwrap(), HEADER_SIZE_STD as u32);
@@ -1087,6 +1119,6 @@ mod tests {
         let plain = valid_skeleton(b"035\0", 0, HEADER_SIZE_STD);
         let (views, _) =
             validate_dex_entry(artifact(), 0, b"classes.dex", &plain, &probe()).unwrap();
-        assert!(backend_scratch(&views.views[0]).is_none());
+        assert!(backend_scratch(&views.views[0], &[]).is_none());
     }
 }

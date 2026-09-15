@@ -1,824 +1,860 @@
-//! APK container layer: ZIP discovery, inflation, DEX 041 views and the
-//! scheduler that runs one command's work over every entry.
+//! APK operations layer: open an input once, then run structured analysis
+//! operations over it.
 //!
-//! Everything that reads the archive goes through [`map_dex_entries`], which owns
-//! the mmap, the worker pool, entry ordering and the `--debug` inflate timings.
-//! Results are flattened in central-directory order, so output is deterministic
-//! no matter which worker stole which entry. Nothing here shells out to Python, a
-//! JVM or an external decompiler.
+//! Every operation returns the frozen domain types ([`crate::model`]) in a
+//! [`Report`], or an [`Error`] with a stable kind — never pre-rendered
+//! text, never a partial success. Contract highlights (interfaces.md §4):
+//! every dex-backed operation fully inflates and validates every selected
+//! root DEX entry before reporting success — an entry that fails is the
+//! operation's error even when earlier entries already produced rows —
+//! and entries are processed in central-directory order, so the lowest
+//! ordinal wins error selection. The former prefix fast path is gone: a
+//! prefix cannot certify a complete result.
+//!
+//! A10 wraps this layer in the Engine/Artifact public API; A11 brings the
+//! shared pool and permits. Until then operations process entries
+//! sequentially, which keeps budget accounting and error selection exact;
+//! the CLI's `--threads` value is accepted and validated but there is
+//! nothing to parallelise yet (the per-operation pool is A11's).
 
-use crate::dex;
-use crate::query::Query;
-use crate::zip::{ZipEntry, inflate_entry};
-use anyhow::{Context, Result, bail};
-use memmap2::Mmap;
-use rayon::prelude::*;
-use std::cell::OnceCell;
+use crate::bytes::ControlProbe;
+use crate::dex::container::{self, ValidatedDexView};
+use crate::dex::{self, ScanLimits, ScanOptions};
+use crate::error::{Error, ErrorKind};
+use crate::manifest::OperationControl;
+use crate::model::{
+    AnnotationEntry, AnnotationRecord, AnnotationTarget, AnnotationVisibility, ArtifactId, Class,
+    ClassDescriptor, ClassFilter, ClassId, ClassMetadata, ClassSelector, DexEntry, DexText,
+    Diagnostic, DiagnosticCode, EnclosingRecord, FieldMetadata, InnerClassRecord, MethodMetadata,
+    OperationStats, Prototype, Report, Severity, Source, SourceMetadata, Stage,
+};
+use crate::zip::{self, ArchiveEntry, InputLimits};
 use std::fs::File;
+use std::io::Read;
 use std::path::Path;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct ClassEntry {
-    pub descriptor: String,
-    pub dex_name: String,
+/// Per-open input budget: the owned snapshot may not exceed this
+/// (interfaces.md §5 `max_input_bytes`).
+const MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
+/// `AndroidManifest.xml`, matched on raw entry-name bytes (last wins).
+const MANIFEST_NAME: &[u8] = b"AndroidManifest.xml";
+
+/// Bridges the domain [`OperationControl`] onto the layer-specific probes
+/// (zip/scan) and the backend's control token. The dummy flag keeps the
+/// `&AtomicBool` alive for probes when the host installed no cancel flag.
+struct ControlGuard {
+    dummy: AtomicBool,
+    flag: Option<Arc<AtomicBool>>,
+    deadline: Option<std::time::Instant>,
+    backend: droidsaw_dex::analysis::Control,
 }
 
-impl ClassEntry {
-    pub fn java_name(&self) -> &str {
-        self.descriptor
-            .strip_prefix('L')
-            .and_then(|name| name.strip_suffix(';'))
-            .unwrap_or(&self.descriptor)
-    }
-
-    pub fn package(&self) -> &str {
-        self.java_name()
-            .rsplit_once('/')
-            .map_or("", |(package, _)| package)
-    }
-
-    pub fn simple_name(&self) -> &str {
-        self.java_name()
-            .rsplit_once('/')
-            .map_or(self.java_name(), |(_, name)| name)
-    }
-}
-
-/// One entry's bytes, inflated on first use.
-///
-/// Inflating lazily is what lets a string-only command (the class index) read a
-/// prefix instead of the whole entry: the prefix path never touches [`Self::data`],
-/// so the code section - two thirds of a DEX - is never decompressed.
-struct InflatedDex<'a> {
-    entry: &'a ZipEntry,
-    apk: &'a [u8],
-    started: Instant,
-    data: OnceCell<(Vec<u8>, Duration)>,
-}
-
-impl InflatedDex<'_> {
-    /// The whole entry, inflating it on first use.
-    fn data(&self) -> Result<&[u8]> {
-        if self.data.get().is_none() {
-            let started = Instant::now();
-            let bytes = inflate_entry(self.apk, self.entry)?;
-            let _ = self.data.set((bytes, started.elapsed()));
+impl ControlGuard {
+    fn new(control: &OperationControl) -> Self {
+        Self {
+            dummy: AtomicBool::new(false),
+            flag: control.cancel_flag(),
+            deadline: control.deadline(),
+            backend: droidsaw_dex::analysis::Control::new(),
         }
-        Ok(&self.data.get().expect("filled above").0)
     }
 
-    /// Time spent inflating, once it happened.
-    fn inflate_elapsed(&self) -> Duration {
-        self.data
-            .get()
-            .map_or(Duration::ZERO, |(_, elapsed)| *elapsed)
+    fn probe(&self) -> ControlProbe<'_> {
+        match &self.flag {
+            Some(flag) => ControlProbe { cancelled: flag, deadline: self.deadline },
+            None => ControlProbe { cancelled: &self.dummy, deadline: self.deadline },
+        }
     }
+}
 
-    /// Incremental prefix inflation with a decision callback; see
-    /// [`crate::zip::inflate_until`] and [`crate::zip::PrefixStep`].
-    fn inflate_until(
+/// One opened input: owned bytes, content identity, archive catalog and the
+/// selected root DEX entries. Opening validates the archive catalog only —
+/// DEX headers and tables are validated per operation.
+pub struct Artifact {
+    id: ArtifactId,
+    bytes: Arc<[u8]>,
+    catalog: zip::ArchiveCatalog,
+    roots: Vec<ArchiveEntry>,
+    /// Duplicate-entry-name warnings observed at open time, attached to
+    /// every operation's report.
+    open_diagnostics: Vec<Diagnostic>,
+}
+
+impl Artifact {
+    /// A08 prints the artifact id in the JSON envelope.
+    #[allow(dead_code)]
+    pub fn id(&self) -> ArtifactId {
+        self.id
+    }
+}
+
+/// Opens `path` as an APK: bounded owned snapshot, content id, archive
+/// catalog, root DEX selection.
+pub fn open_path(path: &Path, control: &OperationControl) -> Result<Artifact, Error> {
+    let mut file = File::open(path)
+        .map_err(|error| Error::new(ErrorKind::NotFound).with_context(format!("open {path:?}: {error}")))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| Error::new(ErrorKind::NotFound).with_context(format!("stat {path:?}: {error}")))?;
+    if !metadata.is_file() {
+        return Err(Error::new(ErrorKind::UnsupportedFormat)
+            .with_context(format!("{path:?} is not a regular file")));
+    }
+    if metadata.len() > MAX_INPUT_BYTES {
+        return Err(Error::resource_limit(format!(
+            "{path:?} is {} bytes, above the {MAX_INPUT_BYTES} input limit",
+            metadata.len()
+        )));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        control.check()?;
+        let read = file.read(&mut buffer).map_err(|error| {
+            Error::new(ErrorKind::MalformedInput).with_context(format!("read {path:?}: {error}"))
+        })?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    open_bytes(Arc::from(bytes.into_boxed_slice()), control)
+}
+
+/// Opens an already-owned input snapshot (the raw-bytes host path and tests).
+pub fn open_bytes(bytes: Arc<[u8]>, control: &OperationControl) -> Result<Artifact, Error> {
+    let _ = control;
+    let id = ArtifactId::from_digest(crate::bytes::sha256(&bytes));
+    let catalog = zip::parse_catalog(&bytes, &InputLimits::DEFAULT)?;
+    let selection = zip::select_root_dexes(&catalog);
+    let mut open_diagnostics = Vec::new();
+    for duplicate in &selection.duplicates {
+        open_diagnostics.push(Diagnostic::new(
+            DiagnosticCode::DuplicateEntryName,
+            Severity::Warning,
+            Stage::Input,
+            format!(
+                "archive entry name {:?} appears more than once; the first central-directory \
+                 record is selected",
+                zip::display_name(&duplicate.name)
+            ),
+        ));
+    }
+    let roots = selection.selected.into_iter().cloned().collect();
+    Ok(Artifact { id, bytes, catalog, roots, open_diagnostics })
+}
+
+impl Artifact {
+    /// Runs `op` over every selected root entry in ordinal order. Each entry
+    /// is fully inflated (shared decode budget) and validated before its
+    /// operation runs; the first failing entry aborts with its error — rows
+    /// computed from earlier entries do not turn that into a success.
+    fn fold_roots<T>(
         &self,
-        decide: impl FnMut(&[u8]) -> crate::zip::PrefixStep,
-    ) -> Result<(Vec<u8>, bool)> {
-        crate::zip::inflate_until(self.apk, self.entry, decide)
-    }
-}
-
-/// How [`map_dex_entries`] orders the entries it hands to the worker pool.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum EntryOrder {
-    /// Central-directory order.
-    Natural,
-    /// Smallest entries first, so the cheapest ones answer first.
-    SmallestFirst,
-}
-
-/// Opens `path`, inflates every `classes*.dex` entry in parallel and returns the
-/// flattened results of `map`, in central-directory order.
-///
-/// `order` picks the sequence entries are handed out in. `stop` lets a caller
-/// give up on entries that have not started yet: anything already in flight on a
-/// worker still runs to completion, so it shortens the work that follows an early
-/// hit rather than cancelling it.
-fn map_dex_entries<T: Send>(
-    path: &Path,
-    threads: usize,
-    order: EntryOrder,
-    stop: Option<&AtomicBool>,
-    map: impl for<'a> Fn(InflatedDex<'a>) -> Result<Vec<T>> + Sync,
-) -> Result<Vec<T>> {
-    if threads == 0 {
-        bail!("worker count must be greater than zero");
-    }
-    let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mmap = unsafe { Mmap::map(&file) }.context("map APK")?;
-    let mut entries = parse_dex_entries(&mmap)?;
-    match order {
-        EntryOrder::Natural => {}
-        EntryOrder::SmallestFirst => entries.sort_by_key(|entry| entry.compressed_size),
-    }
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .build()?;
-    let results: Vec<Result<Vec<T>>> = pool.install(|| {
-        entries
-            .par_iter()
-            .map(|entry| {
-                if stop.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-                    return Ok(Vec::new());
-                }
-                map(InflatedDex {
-                    entry,
-                    apk: &mmap,
-                    started: Instant::now(),
-                    data: OnceCell::new(),
-                })
-            })
-            .collect()
-    });
-    let mut out = Vec::new();
-    for result in results {
-        out.extend(result?);
-    }
-    Ok(out)
-}
-
-/// Renders one hit the way `findrefs` prints it.
-///
-/// Rendering happens here rather than in the CLI because this is the parallel
-/// phase: a wide query produces hundreds of thousands of lines, and formatting
-/// them on the main thread costs more than the whole instruction scan.
-fn render_reference(dex_name: &str, row: &dex::ReferenceRow) -> String {
-    format!(
-        "{} | {}->{} | matched=({})",
-        dex_name,
-        row.class_name,
-        row.method_name,
-        row.matched.join("; ")
-    )
-}
-
-/// Rendered reference hits for `query`, aggregated in central-directory order.
-///
-/// The lines are unsorted: the caller sorts them, which is what keeps the printed
-/// order independent of how the work was stolen.
-pub fn find_references(
-    path: &Path,
-    query: &Query,
-    threads: usize,
-    debug: bool,
-) -> Result<Vec<String>> {
-    let rows = map_dex_entries(path, threads, EntryOrder::SmallestFirst, None, |inflated| {
-        let mut rows = Vec::new();
-        for logical in dex::container::logical_dexes(&inflated.entry.name, inflated.data()?)? {
-            for row in dex::find_references(&logical.data, query)? {
-                rows.push(render_reference(&logical.name, &row));
-            }
+        control: &OperationControl,
+        mut op: impl FnMut(&ArchiveEntry, &container::DexEntryViews<'_>, &ControlProbe<'_>) -> Result<Vec<T>, Error>,
+    ) -> Result<(Vec<T>, Vec<Diagnostic>), Error> {
+        let guard = ControlGuard::new(control);
+        let probe = guard.probe();
+        let mut decoded = 0u64;
+        let mut results = Vec::new();
+        let mut integrity = Vec::new();
+        for entry in &self.roots {
+            probe.check()?;
+            let data = zip::read_entry(&self.bytes, entry, &InputLimits::DEFAULT, &mut decoded, &probe)?;
+            let (views, entry_integrity) =
+                container::validate_dex_entry(self.id, entry.ordinal, &entry.raw_name, &data, &probe)?;
+            integrity.extend(entry_integrity);
+            results.extend(op(entry, &views, &probe)?);
         }
-        if debug {
-            eprintln!(
-                "[APK] '{}' inflate={:.2} us process={:.2} us",
-                inflated.entry.name,
-                inflated.inflate_elapsed().as_secs_f64() * 1_000_000.0,
-                (inflated.started.elapsed() - inflated.inflate_elapsed()).as_secs_f64()
-                    * 1_000_000.0
-            );
+        let diagnostics =
+            self.open_diagnostics.iter().cloned().chain(integrity.iter().cloned()).collect();
+        Ok((results, diagnostics))
+    }
+
+    fn require_roots(&self) -> Result<(), Error> {
+        if self.roots.is_empty() {
+            return Err(Error::new(ErrorKind::NotFound)
+                .with_context("the archive contains no root DEX entry to analyse"));
+        }
+        Ok(())
+    }
+}
+
+/// The selected logical DEX entries: identity, names, version, header offset.
+/// A DEX-less archive yields a successful empty catalog.
+pub fn dexes(artifact: &Artifact, control: &OperationControl) -> Result<Report<Vec<DexEntry>>, Error> {
+    let (rows, diagnostics) = artifact.fold_roots(control, |_entry, views, _probe| {
+        let mut rows = Vec::with_capacity(views.views.len());
+        for logical in 0..views.views.len() {
+            rows.push(views.dex_entry(logical));
         }
         Ok(rows)
     })?;
-    Ok(rows)
+    let stats = OperationStats { selected_dexes: rows.len() as u32, ..Default::default() };
+    Ok(Report::new(rows, diagnostics, stats))
 }
 
-pub fn list_classes(path: &Path, threads: usize, debug: bool) -> Result<Vec<ClassEntry>> {
-    let started = Instant::now();
-    // One probe decides the prefix policy for the whole archive (see PrefixPolicy).
-    let policy: OnceLock<PrefixPolicy> = OnceLock::new();
-    let mut classes = map_dex_entries(path, threads, EntryOrder::Natural, None, |inflated| {
-        if let Some(entries) = prefix_class_entries(&inflated, &policy)? {
-            return Ok(entries);
-        }
-        let mut classes = Vec::new();
-        for logical in dex::container::logical_dexes(&inflated.entry.name, inflated.data()?)? {
-            for descriptor in dex::class_names(&logical.data)? {
-                classes.push(ClassEntry {
-                    descriptor,
-                    dex_name: logical.name.clone(),
-                });
-            }
-        }
-        Ok(classes)
-    })?;
-    let extracted = started.elapsed();
-    // The comparator is the type's total order, so an unstable parallel sort produces
-    // exactly the order a stable sort would - the index has no ties to preserve.
-    classes.par_sort_unstable();
-    let sorted = started.elapsed();
-    classes.dedup_by(|left, right| left.descriptor == right.descriptor);
-    if debug {
-        eprintln!(
-            "[classes] entries={} extract={:.2} ms sort={:.2} ms dedup={:.2} ms",
-            classes.len(),
-            extracted.as_secs_f64() * 1e3,
-            (sorted - extracted).as_secs_f64() * 1e3,
-            (started.elapsed() - sorted).as_secs_f64() * 1e3
-        );
-    }
-    Ok(classes)
-}
-
-/// What one probe of an archive's DEX told us about the whole archive.
-///
-/// DEX files in one APK come from the same build tool, so their layout is
-/// homogeneous: measured on a 343 MiB APK every entry needs 26-65% of its bytes for
-/// a string-only command, on a 243 MiB APK every entry needs 90-95%. One probe
-/// therefore decides for all of them, and entries that need almost everything skip
-/// the prefix path entirely instead of paying for a probe each.
-#[derive(Clone, Copy)]
-struct PrefixPolicy {
-    worth_it: bool,
-    needed_fraction: f64,
-}
-
-/// Whether this entry defines `descriptor`, answered from a prefix when possible.
-///
-/// Mirrors [`dex::prefix::defines_class`]'s `None` contract: the caller then runs the
-/// full path for this entry. The prefix path never inflates the code section, which is
-/// where a lookup for a class that lives elsewhere was spending all its time.
-fn prefix_defines_class(
-    inflated: &InflatedDex<'_>,
-    descriptor: &[u8],
-    policy: &OnceLock<PrefixPolicy>,
-) -> Result<Option<bool>> {
-    let Some((prefix, _)) = prefix_probe(inflated, policy)? else {
-        return Ok(None);
-    };
-    dex::prefix::defines_class(&prefix, descriptor)
-}
-
-/// A prefix of this entry, or `None` when the prefix path is not for it.
-///
-/// One probe per archive decides the policy (see [`PrefixPolicy`]); entries of an
-/// archive whose string data comes late - measured 90-95% of the bytes - skip the
-/// streaming decoder entirely rather than pay for a probe each.
-fn prefix_probe(
-    inflated: &InflatedDex<'_>,
-    policy: &OnceLock<PrefixPolicy>,
-) -> Result<Option<(Vec<u8>, bool)>> {
-    /// Below this there is nothing to win (the entry is small anyway).
-    const MIN_GAIN: usize = 256 * 1024;
-    /// Bytes kept beyond the last string offset, for the string's own data.
-    const SLACK: usize = 64 * 1024;
-    /// A prefix is only worth a slower decoder below this share of the entry.
-    const WORTH_BELOW: f64 = 0.70;
-
-    let size = inflated.entry.uncompressed_size;
-    if inflated.entry.compression != 8 || size <= MIN_GAIN {
-        return Ok(None);
-    }
-    if let Some(known) = policy.get()
-        && !known.worth_it
-    {
-        return Ok(None);
-    }
-    let probing = policy.get().is_none();
-    let (prefix, finished) = inflated.inflate_until(|out| {
-        if let Some(known) = policy.get()
-            && !probing
-        {
-            return crate::zip::PrefixStep::Continue(
-                (size as f64 * (known.needed_fraction + 0.15)).ceil() as usize + SLACK,
-            );
-        }
-        // A 041 container overlays a header per member and needs the whole address
-        // space, so the full path keeps handling those.
-        if out.get(..8) == Some(b"dex\n041\0") {
-            return crate::zip::PrefixStep::Abort;
-        }
-        match dex::prefix::string_data_end(out) {
-            Some(needed) => {
-                let fraction = needed as f64 / size as f64;
-                let worth_it = fraction < WORTH_BELOW;
-                let _ = policy.set(PrefixPolicy {
-                    worth_it,
-                    needed_fraction: fraction,
-                });
-                if worth_it {
-                    crate::zip::PrefixStep::Continue(needed + SLACK)
-                } else {
-                    crate::zip::PrefixStep::Abort
+/// Every class definition across all selected DEX entries, in
+/// (entry, logical, class_def) order, filtered by Java-name substring. All
+/// definitions are kept: the identity is the class_def index, never the
+/// descriptor.
+pub fn classes(
+    artifact: &Artifact,
+    filter: &ClassFilter,
+    control: &OperationControl,
+) -> Result<Report<Vec<Class>>, Error> {
+    artifact.require_roots()?;
+    // Duplicate detection counts every definition, before the filter: a
+    // filtered-out duplicate is still a duplicate definition.
+    let mut descriptor_counts: std::collections::BTreeMap<String, usize> = Default::default();
+    let (rows, mut diagnostics) = artifact.fold_roots(control, |_entry, views, probe| {
+        let mut rows = Vec::new();
+        for (logical, view) in views.views.iter().enumerate() {
+            let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
+            let listed = dex::list_classes(&dex_view, &ScanLimits::DEFAULT, Some(probe))?;
+            for class in listed {
+                *descriptor_counts
+                    .entry(class.descriptor().as_str().to_owned())
+                    .or_insert(0) += 1;
+                if filter.matches(class.java_name()) {
+                    rows.push(class);
                 }
             }
-            // The tables are not complete yet: keep going until they are.
-            None => crate::zip::PrefixStep::Continue(0),
         }
+        Ok(rows)
     })?;
-    Ok(Some((prefix, finished)))
+    for (descriptor, count) in descriptor_counts {
+        if count > 1 {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::DuplicateClassDefinition,
+                Severity::Warning,
+                Stage::Dex,
+                format!(
+                    "descriptor {descriptor} is defined {count} times; identity is the \
+                     (entry, logical, class_def) index, not the name"
+                ),
+            ));
+        }
+    }
+    // Rows ordered by their (entry, logical, class_def) identity.
+    let mut rows = rows;
+    rows.sort_by_key(|class| class.id());
+    let stats = OperationStats { result_items: rows.len() as u64, ..Default::default() };
+    Ok(Report::new(rows, diagnostics, stats))
 }
 
-/// The class index of a plain deflate DEX from a prefix of it.
-///
-/// `None` means "not applicable, or not provably complete": the caller then inflates
-/// the whole entry. `dex::prefix::class_names` answers only when the prefix holds all
-/// three tables and every descriptor it decodes, so a `Some` is exact, not a guess.
-fn prefix_class_entries(
-    inflated: &InflatedDex<'_>,
-    policy: &OnceLock<PrefixPolicy>,
-) -> Result<Option<Vec<ClassEntry>>> {
-    let Some((prefix, _)) = prefix_probe(inflated, policy)? else {
-        return Ok(None);
+/// Reference hits for one structured query, in (entry, logical, method_idx)
+/// order. An empty result is a success: the class walk still certifies the
+/// selected entries' structure.
+pub fn references(
+    artifact: &Artifact,
+    query: &crate::model::ReferenceQuery,
+    control: &OperationControl,
+) -> Result<Report<Vec<crate::model::Reference>>, Error> {
+    artifact.require_roots()?;
+    let (rows, diagnostics) = artifact.fold_roots(control, |_entry, views, probe| {
+        let mut rows = Vec::new();
+        for (logical, view) in views.views.iter().enumerate() {
+            let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
+            let options =
+                ScanOptions { limits: ScanLimits::DEFAULT, control: Some(probe), prefilter: true };
+            rows.extend(dex::scan_references(&dex_view, query, &options)?);
+        }
+        Ok(rows)
+    })?;
+    let stats = OperationStats {
+        result_items: rows.len() as u64,
+        matched_targets: rows.iter().map(|row| row.targets().len() as u64).sum(),
+        ..Default::default()
     };
-    let Some(names) = dex::prefix::class_names(&prefix)? else {
-        return Ok(None);
+    Ok(Report::new(rows, diagnostics, stats))
+}
+
+/// Decompiles one class through the checked backend path. `selector` is a
+/// descriptor (optionally pinned to one logical DEX) or a full identity;
+/// the default descriptor resolution takes the first (entry, logical,
+/// class_def) definition and reports duplicates.
+pub fn decompile(
+    artifact: &Artifact,
+    selector: &ClassSelector,
+    control: &OperationControl,
+) -> Result<Report<Source>, Error> {
+    artifact.require_roots()?;
+    // Resolution pass: inflate + validate entries in ordinal order until the
+    // selector hits. A broken entry before the hit is the operation's error;
+    // entries after the hit are validated in the completion pass below (a
+    // complete success certifies every selected entry).
+    struct Resolved {
+        entry_index: usize,
+        logical: usize,
+        class_def_idx: u32,
+        duplicates: usize,
+    }
+    let guard = ControlGuard::new(control);
+    let probe = guard.probe();
+    let mut decoded = 0u64;
+    let mut resolution: Option<Resolved> = None;
+    let mut integrity = Vec::new();
+    for (entry_index, entry) in artifact.roots.iter().enumerate() {
+        probe.check()?;
+        let data = zip::read_entry(&artifact.bytes, entry, &InputLimits::DEFAULT, &mut decoded, &probe)?;
+        let (views, entry_integrity) =
+            container::validate_dex_entry(artifact.id, entry.ordinal, &entry.raw_name, &data, &probe)?;
+        integrity.extend(entry_integrity);
+        'members: for (logical, view) in views.views.iter().enumerate() {
+            match selector {
+                ClassSelector::Descriptor(descriptor, pinned) => {
+                    if let Some(pinned_id) = pinned
+                        && view.id() != *pinned_id
+                    {
+                        continue;
+                    }
+                    let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
+                    let hits =
+                        dex::locate_class(&dex_view, descriptor, &ScanLimits::DEFAULT, Some(&probe))?;
+                    if let Some(&class_def_idx) = hits.first() {
+                        resolution = Some(Resolved {
+                            entry_index,
+                            logical,
+                            class_def_idx,
+                            duplicates: hits.len().saturating_sub(1),
+                        });
+                        break 'members;
+                    }
+                }
+                ClassSelector::Id(class_id) => {
+                    if class_id.dex().artifact() != artifact.id {
+                        return Err(Error::invalid_query(format!(
+                            "class id {class_id:?} belongs to a different artifact"
+                        )));
+                    }
+                    if views.views[logical].id() == class_id.dex() {
+                        resolution = Some(Resolved {
+                            entry_index,
+                            logical,
+                            class_def_idx: class_id.class_def_idx(),
+                            duplicates: 0,
+                        });
+                        break 'members;
+                    }
+                }
+            }
+        }
+        if resolution.is_some() {
+            break;
+        }
+    }
+    let Some(resolved) = resolution else {
+        let diagnostics = artifact
+            .open_diagnostics
+            .iter()
+            .cloned()
+            .chain(integrity.iter().cloned())
+            .collect();
+        return Err(Error::new(ErrorKind::NotFound)
+            .with_context("no selected DEX entry defines this class")
+            .with_diagnostics(diagnostics));
     };
-    Ok(Some(
-        names
-            .into_iter()
-            .map(|descriptor| ClassEntry {
-                descriptor,
-                dex_name: inflated.entry.name.clone(),
-            })
-            .collect(),
+    let mut diagnostics: Vec<Diagnostic> =
+        artifact.open_diagnostics.iter().cloned().chain(integrity.iter().cloned()).collect();
+    if resolved.duplicates > 0 {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticCode::DuplicateClassDefinition,
+            Severity::Warning,
+            Stage::Dex,
+            format!(
+                "the descriptor is defined {} times; the first (entry, logical, class_def) \
+                 identity was decompiled",
+                resolved.duplicates + 1
+            ),
+        ));
+    }
+
+    // Backend parse + checked decompile over the resolved entry's bytes
+    // (041 members go through the operation-local scratch normalization).
+    let entry = &artifact.roots[resolved.entry_index];
+    let data = zip::read_entry(&artifact.bytes, entry, &InputLimits::DEFAULT, &mut decoded, &probe)?;
+    let (views, entry_integrity) =
+        container::validate_dex_entry(artifact.id, entry.ordinal, &entry.raw_name, &data, &probe)?;
+    diagnostics.extend(entry_integrity);
+    let view = &views.views[resolved.logical];
+    let scratch = container::backend_scratch(view, &integrity);
+    let backend_bytes: &[u8] = match &scratch {
+        Some(scratch_view) => &scratch_view.bytes,
+        None => view.bytes(),
+    };
+    let budget = droidsaw_dex::analysis::Budget::default();
+    let parsed = droidsaw_dex::analysis::parse_for_analysis(
+        backend_bytes,
+        &droidsaw_dex::analysis::ParseOptions::default(),
+        &budget,
+        &guard.backend,
+    )
+    .map_err(|error| {
+        Error::new(ErrorKind::MalformedInput)
+            .with_context(format!("backend parse: {error}"))
+            .with_diagnostics(diagnostics.clone())
+    })?;
+    let report = droidsaw_dex::analysis::decompile_checked(
+        &parsed,
+        resolved.class_def_idx as usize,
+        &droidsaw_dex::analysis::EmitOptions::default(),
+        &budget,
+        &guard.backend,
+    )
+    .map_err(|error| {
+        Error::new(ErrorKind::MalformedInput)
+            .with_context(format!("backend decompile: {error}"))
+            .with_diagnostics(diagnostics.clone())
+    })?;
+
+    let class_def = &parsed.dex().class_defs[resolved.class_def_idx as usize];
+    let descriptor_text =
+        parsed.dex().get_type_descriptor(class_def.class_idx).unwrap_or("L?;").to_owned();
+    let entry_row = views.dex_entry(resolved.logical);
+    let class = build_class(&entry_row, view, resolved.class_def_idx, &descriptor_text);
+    let metadata = map_metadata(&report.metadata);
+    let text = normalize_source_text(&report.source);
+    let source = Source::new(class, text, metadata);
+    for backend_diag in &report.diagnostics {
+        diagnostics.push(
+            Diagnostic::new(
+                DiagnosticCode::DecompilationNotice,
+                Severity::Warning,
+                Stage::Decompile,
+                format!("{:?}: {}", backend_diag.code, backend_diag.message),
+            )
+            .with_dex(view.id()),
+        );
+    }
+    match &report.completeness {
+        droidsaw_dex::analysis::Completeness::Complete => {
+            let stats = OperationStats { result_items: 1, ..Default::default() };
+            Ok(Report::new(source, diagnostics, stats))
+        }
+        droidsaw_dex::analysis::Completeness::Incomplete { reasons } => Err(Error::new(
+            ErrorKind::IncompleteDecompilation,
+        )
+        .with_context(format!("incomplete decompilation: {reasons:?}"))
+        .with_diagnostics(diagnostics)
+        .with_partial_source(source)),
+    }
+}
+
+/// The decoded manifest: last same-name entry wins. Requires only that one
+/// entry's bytes; DEX entries are not touched.
+pub fn manifest(
+    artifact: &Artifact,
+    control: &OperationControl,
+) -> Result<Report<crate::manifest::Manifest>, Error> {
+    let entry = artifact
+        .catalog
+        .entries
+        .iter()
+        .rev()
+        .find(|entry| entry.raw_name.as_slice() == MANIFEST_NAME)
+        .ok_or_else(|| {
+            Error::new(ErrorKind::NotFound).with_context("no AndroidManifest.xml entry in the APK")
+        })?;
+    let guard = ControlGuard::new(control);
+    let probe = guard.probe();
+    let mut decoded = 0u64;
+    let bytes = zip::read_entry(&artifact.bytes, entry, &InputLimits::DEFAULT, &mut decoded, &probe)?;
+    let report = crate::manifest::decode_manifest_entry(
+        &bytes,
+        &crate::manifest::XmlDecodeLimits::default(),
+        control,
+    )?;
+    let diagnostics = report
+        .diagnostics
+        .iter()
+        .cloned()
+        .chain(artifact.open_diagnostics.iter().cloned())
+        .collect();
+    Ok(Report::new(
+        report.value,
+        diagnostics,
+        OperationStats { result_items: 1, ..Default::default() },
     ))
 }
 
-/// A located class: the DEX entry that defines it and that entry's bytes.
-///
-/// The bytes are a copy because the mapping they were borrowed from ends with the
-/// lookup.
-pub struct ClassHit {
-    pub dex_name: String,
-    pub data: Vec<u8>,
+// --- mapping helpers ---------------------------------------------------------
+
+fn build_class(
+    entry: &DexEntry,
+    view: &ValidatedDexView<'_>,
+    class_def_idx: u32,
+    descriptor_text: &str,
+) -> Class {
+    let descriptor =
+        ClassDescriptor::from_normalized(descriptor_text.to_owned()).unwrap_or_else(|_| {
+            // The backend hands back what the DEX carries; a malformed
+            // descriptor keeps the identity but renders through a valid
+            // shell. `locate_class` rejects such files earlier, so this is
+            // defensive only.
+            ClassDescriptor::from_normalized("L?;".to_owned()).expect("L?; is a valid descriptor")
+        });
+    Class::new(ClassId::new(view.id(), class_def_idx), entry.clone(), descriptor)
 }
 
-/// Locates `descriptor`, cheapest DEX entries first so an early answer needs as
-/// little inflation as possible.
-pub fn find_class(
-    path: &Path,
-    descriptor: &str,
-    threads: usize,
-    debug: bool,
-) -> Result<Option<ClassHit>> {
-    let stop = AtomicBool::new(false);
-    // One probe decides the prefix policy for the archive (see PrefixPolicy).
-    let policy: OnceLock<PrefixPolicy> = OnceLock::new();
-    let hits = map_dex_entries(
-        path,
-        threads,
-        EntryOrder::SmallestFirst,
-        Some(&stop),
-        |inflated| {
-            // Entries that do not define the class only need the prefix, so the code
-            // section is never decompressed for them. `None` means "cannot tell".
-            match prefix_defines_class(&inflated, descriptor.as_bytes(), &policy)? {
-                Some(false) => {
-                    if debug {
-                        eprintln!(
-                            "[APK] '{}' hit=false total={:.2} us",
-                            inflated.entry.name,
-                            inflated.started.elapsed().as_secs_f64() * 1_000_000.0
-                        );
-                    }
-                    return Ok(Vec::new());
-                }
-                Some(true) => {
-                    stop.store(true, Ordering::Relaxed);
-                    if debug {
-                        eprintln!(
-                            "[APK] '{}' hit=true total={:.2} us",
-                            inflated.entry.name,
-                            inflated.started.elapsed().as_secs_f64() * 1_000_000.0
-                        );
-                    }
-                    return Ok(vec![ClassHit {
-                        dex_name: inflated.entry.name.clone(),
-                        data: inflated.data()?.to_vec(),
-                    }]);
-                }
-                None => {}
-            }
-            for logical in dex::container::logical_dexes(&inflated.entry.name, inflated.data()?)? {
-                if dex::defines_class(&logical.data, descriptor.as_bytes())? {
-                    stop.store(true, Ordering::Relaxed);
-                    if debug {
-                        eprintln!(
-                            "[APK] '{}' hit=true total={:.2} us",
-                            inflated.entry.name,
-                            inflated.started.elapsed().as_secs_f64() * 1_000_000.0
-                        );
-                    }
-                    return Ok(vec![ClassHit {
-                        dex_name: logical.name,
-                        data: logical.data.into_owned(),
-                    }]);
-                }
-            }
-            if debug {
-                eprintln!(
-                    "[APK] '{}' hit=false total={:.2} us",
-                    inflated.entry.name,
-                    inflated.started.elapsed().as_secs_f64() * 1_000_000.0
-                );
-            }
-            Ok(Vec::new())
+fn map_metadata(metadata: &droidsaw_dex::analysis::BackendMetadata) -> SourceMetadata {
+    let class = ClassMetadata {
+        access_flags: metadata.access_flags,
+        super_class: metadata.super_descriptor.as_deref().map(DexText::from_str_lossless),
+        interfaces: metadata
+            .interfaces
+            .iter()
+            .map(|text| DexText::from_str_lossless(text))
+            .collect(),
+        source_file: metadata.source_file.as_deref().map(DexText::from_str_lossless),
+        generic_signature: metadata.generic_signature.as_deref().map(DexText::from_str_lossless),
+        enclosing: metadata.enclosing.as_ref().map(|enclosing| EnclosingRecord {
+            outer_class: enclosing.class.as_deref().map(DexText::from_str_lossless),
+            enclosing_method: enclosing.method.as_deref().map(|text| {
+                // The backend renders `name(proto)ret`; kept verbatim as the
+                // method record — the lossless text is the identity here.
+                (
+                    DexText::from_str_lossless(text),
+                    DexText::from_str_lossless(""),
+                    Prototype::default(),
+                )
+            }),
+        }),
+        inner_classes: metadata
+            .inner_class
+            .as_ref()
+            .map(|inner| {
+                vec![InnerClassRecord {
+                    inner_class: DexText::from_str_lossless(""),
+                    outer_class: inner.name.as_deref().map(DexText::from_str_lossless),
+                    inner_name: inner.name.as_deref().map(DexText::from_str_lossless),
+                    access_flags: inner.access_flags,
+                }]
+            })
+            .unwrap_or_default(),
+    };
+    let annotations = metadata
+        .annotations
+        .iter()
+        .map(|report| AnnotationEntry {
+            target: map_annotation_target(report.target),
+            annotation: AnnotationRecord::new(
+                map_annotation_visibility(report.visibility),
+                DexText::from_str_lossless(&report.type_descriptor),
+                Vec::new(),
+                render_annotation_elements(&report.elements),
+            ),
+        })
+        .collect();
+    let fields = metadata
+        .instance_field_reports
+        .iter()
+        .map(|report| FieldMetadata {
+            name: DexText::from_str_lossless(&report.name),
+            field_type: DexText::from_str_lossless(&report.type_descriptor),
+            access_flags: report.access_flags,
+            generic_signature: None,
+            initial_value: None,
+        })
+        .collect();
+    let methods = metadata
+        .method_reports
+        .iter()
+        .map(|report| MethodMetadata {
+            name: DexText::from_str_lossless(&report.name),
+            prototype: prototype_from_descriptor(&report.prototype),
+            access_flags: report.access_flags,
+            generic_signature: None,
+            throws: Vec::new(),
+            annotations: Vec::new(),
+            parameter_signatures: Vec::new(),
+            debug: None,
+        })
+        .collect();
+    SourceMetadata { class, annotations, fields, methods }
+}
+
+fn map_annotation_target(target: droidsaw_dex::analysis::AnnotationTarget) -> AnnotationTarget {
+    use droidsaw_dex::analysis::AnnotationTarget as Backend;
+    match target {
+        Backend::Class => AnnotationTarget::Class,
+        Backend::Field { field_idx } => AnnotationTarget::Field { index: field_idx as usize },
+        Backend::Method { method_idx } => AnnotationTarget::Method { index: method_idx as usize },
+        Backend::Parameter { method_idx, index } => AnnotationTarget::Parameter {
+            method_index: method_idx as usize,
+            parameter_index: index as usize,
         },
-    )?;
-    Ok(hits.into_iter().next())
-}
-
-/// Decompiles `descriptor` to Java-like source, returning the DEX entry it was
-/// found in and the source. `None` when no DEX defines the class.
-pub fn decompile_class(
-    path: &Path,
-    descriptor: &str,
-    threads: usize,
-    debug: bool,
-) -> Result<Option<(String, String)>> {
-    let Some(hit) = find_class(path, descriptor, threads, debug)? else {
-        return Ok(None);
-    };
-    // DEX 041 containers carry an extra-long header and a container-wide
-    // checksum, which the decompiler rejects; hand it a normalized view.
-    let normalized = dex::container::standard_header_view(&hit.data);
-    let data = normalized.as_deref().unwrap_or(&hit.data);
-    // Scoped parse (vendored patch, see vendor/droidsaw-dex/PATCHES.md): the full
-    // parse spends most of its time on emit-supporting tables and on class bodies
-    // other than this one, none of which decompilation reads. The scoped parse
-    // returns the same source for the requested class, verified byte-for-byte
-    // against an unpatched binary over a stratified class sample.
-    let dex = droidsaw_dex::DexFile::parse_for_class(data, descriptor)
-        .context("parse target DEX for decompilation")?;
-    let Some((_index, class_def)) = dex.find_class(descriptor) else {
-        bail!("{descriptor} is missing from the DEX that reported defining it");
-    };
-    let source = droidsaw_dex::classes::decompile_class(&dex, data, class_def);
-    Ok(Some((hit.dex_name, source)))
-}
-
-pub fn read_entry(path: &Path, wanted: &str) -> Result<Vec<u8>> {
-    let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mmap = unsafe { Mmap::map(&file) }.context("map APK")?;
-    // CPython's `zipfile` resolves a name to the *last* central-directory record
-    // carrying it, and the reference implementation reads the manifest through
-    // it; matching that keeps a crafted archive with two AndroidManifest.xml
-    // entries resolving the same way in both tools.
-    let entry = crate::zip::parse_zip_entries(&mmap, |name| name == wanted.as_bytes())?
-        .into_iter()
-        .last()
-        .with_context(|| format!("{wanted} not found in APK"))?;
-    inflate_entry(&mmap, &entry)
-}
-
-/// Root DEX entries, `classes*.dex` preferred.
-///
-/// The reference implementation falls back to any root `*.dex` when an APK names
-/// its DEX files differently, and matching that keeps both tools reporting the
-/// same entries for the same archive.
-fn parse_dex_entries(data: &[u8]) -> Result<Vec<ZipEntry>> {
-    let named = crate::zip::parse_zip_entries(data, |name| {
-        name.starts_with(b"classes") && name.ends_with(b".dex") && !name.contains(&b'/')
-    })?;
-    if !named.is_empty() {
-        return Ok(dedup_names(named));
     }
-    Ok(dedup_names(crate::zip::parse_zip_entries(data, |name| {
-        name.ends_with(b".dex") && !name.contains(&b'/')
-    })?))
 }
 
-/// Keeps the first entry for each name.
-///
-/// A ZIP may hold two entries with the same name (crafted or repacked archives
-/// do). The reference implementation keeps the first `classes*.dex` it meets
-/// while scanning the central directory, so a class defined only in a duplicate
-/// entry stays invisible there; scanning both copies would instead report every
-/// row twice and pick up classes the reference never sees.
-fn dedup_names(entries: Vec<crate::zip::ZipEntry>) -> Vec<crate::zip::ZipEntry> {
-    let mut seen = std::collections::HashSet::new();
-    entries
-        .into_iter()
-        .filter(|entry| seen.insert(entry.name.clone()))
-        .collect()
+fn map_annotation_visibility(
+    visibility: droidsaw_dex::analysis::AnnotationVisibility,
+) -> AnnotationVisibility {
+    use droidsaw_dex::analysis::AnnotationVisibility as Backend;
+    match visibility {
+        Backend::Build => AnnotationVisibility::Build,
+        Backend::Runtime => AnnotationVisibility::Runtime,
+        Backend::System => AnnotationVisibility::System,
+    }
 }
+
+fn render_annotation_elements(elements: &[(String, String)]) -> String {
+    elements
+        .iter()
+        .map(|(name, value)| format!("{name} = {value}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Parses a backend prototype descriptor `(params)ret` into the structured
+/// form. An unparseable text keeps the raw string as the single parameter —
+/// the lossless record beats a silently empty prototype.
+fn prototype_from_descriptor(descriptor: &str) -> Prototype {
+    let Some((params_text, ret)) = descriptor.split_once(')') else {
+        return Prototype::new(
+            vec![DexText::from_str_lossless(descriptor)],
+            DexText::from_str_lossless(""),
+        );
+    };
+    let params_text = params_text.trim_start_matches('(');
+    let mut parameters = Vec::new();
+    let mut rest = params_text;
+    while !rest.is_empty() {
+        let consumed = match rest.as_bytes()[0] {
+            b'L' => rest.find(';').map(|semi| semi + 1).unwrap_or(rest.len()),
+            b'[' => 1 + prototype_component_size(&rest[1..]),
+            _ => 1,
+        };
+        parameters.push(DexText::from_str_lossless(&rest[..consumed]));
+        rest = &rest[consumed..];
+    }
+    Prototype::new(parameters, DexText::from_str_lossless(ret))
+}
+
+/// Length of one non-array component at the head of `rest` (1 for
+/// primitives, up to and including the `;` for class types).
+fn prototype_component_size(rest: &str) -> usize {
+    match rest.as_bytes().first() {
+        Some(b'L') => rest.find(';').map(|semi| semi + 1).unwrap_or(rest.len()),
+        _ => 1,
+    }
+}
+
+/// UTF-8, LF line endings, exactly one trailing LF.
+fn normalize_source_text(source: &str) -> Arc<str> {
+    let trimmed = source.trim_end_matches(['\n', '\r']);
+    Arc::from(format!("{trimmed}\n").as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dex::tests::const_string_fixture;
+    use crate::query::{self, MatchMode};
     use crate::zip::tests::{build_zip, temp_apk};
+    use std::fs;
 
-    #[test]
-    fn dex_entries_fall_back_to_any_root_dex_name() {
-        let dex = dex::tests::const_string_fixture(1);
-        let zip = build_zip(&[("app.dex", &dex, true), ("assets/other.dex", &dex, false)]);
-        let path = temp_apk("fallback", &zip);
-        let rows =
-            find_references(&path, &Query::String("Authorization".to_owned()), 2, false).unwrap();
-        assert_eq!(rows, ["app.dex | LFixture0;->m0 | matched=(Authorization)"]);
-        std::fs::remove_file(&path).unwrap();
+    fn no_control() -> OperationControl {
+        OperationControl::new()
+    }
+
+    /// G02 bytes (static initial values), copied from the contract fixtures.
+    fn g02_dex() -> Vec<u8> {
+        std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/contracts/inputs/g02-static-initializers.dex"
+        ))
+        .expect("g02 fixture")
     }
 
     #[test]
-    fn duplicate_classes_dex_entries_use_the_first_copy() {
-        let first = dex::tests::const_string_fixture(1);
-        let second = dex::tests::const_string_fixture(2);
-        let zip = build_zip(&[
-            ("classes.dex", &first, true),
-            ("classes.dex", &second, true),
-        ]);
-        let path = temp_apk("duplicate-classes", &zip);
-        let rows =
-            find_references(&path, &Query::String("Authorization".to_owned()), 2, false).unwrap();
-        assert_eq!(
-            rows,
-            ["classes.dex | LFixture0;->m0 | matched=(Authorization)"]
-        );
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn duplicate_fallback_dex_entries_use_the_first_copy() {
-        let first = dex::tests::const_string_fixture(1);
-        let second = dex::tests::const_string_fixture(2);
-        let zip = build_zip(&[("app.dex", &first, true), ("app.dex", &second, true)]);
-        let path = temp_apk("duplicate-fallback", &zip);
-        let rows =
-            find_references(&path, &Query::String("Authorization".to_owned()), 2, false).unwrap();
-        assert_eq!(rows, ["app.dex | LFixture0;->m0 | matched=(Authorization)"]);
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn duplicate_manifest_entries_use_the_last_copy() {
-        let zip = build_zip(&[
-            ("AndroidManifest.xml", b"first".as_slice(), false),
-            ("AndroidManifest.xml", b"second".as_slice(), false),
-        ]);
-        let path = temp_apk("duplicate-manifest", &zip);
-        assert_eq!(read_entry(&path, "AndroidManifest.xml").unwrap(), b"second");
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn scoped_parse_keeps_only_the_requested_class_bodies() {
-        let dex = dex::tests::const_string_fixture(2);
-        let full = droidsaw_dex::DexFile::parse(&dex, None).unwrap();
-        let scoped = droidsaw_dex::DexFile::parse_for_class(&dex, "LFixture1;").unwrap();
-        assert!(
-            full.class_datas.len() > scoped.class_datas.len(),
-            "scoped parse kept every class body ({} vs {})",
-            full.class_datas.len(),
-            scoped.class_datas.len()
-        );
-        assert!(scoped.find_class("LFixture1;").is_some());
-        let (_, full_def) = full.find_class("LFixture1;").unwrap();
-        let (_, scoped_def) = scoped.find_class("LFixture1;").unwrap();
-        assert_eq!(
-            droidsaw_dex::classes::decompile_class(&full, &dex, full_def),
-            droidsaw_dex::classes::decompile_class(&scoped, &dex, scoped_def),
-            "scoped parse changed the decompiled source"
-        );
-    }
-
-    #[test]
-    fn scoped_parse_falls_back_to_the_full_parse_for_an_unknown_descriptor() {
-        // The vendor patch's guard compares against canonical descriptors; a
-        // spelling that matches no class must not hand back a body-less DEX.
-        let dex = dex::tests::const_string_fixture(2);
-        let full = droidsaw_dex::DexFile::parse(&dex, None).unwrap();
-        let fallback = droidsaw_dex::DexFile::parse_for_class(&dex, "LNo/Such;").unwrap();
-        assert_eq!(fallback.code_items.len(), full.code_items.len());
-        assert_eq!(fallback.class_datas.len(), full.class_datas.len());
-    }
-
-    #[test]
-    fn decompiles_a_class_from_a_synthetic_apk() {
-        let dex = dex::tests::const_string_fixture(1);
-        let zip = build_zip(&[("classes.dex", &dex, true)]);
-        let path = temp_apk("decompile", &zip);
-        let (entry, source) = decompile_class(&path, "LFixture0;", 2, false)
-            .unwrap()
-            .expect("fixture class is found");
-        assert_eq!(entry, "classes.dex");
-        assert!(source.contains("Fixture0"), "unexpected source: {source}");
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn named_dex_entries_win_over_the_fallback() {
-        let named = dex::tests::const_string_fixture(1);
-        let other = dex::tests::const_string_fixture(2);
-        let zip = build_zip(&[("app.dex", &other, true), ("classes.dex", &named, true)]);
-        let path = temp_apk("prefer-named", &zip);
-        let rows =
-            find_references(&path, &Query::String("Authorization".to_owned()), 2, false).unwrap();
-        assert_eq!(
-            rows,
-            ["classes.dex | LFixture0;->m0 | matched=(Authorization)"]
-        );
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn dex_entries_are_selected_by_name() {
-        let zip = build_zip(&[
-            ("classes.dex", b"first", false),
-            ("classes2.dex", b"second", false),
-            ("assets/classes3.dex", b"nested", false),
-            ("AndroidManifest.xml", b"<manifest/>", false),
-        ]);
-        let names: Vec<String> = parse_dex_entries(&zip)
-            .unwrap()
-            .into_iter()
-            .map(|entry| entry.name)
-            .collect();
-        assert_eq!(
-            names,
-            ["classes.dex", "classes2.dex"],
-            "root DEX entries only"
-        );
-    }
-
-    #[test]
-    fn find_references_searches_every_logical_dex_in_a_041_container() {
-        let container = dex::tests::dex041_container(&[2, 1]);
-        let zip = build_zip(&[("classes.dex", &container, true)]);
-        let path = temp_apk("dex041", &zip);
-        let rows =
-            find_references(&path, &Query::String("Authorization".to_owned()), 2, false).unwrap();
-        assert_eq!(
-            rows,
-            [
-                "classes.dex!classes1.dex | LFixture0;->m0 | matched=(Authorization)",
-                "classes.dex!classes1.dex | LFixture1;->m1 | matched=(Authorization)",
-                "classes.dex!classes2.dex | LFixture0;->m0 | matched=(Authorization)",
-            ]
-        );
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn decompiles_a_class_from_every_logical_dex_of_a_041_container() {
-        // A DEX 041 container overlays each member's header at offset 0, so the
-        // Adler-32 a member stores no longer covers the bytes the decompiler
-        // sees. findrefs never validates it (our scanner does not); the
-        // decompiler does, so this test guards the second member too.
-        // Member one defines LFixture0;, member two LFixture0; and LFixture1;.
-        let container = dex::tests::dex041_container(&[1, 2]);
-        let zip = build_zip(&[("classes.dex", &container, true)]);
-        let path = temp_apk("dex041-getclass", &zip);
-        for (descriptor, expected_entry) in [
-            ("LFixture0;", "classes.dex!classes1.dex"),
-            ("LFixture1;", "classes.dex!classes2.dex"),
-        ] {
-            let hit = decompile_class(&path, descriptor, 2, false).unwrap();
-            let (entry, source) = hit.unwrap_or_else(|| panic!("{descriptor} did not decompile"));
-            assert!(entry.starts_with(expected_entry), "found in {entry}");
-            assert!(source.contains("Fixture"), "unexpected source: {source}");
-        }
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn an_entry_that_is_not_a_dex_is_a_clean_error() {
-        // A packer can leave junk in a classes*.dex entry, and a corrupted magic
-        // looks the same. rasc reports that loudly instead of guessing: the
-        // reference's findrefs errors on such archives too (its class lookup
-        // skips them silently), and silently analysing "the rest" would hide the
-        // fact that part of the archive was not analysed at all. What this test
-        // pins is that the failure is a message with an exit code, not a panic and
-        // not an empty result.
-        let good = dex::tests::const_string_fixture(1);
-        let zip = build_zip(&[
-            ("classes.dex", b"JUNKJUNKJUNK".as_slice(), false),
-            ("classes2.dex", &good, true),
-        ]);
-        let path = temp_apk("junk-dex", &zip);
-        let error = find_references(&path, &Query::String("Authorization".to_owned()), 2, false)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("invalid DEX header"),
-            "unexpected error: {error}"
-        );
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn find_class_finds_a_class_whose_type_id_is_a_later_duplicate() {
-        // A DEX may repeat a descriptor across several type ids. `list_classes`
-        // resolves each class_def's own type id, so `find_class` has to do the
-        // same: looking up "the" type id for the descriptor makes the two
-        // commands contradict each other on such a file.
-        let mut dex = dex::tests::const_string_fixture(2);
-        let header_size = crate::bytes::read_u32(&dex, 0x24).unwrap() as usize;
-        let strings = crate::bytes::read_u32(&dex, 0x38).unwrap() as usize;
-        // type_ids[0] belongs to no class_def; pointing it at "LFixture0;"
-        // (string index 1) makes the descriptor's first match a different id than
-        // the one the class's class_def carries.
-        crate::zip::tests::write_u32(&mut dex, header_size + strings * 4, 1);
-        let zip = build_zip(&[("classes.dex", &dex, true)]);
-        let path = temp_apk("duplicate-type-id", &zip);
-        let listed = list_classes(&path, 2, false).unwrap();
-        assert!(
-            listed.iter().any(|entry| entry.descriptor == "LFixture0;"),
-            "fixture stopped listing the class: {listed:?}"
-        );
-        let hit = find_class(&path, "LFixture0;", 2, false).unwrap();
-        assert!(
-            hit.is_some(),
-            "listed by classes but missing from find_class"
-        );
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn class_index_reads_041_containers_through_the_full_path() {
-        // The prefix reader refuses 041 containers (their members overlay headers),
-        // so this pins that the fallback still lists every logical member.
-        let container = dex::tests::dex041_container(&[2, 1]);
-        let zip = build_zip(&[("classes.dex", &container, true)]);
-        let path = temp_apk("dex041-classes", &zip);
-        let listed = list_classes(&path, 2, false).unwrap();
-        // Member one defines LFixture0; and LFixture1;, member two repeats LFixture0;,
-        // and the index dedups by descriptor, so the two members' names survive as
-        // the first member's (the prefixed name proves the full path ran).
-        let names: Vec<&str> = listed.iter().map(|entry| entry.dex_name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["classes.dex!classes1.dex", "classes.dex!classes1.dex"],
-            "{listed:?}"
-        );
-        let descriptors: Vec<&str> = listed
-            .iter()
-            .map(|entry| entry.descriptor.as_str())
-            .collect();
-        assert_eq!(descriptors, ["LFixture0;", "LFixture1;"], "{listed:?}");
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn single_member_041_container_reports_the_plain_dex_name() {
-        // The reference implementation only renames container members when there
-        // is more than one, so a single-member container keeps the entry name in
-        // every row (the dex column is part of a row's identity).
-        let container = dex::tests::dex041_container(&[1]);
-        let zip = build_zip(&[("classes.dex", &container, true)]);
-        let path = temp_apk("dex041-single", &zip);
-        let rows =
-            find_references(&path, &Query::String("Authorization".to_owned()), 2, false).unwrap();
-        assert_eq!(
-            rows,
-            ["classes.dex | LFixture0;->m0 | matched=(Authorization)"]
-        );
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn find_references_runs_end_to_end_on_a_synthetic_apk() {
-        let first = dex::tests::const_string_fixture(2);
-        let second = dex::tests::const_string_fixture(1);
+    fn references_run_end_to_end_on_a_synthetic_apk() {
+        let first = const_string_fixture(2);
+        let second = const_string_fixture(1);
         let zip = build_zip(&[
             ("classes.dex", &first, true),
             ("classes2.dex", &second, false),
-            ("AndroidManifest.xml", b"<manifest/>", false),
+            ("AndroidManifest.xml", b"<manifest/>".as_slice(), false),
         ]);
-        let path = temp_apk("synthetic", &zip);
-        let query = Query::String("Authorization".to_owned());
-        let rows = find_references(&path, &query, 2, false).unwrap();
-        assert_eq!(
-            rows,
-            [
-                "classes.dex | LFixture0;->m0 | matched=(Authorization)",
-                "classes.dex | LFixture1;->m1 | matched=(Authorization)",
-                "classes2.dex | LFixture0;->m0 | matched=(Authorization)",
-            ]
+        let path = temp_apk("a07-refs", &zip);
+        let artifact = open_path(&path, &no_control()).unwrap();
+        let query = query::string_query("Authorization", MatchMode::Literal, &Default::default())
+            .unwrap();
+        let report = references(&artifact, &query, &no_control()).unwrap();
+        assert!(!report.value().is_empty(), "fixture strings must hit");
+        // central-directory order: every row of classes.dex precedes classes2.dex
+        let first_ordinal = report.value()[0].caller().id().dex().entry_ordinal();
+        let all_ordinals: Vec<u32> =
+            report.value().iter().map(|row| row.caller().id().dex().entry_ordinal()).collect();
+        assert!(
+            all_ordinals.windows(2).all(|pair| pair[0] <= pair[1]),
+            "rows must be merged in entry-ordinal order"
         );
-        assert_eq!(
-            find_references(&path, &query, 2, false).unwrap(),
-            rows,
-            "deterministic"
-        );
-        std::fs::remove_file(&path).unwrap();
+        assert_eq!(first_ordinal, 0);
+        // deterministic across runs
+        let again = references(&artifact, &query, &no_control()).unwrap();
+        assert_eq!(format!("{:?}", report.value()), format!("{:?}", again.value()));
+        fs::remove_file(&path).unwrap();
     }
 
     #[test]
-    fn worker_count_must_be_positive() {
-        let zip = build_zip(&[("classes.dex", b"payload", false)]);
-        let path = temp_apk("workers", &zip);
-        let query = Query::String("x".to_owned());
-        assert!(find_references(&path, &query, 0, false).is_err());
-        std::fs::remove_file(&path).unwrap();
+    fn dexless_archives_split_success_and_notfound_by_operation() {
+        let zip = build_zip(&[("AndroidManifest.xml", b"<manifest/>".as_slice(), false)]);
+        let path = temp_apk("a07-dexless", &zip);
+        let artifact = open_path(&path, &no_control()).unwrap();
+        let dex_rows = dexes(&artifact, &no_control()).unwrap();
+        assert!(dex_rows.value().is_empty(), "dexes on a dex-less APK is an empty catalog");
+        let query =
+            query::string_query("Authorization", MatchMode::Literal, &Default::default()).unwrap();
+        let error = references(&artifact, &query, &no_control()).unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::NotFound);
+        let class_error = classes(&artifact, &ClassFilter::none(), &no_control()).unwrap_err();
+        assert_eq!(*class_error.kind(), ErrorKind::NotFound);
+        fs::remove_file(&path).unwrap();
     }
 
     #[test]
-    fn class_entry_exposes_name_components() {
-        let entry = ClassEntry {
-            descriptor: "Lcom/example/Main$Nested;".to_owned(),
-            dex_name: "classes.dex".to_owned(),
-        };
-        assert_eq!(entry.java_name(), "com/example/Main$Nested");
-        assert_eq!(entry.package(), "com/example");
-        assert_eq!(entry.simple_name(), "Main$Nested");
+    fn g02_static_initializers_survive_the_integration() {
+        let dex = g02_dex();
+        let zip = build_zip(&[("classes.dex", &dex, true)]);
+        let path = temp_apk("a07-g02", &zip);
+        let artifact = open_path(&path, &no_control()).unwrap();
+        let selector = ClassSelector::Descriptor(
+            ClassDescriptor::from_normalized("Lexample/Statics;".to_owned()).unwrap(),
+            None,
+        );
+        let report = decompile(&artifact, &selector, &no_control()).unwrap();
+        let text = report.value().text();
+        assert!(text.contains("FIRST = 11"), "FIRST initializer missing:\n{text}");
+        assert!(text.contains("SECOND = 22"), "SECOND initializer missing:\n{text}");
+        assert!(text.contains("SECOND"), "getSecond must read SECOND:\n{text}");
+        assert_eq!(report.value().class().descriptor().as_str(), "Lexample/Statics;");
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn zero_checksum_dex_decompiles_with_a_warning() {
+        // G03: the G02 bytes with the checksum/signature window zeroed.
+        let mut dex = g02_dex();
+        dex[8..32].fill(0);
+        let zip = build_zip(&[("classes.dex", &dex, true)]);
+        let path = temp_apk("a07-g03", &zip);
+        let artifact = open_path(&path, &no_control()).unwrap();
+        let selector = ClassSelector::Descriptor(
+            ClassDescriptor::from_normalized("Lexample/Statics;".to_owned()).unwrap(),
+            None,
+        );
+        let report = decompile(&artifact, &selector, &no_control()).unwrap();
+        assert!(report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code() == DiagnosticCode::DexChecksumMismatch));
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn classes_lists_all_definitions_and_flags_duplicates() {
+        // One descriptor defined in two different DEX entries.
+        let first = const_string_fixture(1);
+        let zip = build_zip(&[("classes.dex", &first, true), ("classes2.dex", &first, true)]);
+        let path = temp_apk("a07-dup-classes", &zip);
+        let artifact = open_path(&path, &no_control()).unwrap();
+        let report = classes(&artifact, &ClassFilter::none(), &no_control()).unwrap();
+        assert_eq!(report.value().len(), 2, "both definitions are listed");
+        let ids: Vec<u32> = report.value().iter().map(|class| class.id().class_def_idx()).collect();
+        assert_eq!(ids, [0, 0], "both are class_def 0 of their own DEX");
+        let dexes_of: Vec<u32> =
+            report.value().iter().map(|class| class.id().dex().entry_ordinal()).collect();
+        assert_eq!(dexes_of, [0, 1]);
+        assert!(report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code() == DiagnosticCode::DuplicateClassDefinition));
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn manifest_decodes_through_the_structured_path() {
+        let dex = const_string_fixture(1);
+        let zip = build_zip(&[
+            ("AndroidManifest.xml", b"<manifest/>".as_slice(), false),
+            ("classes.dex", &dex, true),
+        ]);
+        let path = temp_apk("a07-manifest", &zip);
+        let artifact = open_path(&path, &no_control()).unwrap();
+        let report = manifest(&artifact, &no_control()).unwrap();
+        let xml = report
+            .value()
+            .to_xml(&crate::manifest::XmlRenderOptions::default(), &no_control())
+            .unwrap();
+        assert!(xml.contains("<manifest"), "rendered manifest: {xml}");
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn getclass_pinned_dex_selects_across_entries() {
+        // Fixture0 lives in both entries; Fixture1 only in classes2.dex.
+        let first = const_string_fixture(1);
+        let second = const_string_fixture(2);
+        let zip = build_zip(&[("classes.dex", &first, true), ("classes2.dex", &second, true)]);
+        let path = temp_apk("a07-pin", &zip);
+        let artifact = open_path(&path, &no_control()).unwrap();
+        let catalog = dexes(&artifact, &no_control()).unwrap();
+        assert_eq!(catalog.value().len(), 2);
+        let pinned = catalog.value()[1].id();
+        let selector = ClassSelector::Descriptor(
+            ClassDescriptor::from_normalized("LFixture1;".to_owned()).unwrap(),
+            Some(pinned),
+        );
+        let report = decompile(&artifact, &selector, &no_control()).unwrap();
+        assert!(report.value().text().contains("Fixture1"));
+        // An unpinned descriptor resolution still finds the first definition.
+        let unpinned = ClassSelector::Descriptor(
+            ClassDescriptor::from_normalized("LFixture0;".to_owned()).unwrap(),
+            None,
+        );
+        let report = decompile(&artifact, &unpinned, &no_control()).unwrap();
+        assert!(report.value().text().contains("Fixture0"));
+        // A selector pinned to the OTHER entry cannot see Fixture1 there.
+        let other = catalog.value()[0].id();
+        let wrong = ClassSelector::Descriptor(
+            ClassDescriptor::from_normalized("LFixture1;".to_owned()).unwrap(),
+            Some(other),
+        );
+        let error = decompile(&artifact, &wrong, &no_control()).unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::NotFound);
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn named_entries_win_over_fallback_and_junk_dex_fails_loudly() {
+        let good = const_string_fixture(1);
+        let zip = build_zip(&[("app.dex", &good, true), ("classes.dex", &good, true)]);
+        let path = temp_apk("a07-named", &zip);
+        let artifact = open_path(&path, &no_control()).unwrap();
+        let query =
+            query::string_query("Authorization", MatchMode::Literal, &Default::default()).unwrap();
+        let report = references(&artifact, &query, &no_control()).unwrap();
+        assert!(
+            report
+                .value()
+                .iter()
+                .all(|row| row.caller().id().dex().entry_ordinal() == 1),
+            "the classes*.dex entry (CD ordinal 1) suppresses the app.dex fallback"
+        );
+        fs::remove_file(&path).unwrap();
+
+        let junk = build_zip(&[
+            ("classes.dex", b"JUNKJUNKJUNK".as_slice(), false),
+            ("classes2.dex", &good, true),
+        ]);
+        let path = temp_apk("a07-junk", &junk);
+        let artifact = open_path(&path, &no_control()).unwrap();
+        let error = references(&artifact, &query, &no_control()).unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::MalformedInput);
+        fs::remove_file(&path).unwrap();
     }
 }

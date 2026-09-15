@@ -87,6 +87,16 @@ impl OperationControl {
         self
     }
 
+    /// The host cancel flag, when one was installed.
+    pub(crate) fn cancel_flag(&self) -> Option<Arc<AtomicBool>> {
+        self.cancel.clone()
+    }
+
+    /// The absolute deadline, when one was set.
+    pub(crate) fn deadline(&self) -> Option<std::time::Instant> {
+        self.deadline
+    }
+
     #[allow(dead_code)]
     pub fn with_deadline(mut self, deadline: Instant) -> Self {
         self.deadline = Some(deadline);

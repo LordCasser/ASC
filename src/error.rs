@@ -99,21 +99,25 @@ impl Error {
         self
     }
 
+#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn kind(&self) -> &ErrorKind {
         &self.kind
     }
 
-    /// Context entries, outermost first.
+    #[allow(dead_code)]
     pub fn context(&self) -> &[String] {
         &self.context
     }
 
+    #[allow(dead_code)]
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }
 
     /// The partial decompiled source, when the failure is an incomplete
     /// decompilation that still produced usable text.
+    #[allow(dead_code)]
     pub fn partial_source(&self) -> Option<&Source> {
         self.partial_source.as_deref()
     }

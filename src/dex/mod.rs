@@ -20,26 +20,16 @@ pub(crate) mod container;
 mod filter;
 mod mutf8;
 mod opcodes;
-pub(crate) mod prefix;
 
 use crate::bytes::{ControlProbe, read_u16, read_u32};
 use crate::error::Error;
 use crate::model::{
-    ClassConstraint, DexEntry, DexText, MatchOutcome, MemberQuery as ContractMemberQuery,
-    MethodIdentity, MethodId, Pattern, Prototype, Reference, ReferenceQuery, TargetId,
-    TargetKind, TargetMatch, TargetValue,
+    Class, ClassConstraint, ClassDescriptor, ClassId, DexEntry, DexText, MatchOutcome,
+    MemberQuery as ContractMemberQuery, MethodIdentity, MethodId, Pattern, Prototype, Reference,
+    ReferenceQuery, TargetId, TargetKind, TargetMatch, TargetValue,
 };
-use crate::query::{ClassQuery, MemberQuery, Query};
-use anyhow::{Context, Result, bail};
 use filter::Targets;
-use memchr::memmem::Finder;
-use rayon::prelude::*;
-use std::collections::{BTreeMap, BTreeSet};
-
-/// Class lists at least this large are split across workers during the scan.
-const PARALLEL_SCAN_CLASSES: usize = 64;
-/// Minimum classes per split; keeps splitting overhead negligible on huge DEXes.
-const PARALLEL_SCAN_MIN_CHUNK: usize = 8;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug)]
 struct Header {
@@ -57,461 +47,6 @@ struct Header {
     classes_off: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct MemberId {
-    class_idx: u16,
-    name_idx: u32,
-}
-
-/// Legacy bridge kept for `apk.rs`; replaced by [`scan_references`] and
-/// deleted by A07.
-pub fn defines_class(data: &[u8], descriptor: &[u8]) -> Result<bool> {
-    let dex = Dex::parse(data)?;
-    // Resolve each class_def's own type id rather than looking up "the" type id
-    // for the descriptor: a DEX may repeat a descriptor across several type ids
-    // (the spec only requires them to be sorted, and crafted or merged files do
-    // repeat one), and `class_names` reads each class_def's own id. A
-    // first-match-only lookup would make `classes` list a class that `getclass`
-    // then cannot find.
-    for index in 0..dex.header.classes_size {
-        let offset = dex.header.classes_off + index * 32;
-        let type_idx = dex.u32(offset)? as usize;
-        if let Ok(string_idx) = dex.type_string_idx(type_idx)
-            && dex.string_bytes(string_idx)? == descriptor
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-/// Legacy bridge kept for `apk.rs`; replaced by [`scan_references`] and
-/// deleted by A07.
-pub fn class_names(data: &[u8]) -> Result<Vec<String>> {
-    let dex = Dex::parse(data)?;
-    let mut names = Vec::with_capacity(dex.header.classes_size);
-    for index in 0..dex.header.classes_size {
-        let class_def = dex.header.classes_off + index * 32;
-        names.push(dex.type_name(dex.u32(class_def)? as usize)?);
-    }
-    Ok(names)
-}
-
-/// One reference hit: where it was found, what references the target, and which
-/// of the query's targets that method references.
-///
-/// The scanner returns these as data; rendering them into output lines is the
-/// CLI's job, so the output format lives in exactly one place.
-///
-/// Legacy text-row shape kept for `apk.rs`; replaced by [`scan_references`]
-/// and deleted by A07.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReferenceRow {
-    /// Descriptor of the defining class, e.g. `Lcom/foo/Main;`.
-    pub class_name: String,
-    /// Name of the referencing method.
-    pub method_name: String,
-    /// Names of the referenced targets, in ascending index order.
-    pub matched: Vec<String>,
-}
-
-/// Legacy bridge kept for `apk.rs`; replaced by [`scan_references`] and
-/// deleted by A07.
-pub fn find_references(data: &[u8], query: &Query) -> Result<Vec<ReferenceRow>> {
-    let dex = Dex::parse(data)?;
-    let (kind, targets) = dex.resolve_targets(query)?;
-    if targets.is_empty() {
-        return Ok(Vec::new());
-    }
-    let targets = Targets::new(targets);
-    let hits = dex.scan_all_classes(kind, &targets)?;
-    let mut rows = Vec::with_capacity(hits.len());
-    for (method_idx, matched) in hits {
-        let method = dex.method(method_idx as usize)?;
-        let mut matched_names = Vec::with_capacity(matched.len());
-        for index in matched {
-            matched_names.push(dex.target_name(kind, index as usize)?);
-        }
-        rows.push(ReferenceRow {
-            class_name: dex.type_name(method.class_idx as usize)?,
-            method_name: dex.string(method.name_idx as usize)?,
-            matched: matched_names,
-        });
-    }
-    Ok(rows)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RefKind {
-    String,
-    Type,
-    Method,
-    Field,
-}
-
-impl RefKind {
-    /// Bit used by the per-opcode kind mask.
-    const fn bit(self) -> u8 {
-        match self {
-            RefKind::String => 1,
-            RefKind::Type => 2,
-            RefKind::Method => 4,
-            RefKind::Field => 8,
-        }
-    }
-}
-
-struct Dex<'a> {
-    data: &'a [u8],
-    header: Header,
-}
-
-impl<'a> Dex<'a> {
-    fn parse(data: &'a [u8]) -> Result<Self> {
-        if data.len() < 0x70 || !data.starts_with(b"dex\n") {
-            bail!("invalid DEX header");
-        }
-        let header = Header {
-            strings_size: read_u32(data, 0x38)? as usize,
-            strings_off: read_u32(data, 0x3c)? as usize,
-            types_size: read_u32(data, 0x40)? as usize,
-            types_off: read_u32(data, 0x44)? as usize,
-            protos_size: read_u32(data, 0x48)? as usize,
-            protos_off: read_u32(data, 0x4c)? as usize,
-            fields_size: read_u32(data, 0x50)? as usize,
-            fields_off: read_u32(data, 0x54)? as usize,
-            methods_size: read_u32(data, 0x58)? as usize,
-            methods_off: read_u32(data, 0x5c)? as usize,
-            classes_size: read_u32(data, 0x60)? as usize,
-            classes_off: read_u32(data, 0x64)? as usize,
-        };
-        for (offset, count, width, name) in [
-            (header.strings_off, header.strings_size, 4, "string_ids"),
-            (header.types_off, header.types_size, 4, "type_ids"),
-            (header.protos_off, header.protos_size, 12, "proto_ids"),
-            (header.fields_off, header.fields_size, 8, "field_ids"),
-            (header.methods_off, header.methods_size, 8, "method_ids"),
-            (header.classes_off, header.classes_size, 32, "class_defs"),
-        ] {
-            check_table(data, offset, count, width, name)?;
-        }
-        Ok(Self { data, header })
-    }
-
-    fn u32(&self, offset: usize) -> Result<u32> {
-        read_u32(self.data, offset)
-    }
-
-    fn string_bytes(&self, index: usize) -> Result<&'a [u8]> {
-        if index >= self.header.strings_size {
-            bail!("string index out of range");
-        }
-        let mut offset = self.u32(self.header.strings_off + index * 4)? as usize;
-        if offset >= self.data.len() {
-            bail!("string_data_off outside DEX");
-        }
-        read_uleb(self.data, &mut offset)?;
-        let tail = self.data.get(offset..).context("bad string data offset")?;
-        let end = memchr::memchr(0, tail).context("unterminated DEX string")?;
-        Ok(&tail[..end])
-    }
-
-    fn string(&self, index: usize) -> Result<String> {
-        let bytes = self.string_bytes(index)?;
-        Ok(mutf8::decode_lossy_string(bytes))
-    }
-
-    fn type_string_idx(&self, index: usize) -> Result<usize> {
-        if index >= self.header.types_size {
-            bail!("type index out of range");
-        }
-        Ok(self.u32(self.header.types_off + index * 4)? as usize)
-    }
-
-    fn type_name(&self, index: usize) -> Result<String> {
-        self.string(self.type_string_idx(index)?)
-    }
-
-    fn method(&self, index: usize) -> Result<MemberId> {
-        self.member(self.header.methods_off, self.header.methods_size, index)
-    }
-
-    fn field(&self, index: usize) -> Result<MemberId> {
-        self.member(self.header.fields_off, self.header.fields_size, index)
-    }
-
-    fn member(&self, base: usize, size: usize, index: usize) -> Result<MemberId> {
-        if index >= size {
-            bail!("member index out of range");
-        }
-        let offset = base + index * 8;
-        Ok(MemberId {
-            class_idx: read_u16(self.data, offset)?,
-            name_idx: self.u32(offset + 4)?,
-        })
-    }
-
-    fn matching_strings(&self, pattern: &str) -> Result<Vec<u32>> {
-        if pattern.is_empty() {
-            return Ok(Vec::new());
-        }
-        let needle = mutf8::encode_mutf8(pattern);
-        let finder = Finder::new(&needle);
-        let mut out = Vec::new();
-        for index in 0..self.header.strings_size {
-            if finder.find(self.string_bytes(index)?).is_some() {
-                out.push(index as u32);
-            }
-        }
-        Ok(out)
-    }
-
-    fn matching_types(&self, pattern: &str) -> Result<Vec<u32>> {
-        let strings: BTreeSet<u32> = self.matching_strings(pattern)?.into_iter().collect();
-        let mut out = Vec::new();
-        for index in 0..self.header.types_size {
-            if strings.contains(&(self.type_string_idx(index)? as u32)) {
-                out.push(index as u32);
-            }
-        }
-        Ok(out)
-    }
-
-    fn resolve_targets(&self, query: &Query) -> Result<(RefKind, Vec<u32>)> {
-        match query {
-            Query::String(pattern) => Ok((RefKind::String, self.matching_strings(pattern)?)),
-            Query::Type(pattern) => Ok((RefKind::Type, self.matching_types(pattern)?)),
-            Query::Method(query) => Ok((RefKind::Method, self.matching_members(query, true)?)),
-            Query::Field(query) => Ok((RefKind::Field, self.matching_members(query, false)?)),
-        }
-    }
-
-    fn matching_members(&self, query: &MemberQuery, methods: bool) -> Result<Vec<u32>> {
-        let (base, size) = if methods {
-            (self.header.methods_off, self.header.methods_size)
-        } else {
-            (self.header.fields_off, self.header.fields_size)
-        };
-        let name_finder = query
-            .name
-            .as_deref()
-            .map(|pattern| Finder::new(pattern.as_bytes()));
-        let class_finder = match &query.class {
-            Some(ClassQuery::Fuzzy(pattern)) => Some(Finder::new(pattern.as_bytes())),
-            _ => None,
-        };
-        let mut out = Vec::new();
-        for index in 0..size {
-            let member = self.member(base, size, index)?;
-            let name_matches = match &name_finder {
-                Some(finder) => finder
-                    .find(self.string_bytes(member.name_idx as usize)?)
-                    .is_some(),
-                None => true,
-            };
-            if !name_matches {
-                continue;
-            }
-            let class_name_idx = self.type_string_idx(member.class_idx as usize)?;
-            let class_bytes = self.string_bytes(class_name_idx)?;
-            let class_matches = match &query.class {
-                None => true,
-                Some(ClassQuery::Exact(name)) => class_bytes == name.as_bytes(),
-                Some(ClassQuery::Fuzzy(_)) => class_finder
-                    .as_ref()
-                    .is_some_and(|finder| finder.find(class_bytes).is_some()),
-            };
-            if class_matches {
-                out.push(index as u32);
-            }
-        }
-        Ok(out)
-    }
-
-    fn target_name(&self, kind: RefKind, index: usize) -> Result<String> {
-        match kind {
-            RefKind::String => self.string(index),
-            RefKind::Type => self.type_name(index),
-            RefKind::Method | RefKind::Field => {
-                let member = if kind == RefKind::Method {
-                    self.method(index)?
-                } else {
-                    self.field(index)?
-                };
-                Ok(format!(
-                    "{}->{}",
-                    self.type_name(member.class_idx as usize)?,
-                    self.string(member.name_idx as usize)?
-                ))
-            }
-        }
-    }
-
-    /// Scans every class definition, optionally splitting the class list across
-    /// idle workers.
-    ///
-    /// A single large DEX otherwise owns one worker for the whole scan while the
-    /// rest of the pool waits, which shows up as tail latency once the smaller
-    /// entries are done. Hit sets are unioned, so the merged result does not
-    /// depend on how the split happened to be stolen.
-    fn scan_all_classes(
-        &self,
-        kind: RefKind,
-        targets: &Targets,
-    ) -> Result<BTreeMap<u32, BTreeSet<u32>>> {
-        if self.header.classes_size < PARALLEL_SCAN_CLASSES {
-            self.scan_all_classes_sequential(kind, targets)
-        } else {
-            self.scan_all_classes_parallel(kind, targets)
-        }
-    }
-
-    fn scan_all_classes_sequential(
-        &self,
-        kind: RefKind,
-        targets: &Targets,
-    ) -> Result<BTreeMap<u32, BTreeSet<u32>>> {
-        let mut hits = BTreeMap::new();
-        for class_index in 0..self.header.classes_size {
-            self.scan_class_index(class_index, kind, targets, &mut hits)?;
-        }
-        Ok(hits)
-    }
-
-    fn scan_all_classes_parallel(
-        &self,
-        kind: RefKind,
-        targets: &Targets,
-    ) -> Result<BTreeMap<u32, BTreeSet<u32>>> {
-        (0..self.header.classes_size)
-            .into_par_iter()
-            .with_min_len(PARALLEL_SCAN_MIN_CHUNK)
-            .try_fold(BTreeMap::new, |mut hits, class_index| {
-                self.scan_class_index(class_index, kind, targets, &mut hits)?;
-                Ok(hits)
-            })
-            .try_reduce(BTreeMap::new, |mut left, right| {
-                for (method_idx, matched) in right {
-                    left.entry(method_idx).or_default().extend(matched);
-                }
-                Ok(left)
-            })
-    }
-
-    fn scan_class_index(
-        &self,
-        class_index: usize,
-        kind: RefKind,
-        targets: &Targets,
-        hits: &mut BTreeMap<u32, BTreeSet<u32>>,
-    ) -> Result<()> {
-        let class_def = self.header.classes_off + class_index * 32;
-        let class_data_off = self.u32(class_def + 24)? as usize;
-        if class_data_off != 0 {
-            self.scan_class_data(class_data_off, kind, targets, hits)?;
-        }
-        Ok(())
-    }
-
-    fn scan_class_data(
-        &self,
-        offset: usize,
-        kind: RefKind,
-        targets: &Targets,
-        hits: &mut BTreeMap<u32, BTreeSet<u32>>,
-    ) -> Result<()> {
-        let mut cursor = offset;
-        let static_fields = read_uleb(self.data, &mut cursor)? as usize;
-        let instance_fields = read_uleb(self.data, &mut cursor)? as usize;
-        let direct_methods = read_uleb(self.data, &mut cursor)? as usize;
-        let virtual_methods = read_uleb(self.data, &mut cursor)? as usize;
-        for _ in 0..static_fields + instance_fields {
-            read_uleb(self.data, &mut cursor)?;
-            read_uleb(self.data, &mut cursor)?;
-        }
-        for count in [direct_methods, virtual_methods] {
-            let mut method_idx = 0u32;
-            for _ in 0..count {
-                method_idx = method_idx
-                    .checked_add(read_uleb(self.data, &mut cursor)?)
-                    .context("method index overflow")?;
-                read_uleb(self.data, &mut cursor)?;
-                let code_off = read_uleb(self.data, &mut cursor)? as usize;
-                if code_off != 0 {
-                    self.scan_code(method_idx, code_off, kind, targets, hits)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn scan_code(
-        &self,
-        method_idx: u32,
-        code_off: usize,
-        kind: RefKind,
-        targets: &Targets,
-        hits: &mut BTreeMap<u32, BTreeSet<u32>>,
-    ) -> Result<()> {
-        let insns_size = self.u32(code_off + 12)? as usize;
-        let start = code_off.checked_add(16).context("code offset overflow")?;
-        let end = start
-            .checked_add(insns_size.checked_mul(2).context("code size overflow")?)
-            .context("code range overflow")?;
-        let code = self.data.get(start..end).context("code item outside DEX")?;
-        if !targets.might_reference(code) {
-            return Ok(());
-        }
-        let kind_bit = kind.bit();
-        let mut pc = 0usize;
-        while pc + 2 <= code.len() {
-            let opcode = code[pc];
-            let units = opcodes::OPCODE_UNITS[opcode as usize] as usize;
-            let units = if units == 0 {
-                opcodes::instruction_units(code, pc)?
-            } else {
-                units
-            };
-            if units == 0 || pc + units * 2 > code.len() {
-                bail!("invalid instruction width at code offset {}", start + pc);
-            }
-            // 0x1b is the only reference instruction with a 32-bit index, and
-            // only the string mask can reach it.
-            if opcodes::OPCODE_KINDS[opcode as usize] & kind_bit != 0 {
-                let index = if opcode == 0x1b {
-                    read_u32(code, pc + 2)?
-                } else {
-                    read_u16(code, pc + 2)? as u32
-                };
-                if targets.contains(index) {
-                    hits.entry(method_idx).or_default().insert(index);
-                }
-            }
-            pc += units * 2;
-        }
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Structured scan (A03 contract layer; A07 wires it into the CLI)
-// ---------------------------------------------------------------------------
-//
-// Everything below produces the frozen domain results (Reference with full
-// caller/target identity, code-unit offsets, limits and cancellation) from
-// one logical DEX view. tests/contract_references.rs consumes it today, so
-// items not yet called from the binary carry `allow(dead_code)` until A07.
-
-/// One logical DEX offered to the structured scanner: the physical bytes plus
-/// the [`DexEntry`] whose `header_offset` says where this member's header
-/// lives inside them (0 for a plain DEX, container-relative for 041 members).
-///
-/// This adapts A02's `container::ValidatedDexView` handover (bytes +
-/// header_offset + id + version; interfaces.md §3) to the full identity the
-/// results need: `DexView::new(views.dex_entry(logical), view.bytes())` is
-/// the whole adapter, because table offsets read from a member header are
-/// absolute positions inside the shared bytes.
-#[allow(dead_code)]
 pub(crate) struct DexView<'a> {
     entry: DexEntry,
     bytes: &'a [u8],
@@ -575,6 +110,64 @@ pub(crate) struct ScanOptions<'a> {
     /// Whether the byte-level operand pre-filter may skip method bodies. It is
     /// a pure acceleration: on and off must produce identical results.
     pub(crate) prefilter: bool,
+}
+
+/// Every class definition of one view, in class_def order — the rows of
+/// the `classes` operation. Duplicate descriptors are kept: the identity
+/// is `(DexId, class_def_idx)`, never the descriptor text.
+pub(crate) fn list_classes(
+    view: &DexView<'_>,
+    limits: &ScanLimits,
+    control: Option<&ControlProbe<'_>>,
+) -> Result<Vec<Class>, Error> {
+    let dex = ScanDex::parse(view, limits)?;
+    check_control(control)?;
+    let mut out = Vec::with_capacity(dex.header.classes_size);
+    for index in 0..dex.header.classes_size {
+        let class_def = dex.header.classes_off + index * 32;
+        let type_idx = dex.u32(class_def)?;
+        let descriptor = dex.type_text(type_idx, limits)?;
+        let text = descriptor.as_str().ok_or_else(|| {
+            Error::malformed_input(format!(
+                "class_def #{index}: descriptor {descriptor:?} is not representable Unicode"
+            ))
+        })?;
+        let validated = ClassDescriptor::from_normalized(text.clone()).map_err(|_| {
+            Error::malformed_input(format!(
+                "class_def #{index}: descriptor {text} violates the L..; class descriptor grammar"
+            ))
+        })?;
+        out.push(Class::new(
+            ClassId::new(view.entry().id(), index as u32),
+            view.entry().clone(),
+            validated,
+        ));
+    }
+    Ok(out)
+}
+
+/// The class_def indices of one view whose descriptor equals `descriptor`.
+/// More than one index is legal (a DEX may define the same descriptor
+/// twice); the caller keeps every definition and selects by identity.
+pub(crate) fn locate_class(
+    view: &DexView<'_>,
+    descriptor: &ClassDescriptor,
+    limits: &ScanLimits,
+    control: Option<&ControlProbe<'_>>,
+) -> Result<Vec<u32>, Error> {
+    let dex = ScanDex::parse(view, limits)?;
+    check_control(control)?;
+    let wanted: Vec<u16> = descriptor.as_str().encode_utf16().collect();
+    let mut out = Vec::new();
+    for index in 0..dex.header.classes_size {
+        let class_def = dex.header.classes_off + index * 32;
+        let type_idx = dex.u32(class_def)?;
+        let text = dex.type_text(type_idx, limits)?;
+        if text.utf16_units() == wanted.as_slice() {
+            out.push(index as u32);
+        }
+    }
+    Ok(out)
 }
 
 /// Cancellation checkpoint density inside instruction loops (code units).
@@ -788,8 +381,12 @@ impl<'a> ScanDex<'a> {
         let mut parameters = Vec::new();
         if parameters_off != 0 {
             let size = self.u32(parameters_off)? as usize;
+            // PATCHED (asc, A07): type_list entries are 16-bit type indexes
+            // (DEX spec §type-list), not 32-bit — the u32 stride read garbage
+            // on every real prototype that takes parameters (all synthetic
+            // fixtures had zero-parameter prototypes, so tests never hit it).
             let bytes = size
-                .checked_mul(4)
+                .checked_mul(2)
                 .ok_or_else(|| Error::malformed_input("type list size overflows"))?;
             let end = parameters_off
                 .checked_add(4)
@@ -802,7 +399,10 @@ impl<'a> ScanDex<'a> {
             }
             for position in 0..size {
                 parameters.push(
-                    self.type_text(self.u32(parameters_off + 4 + position * 4)?, limits)?,
+                    self.type_text(
+                        self.u16(parameters_off + 4 + position * 2)? as u32,
+                        limits,
+                    )?,
                 );
             }
         }
@@ -1219,6 +819,45 @@ fn check_limited_table(
     Ok(())
 }
 
+/// Which opcode family a target kind scans; bit values match the
+/// per-opcode kind mask in `opcodes.rs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RefKind {
+    String,
+    Type,
+    Method,
+    Field,
+}
+
+impl RefKind {
+    /// Bit used by the per-opcode kind mask.
+    const fn bit(self) -> u8 {
+        match self {
+            RefKind::String => 1,
+            RefKind::Type => 2,
+            RefKind::Method => 4,
+            RefKind::Field => 8,
+        }
+    }
+}
+
+/// ULEB128 reader shared by the structured scanner; errors carry the
+/// domain kind so callers never see anyhow in analysis paths.
+pub(crate) fn read_uleb(data: &[u8], offset: &mut usize) -> Result<u32, Error> {
+    let mut result = 0u32;
+    for shift in [0, 7, 14, 21, 28] {
+        let byte = *data
+            .get(*offset)
+            .ok_or_else(|| Error::malformed_input("truncated ULEB128"))?;
+        *offset += 1;
+        result |= u32::from(byte & 0x7f) << shift;
+        if byte < 0x80 {
+            return Ok(result);
+        }
+    }
+    Err(Error::malformed_input("ULEB128 exceeds 5 bytes"))
+}
+
 /// Maps the contract kind onto the opcode-table bit values.
 fn ref_kind(kind: TargetKind) -> RefKind {
     match kind {
@@ -1229,32 +868,30 @@ fn ref_kind(kind: TargetKind) -> RefKind {
     }
 }
 
-fn check_table(data: &[u8], offset: usize, count: usize, width: usize, name: &str) -> Result<()> {
-    let end = offset
-        .checked_add(count.checked_mul(width).context("table size overflow")?)
-        .context("table range overflow")?;
-    if end > data.len() {
-        bail!("bad {name} range");
-    }
-    Ok(())
-}
-
-fn read_uleb(data: &[u8], offset: &mut usize) -> Result<u32> {
-    let mut result = 0u32;
-    for shift in [0, 7, 14, 21, 28] {
-        let byte = *data.get(*offset).context("truncated ULEB128")?;
-        *offset += 1;
-        result |= u32::from(byte & 0x7f) << shift;
-        if byte < 0x80 {
-            return Ok(result);
-        }
-    }
-    bail!("ULEB128 exceeds 5 bytes")
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::error::ErrorKind;
+    use crate::model::PatternLimits;
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+
+    /// A DexView over raw fixture bytes with a fixed identity.
+    fn structured_view<'a>(data: &'a [u8]) -> DexView<'a> {
+        let entry = crate::model::DexEntry::new(
+            crate::model::DexId::new(
+                crate::model::ArtifactId::from_digest([0u8; 32]),
+                0,
+                0,
+            ),
+            b"classes.dex".to_vec(),
+            crate::model::DexText::from_str_lossless("classes.dex"),
+            crate::model::DexText::from_str_lossless("classes.dex"),
+            crate::model::DexVersion::V035,
+            0,
+        );
+        DexView::new(entry, data)
+    }
 
     fn write_u32(data: &mut [u8], offset: usize, value: u32) {
         data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
@@ -1283,6 +920,7 @@ pub(crate) mod tests {
     /// Each logical DEX gets a 0x78-byte header whose section offsets point into
     /// the container, and every header records the container size and its own
     /// offset, which is what `logical_dexes` validates.
+    #[allow(dead_code)] // legacy-era fixture; A09 corpus tests may reuse
     pub(crate) fn dex041_container(class_counts: &[usize]) -> Vec<u8> {
         let mut out: Vec<u8> = Vec::new();
         let mut headers = Vec::new();
@@ -1324,6 +962,7 @@ pub(crate) mod tests {
 
     /// `const_string_fixture` with a 0x78-byte DEX 041 header, its section offsets
     /// shifted by `base` so the fixture can sit at that container offset.
+    #[allow(dead_code)] // legacy-era fixture
     fn const_string_fixture_041(class_count: usize, base: u32) -> Vec<u8> {
         const_string_fixture_with(class_count, base, 0x78)
     }
@@ -1360,11 +999,15 @@ pub(crate) mod tests {
         }
 
         let mut class_data_offsets = Vec::with_capacity(class_count);
+        let mut code_offset_first = u32::MAX;
         for index in 0..class_count {
             while !(data_off + data.len()).is_multiple_of(4) {
                 data.push(0);
             }
             let code_off = ((data_off + data.len()) as u32) + base;
+            if code_offset_first == u32::MAX {
+                code_offset_first = code_off;
+            }
             data.extend_from_slice(&1_u16.to_le_bytes()); // registers_size: v0
             data.extend_from_slice(&0_u16.to_le_bytes()); // ins_size
             data.extend_from_slice(&0_u16.to_le_bytes()); // outs_size
@@ -1385,10 +1028,19 @@ pub(crate) mod tests {
             push_uleb(&mut data, code_off);
         }
 
-        let total = data_off + data.len();
+        let pre_map = data_off + data.len();
+        let map_pad = (4 - pre_map % 4) % 4;
+        let map_off = pre_map + map_pad;
+        let map_size = 4 + 10 * 12;
+        let total = map_off + map_size;
         let mut out = vec![0_u8; total];
         out[..8].copy_from_slice(b"dex\n039\0");
         write_u32(&mut out, 0x20, total as u32);
+        // data region: string data + class data + code + map, tiling to EOF
+        // (the A02 container validator checks the tiling invariant).
+        write_u32(&mut out, 0x68, (total - data_off) as u32);
+        write_u32(&mut out, 0x6c, data_off as u32);
+        write_u32(&mut out, 0x34, map_off as u32);
         write_u32(&mut out, 0x24, header_size as u32);
         write_u32(&mut out, 0x28, 0x1234_5678);
         write_u32(&mut out, 0x38, n_strings as u32);
@@ -1434,107 +1086,34 @@ pub(crate) mod tests {
             write_u32(&mut out, class_def + 16, u32::MAX);
             write_u32(&mut out, class_def + 24, (*class_data_off as u32) + base);
         }
-        out[data_off..].copy_from_slice(&data);
+        out[data_off..data_off + data.len()].copy_from_slice(&data);
+        // map_list (A02's container validator requires header.map_off).
+        let map_items: [(u16, u32, u32); 10] = [
+            (0x0000, 1, 0),
+            (0x0001, n_strings as u32, string_ids_off as u32 + base),
+            (0x0002, n_types as u32, type_ids_off as u32 + base),
+            (0x0003, 1, proto_ids_off as u32 + base),
+            (0x0005, class_count as u32, method_ids_off as u32 + base),
+            (0x0006, class_count as u32, class_defs_off as u32 + base),
+            (0x1000, 1, map_off as u32),
+            (0x2000, class_count as u32, data_off as u32 + class_data_offsets[0] as u32 + base),
+            (0x2001, class_count as u32, data_off as u32 + code_offset_first + base),
+            (0x2002, n_strings as u32, data_off as u32 + base),
+        ];
+        write_u32(&mut out, map_off, map_items.len() as u32);
+        for (index, (ty, size, off)) in map_items.iter().enumerate() {
+            let row = map_off + 4 + index * 12;
+            write_u16(&mut out, row, *ty);
+            write_u16(&mut out, row + 2, 0);
+            write_u32(&mut out, row + 4, *size);
+            write_u32(&mut out, row + 8, *off);
+        }
         // The scanner ignores the checksum, but droidsaw validates it before
         // parsing, so the fixture carries a correct Adler-32 over the payload
         // (everything after the 12-byte checksum/signature prefix).
         let checksum = adler32(&out[12..]);
         write_u32(&mut out, 0x08, checksum);
         out
-    }
-
-    /// Rows for `find_references` are grouped by ascending method index, which is
-    /// the order the hit map iterates in. Cross-DEX ordering/aggregation happens
-    /// later in the APK layer.
-    fn expected_rows(class_count: usize) -> Vec<ReferenceRow> {
-        (0..class_count)
-            .map(|index| ReferenceRow {
-                class_name: format!("LFixture{index};"),
-                method_name: format!("m{index}"),
-                matched: vec!["Authorization".to_owned()],
-            })
-            .collect()
-    }
-
-    #[test]
-    fn parallel_and_sequential_scans_produce_identical_hits() {
-        let data = const_string_fixture(PARALLEL_SCAN_CLASSES);
-        let dex = Dex::parse(&data).unwrap();
-        let (kind, targets) = dex
-            .resolve_targets(&Query::String("Authorization".to_owned()))
-            .unwrap();
-        let targets = Targets::new(targets);
-        let sequential = dex.scan_all_classes_sequential(kind, &targets).unwrap();
-        let parallel = dex.scan_all_classes_parallel(kind, &targets).unwrap();
-        assert_eq!(sequential.len(), PARALLEL_SCAN_CLASSES);
-        assert_eq!(sequential, parallel);
-    }
-
-    #[test]
-    fn multi_chunk_parallel_scan_keeps_every_hit() {
-        let class_count = PARALLEL_SCAN_CLASSES * 3 + 1;
-        let data = const_string_fixture(class_count);
-        let rows = find_references(&data, &Query::String("Authorization".to_owned())).unwrap();
-        assert_eq!(rows, expected_rows(class_count));
-    }
-
-    fn minimal_class_dex(descriptor: &[u8]) -> Vec<u8> {
-        let string_ids_off = 0x70;
-        let type_ids_off = 0x74;
-        let class_defs_off = 0x78;
-        let string_data_off = 0x98;
-        let mut data = vec![0; string_data_off + descriptor.len() + 2];
-        data[..8].copy_from_slice(b"dex\n039\0");
-        data[0x38..0x3c].copy_from_slice(&1_u32.to_le_bytes());
-        data[0x3c..0x40].copy_from_slice(&(string_ids_off as u32).to_le_bytes());
-        data[0x40..0x44].copy_from_slice(&1_u32.to_le_bytes());
-        data[0x44..0x48].copy_from_slice(&(type_ids_off as u32).to_le_bytes());
-        data[0x60..0x64].copy_from_slice(&1_u32.to_le_bytes());
-        data[0x64..0x68].copy_from_slice(&(class_defs_off as u32).to_le_bytes());
-        data[string_ids_off..string_ids_off + 4]
-            .copy_from_slice(&(string_data_off as u32).to_le_bytes());
-        data[string_data_off] = descriptor.len() as u8;
-        data[string_data_off + 1..string_data_off + 1 + descriptor.len()]
-            .copy_from_slice(descriptor);
-        data
-    }
-
-    #[test]
-    fn lists_defined_classes_from_class_defs() {
-        let data = minimal_class_dex(b"Lcom/example/Main;");
-        assert_eq!(class_names(&data).unwrap(), ["Lcom/example/Main;"]);
-        assert!(defines_class(&data, b"Lcom/example/Main;").unwrap());
-    }
-
-    #[test]
-    fn fuzzy_patterns_are_literal_substrings() {
-        assert!(Finder::new(b".b[").find(b"a.b[c]").is_some());
-        assert!(Finder::new(b"a.c").find(b"abc").is_none());
-    }
-
-    // -----------------------------------------------------------------------
-    // Structured scan unit tests (the full contract matrix lives in
-    // tests/contract_references.rs)
-    // -----------------------------------------------------------------------
-
-    use crate::error::ErrorKind;
-    use crate::model::{DexVersion, PatternLimits};
-    use std::sync::atomic::AtomicBool;
-    use std::time::{Duration, Instant};
-
-    fn structured_view<'a>(data: &'a [u8]) -> DexView<'a> {
-        let digest = crate::model::ArtifactId::from_digest([0x5a; 32]);
-        let id = crate::model::DexId::new(digest, 0, 0);
-        let name = crate::model::DexText::from_str_lossless("classes.dex");
-        let entry = crate::model::DexEntry::new(
-            id,
-            b"classes.dex".to_vec(),
-            name.clone(),
-            name,
-            DexVersion::from_magic_tail(&data[4..8]).expect("supported version"),
-            0,
-        );
-        DexView::new(entry, data)
     }
 
     #[test]

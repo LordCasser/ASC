@@ -1505,7 +1505,7 @@ fn in03_container_041_single_member_keeps_name_and_multi_member_shares_address_s
     // physical buffer, only the header offset differs.
     assert!(std::ptr::eq(multi.views[0].bytes().as_ptr(), second.bytes().as_ptr()));
     // The second member still needs (and gets) its backend scratch.
-    let scratch = backend_scratch(second).expect("041 member needs scratch");
+    let scratch = backend_scratch(second, &[]).expect("041 member needs scratch");
     assert_eq!(scratch.source_header_offset, second_base);
 }
 

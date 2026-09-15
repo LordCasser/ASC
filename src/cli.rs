@@ -1,7 +1,10 @@
-use crate::query::{ClassQuery, MemberQuery, Query, format_class_name, fuzzy_class_pattern};
-use anyhow::{Result, bail};
+//! Argument parsing: clap definitions plus the query-construction calls.
+//!
+//! The structured rendering, exit-code mapping and output protocol are
+//! A08's; this module only turns arguments into typed operations.
+
 use clap::{Args, Parser, Subcommand};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(name = "rasc", version, about = "Native Rust APK and DEX analysis CLI")]
@@ -52,6 +55,10 @@ pub struct GetClassArgs {
     pub threads: usize,
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+    /// Pin the class to one logical DEX: `<entry_ordinal>:<logical_ordinal>`
+    /// (both zero-based, as shown by `classes` / `--format json`).
+    #[arg(long)]
+    pub dex: Option<String>,
     pub apk_path: PathBuf,
     pub dalvik_class: String,
 }
@@ -68,19 +75,10 @@ pub struct FindRefsArgs {
 }
 
 impl FindRefsArgs {
-    pub fn query(&self) -> Result<Query> {
+    pub fn output_path(&self) -> Option<&PathBuf> {
         match &self.kind {
-            FindKind::String(q) => Ok(Query::String(q.value.clone())),
-            FindKind::Type(q) => Ok(Query::Type(q.value.clone())),
-            FindKind::Method(q) => Ok(Query::Method(q.member_query("method")?)),
-            FindKind::Field(q) => Ok(Query::Field(q.member_query("field")?)),
-        }
-    }
-
-    pub fn output_path(&self) -> Option<&Path> {
-        match &self.kind {
-            FindKind::String(q) | FindKind::Type(q) => q.output.as_deref(),
-            FindKind::Method(q) | FindKind::Field(q) => q.output.as_deref(),
+            FindKind::String(q) | FindKind::Type(q) => q.output.as_ref(),
+            FindKind::Method(q) | FindKind::Field(q) => q.output.as_ref(),
         }
     }
 }
@@ -111,21 +109,11 @@ pub struct MemberArgs {
     pub fuzzy_class: bool,
 }
 
-impl MemberArgs {
-    fn member_query(&self, kind: &str) -> Result<MemberQuery> {
-        let name = self
-            .name
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned);
-        let class = match self.class_name.as_deref().filter(|name| !name.is_empty()) {
-            None => None,
-            Some(name) if self.fuzzy_class => Some(ClassQuery::Fuzzy(fuzzy_class_pattern(name))),
-            Some(name) => Some(ClassQuery::Exact(format_class_name(name)?)),
-        };
-        if name.is_none() && class.is_none() {
-            bail!("{kind} query needs at least one of class or {kind} name");
-        }
-        Ok(MemberQuery { name, class })
+/// The worker count must be positive; zero is a syntax-level rejection that
+/// fires before any input is opened.
+pub fn validate_threads(threads: usize) -> Result<(), String> {
+    if threads == 0 {
+        return Err("worker count must be greater than zero".to_owned());
     }
+    Ok(())
 }

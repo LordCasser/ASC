@@ -89,6 +89,8 @@ impl ClassId {
         Self { dex, class_def_idx }
     }
 
+#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn dex(&self) -> DexId {
         self.dex
     }
@@ -112,10 +114,12 @@ pub struct MethodId {
 }
 
 impl MethodId {
+    #[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub(crate) fn new(dex: DexId, method_idx: u32) -> Self {
         Self { dex, method_idx }
     }
 
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn dex(&self) -> DexId {
         self.dex
     }
@@ -165,14 +169,17 @@ impl TargetId {
         Self { dex, kind, table_index }
     }
 
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn dex(&self) -> DexId {
         self.dex
     }
 
+    #[allow(dead_code)] // A08 text projection
     pub fn kind(&self) -> TargetKind {
         self.kind
     }
 
+    #[allow(dead_code)]
     pub fn table_index(&self) -> u32 {
         self.table_index
     }
@@ -215,10 +222,12 @@ impl DexText {
         String::from_utf16(&self.units).ok()
     }
 
+#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub fn is_empty(&self) -> bool {
         self.units.is_empty()
     }
 
+#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub fn unit_len(&self) -> usize {
         self.units.len()
     }
@@ -247,6 +256,8 @@ impl ClassDescriptor {
         Ok(Self { descriptor })
     }
 
+#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn as_str(&self) -> &str {
         &self.descriptor
     }
@@ -310,6 +321,7 @@ impl DexVersion {
         }
     }
 
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn as_str(&self) -> &'static str {
         match self {
             DexVersion::V035 => "035",
@@ -350,6 +362,7 @@ impl DexEntry {
         self.id
     }
 
+#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub fn raw_entry_name(&self) -> &[u8] {
         &self.raw_entry_name
     }
@@ -358,10 +371,12 @@ impl DexEntry {
         &self.display_name
     }
 
+#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub fn logical_name(&self) -> &DexText {
         &self.logical_name
     }
 
+#[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
     pub fn version(&self) -> DexVersion {
         self.version
     }
@@ -418,6 +433,8 @@ impl MethodIdentity {
         self.id
     }
 
+#[allow(dead_code)] // A07/A08 wiring surface
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn dex(&self) -> &DexEntry {
         &self.dex
     }
@@ -466,10 +483,12 @@ impl Class {
         }
     }
 
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn id(&self) -> ClassId {
         self.id
     }
 
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn dex(&self) -> &DexEntry {
         &self.dex
     }
@@ -486,6 +505,7 @@ impl Class {
         &self.package
     }
 
+#[allow(dead_code)] // A07/A08 wiring surface
     pub fn simple_name(&self) -> &DexText {
         &self.simple_name
     }
@@ -627,6 +647,7 @@ impl Pattern {
     }
 
     /// The original pattern text as supplied by the caller.
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn source(&self) -> &str {
         match self {
             Pattern::Literal { source, .. } | Pattern::Regex { source, .. } => source,
@@ -660,6 +681,7 @@ impl Pattern {
     }
 
     /// Convenience for callers that already hold valid Unicode text.
+#[allow(dead_code)] // A07/A08 wiring surface
     pub fn matches_str(&self, text: &str) -> Result<MatchOutcome, Error> {
         match self {
             Pattern::Literal { .. } => {
@@ -775,6 +797,7 @@ pub struct ClassFilter {
 }
 
 impl ClassFilter {
+#[allow(dead_code)] // A07/A08 wiring surface
     pub fn none() -> Self {
         Self { units: Vec::new() }
     }
@@ -782,9 +805,11 @@ impl ClassFilter {
     /// Lowercases valid Unicode scalars (non-locale); unpaired surrogates in
     /// the input cannot be lowered and are kept as-is.
     pub fn new(filter: &str) -> Self {
+        #[allow(dead_code)] // A07/A08 wiring surface; used by contract tests
         Self { units: lowercase_units(&filter.encode_utf16().collect::<Vec<_>>()) }
     }
 
+#[allow(dead_code)] // A07/A08 wiring surface
     pub fn is_empty(&self) -> bool {
         self.units.is_empty()
     }
@@ -846,6 +871,7 @@ fn decode_surrogate_pair(units: &[u16], index: usize) -> Option<char> {
 #[derive(Clone, Debug)]
 pub enum ClassSelector {
     Descriptor(ClassDescriptor, Option<DexId>),
+#[allow(dead_code)] // A07/A08 wiring surface
     Id(ClassId),
 }
 
@@ -858,12 +884,14 @@ pub enum ClassSelector {
 pub enum Stage {
     Input,
     Dex,
+    #[allow(dead_code)] // A07/A08 wiring surface
     Query,
     Decompile,
     Manifest,
 }
 
 impl Stage {
+    #[allow(dead_code)] // A07/A08 wiring surface
     pub fn as_str(&self) -> &'static str {
         match self {
             Stage::Input => "input",
@@ -877,8 +905,10 @@ impl Stage {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
+    #[allow(dead_code)] // A07/A08 wiring surface
     Info,
     Warning,
+    #[allow(dead_code)] // A07/A08 wiring surface
     Error,
 }
 
@@ -911,6 +941,7 @@ pub enum DiagnosticCode {
 }
 
 impl DiagnosticCode {
+    #[allow(dead_code)] // A08 projection surface
     pub fn as_str(&self) -> &'static str {
         match self {
             DiagnosticCode::DexChecksumMismatch => "dex-checksum-mismatch",
@@ -962,35 +993,43 @@ impl Diagnostic {
         self
     }
 
+    #[allow(dead_code)] // A08 diagnostic projection
     pub(crate) fn with_offset(mut self, offset: u32) -> Self {
         self.offset = Some(offset);
         self
     }
 
+    #[allow(dead_code)] // A08 projection surface
     pub fn code(&self) -> DiagnosticCode {
         self.code
     }
 
+    #[allow(dead_code)] // A08 projection surface
     pub fn severity(&self) -> Severity {
         self.severity
     }
 
+    #[allow(dead_code)] // A08 projection surface
     pub fn stage(&self) -> Stage {
         self.stage
     }
 
+    #[allow(dead_code)] // A08 projection surface
     pub fn dex(&self) -> Option<DexId> {
         self.dex
     }
 
+    #[allow(dead_code)] // A08 projection surface
     pub fn class(&self) -> Option<ClassId> {
         self.class
     }
 
+    #[allow(dead_code)] // A08 projection surface
     pub fn method(&self) -> Option<MethodId> {
         self.method
     }
 
+    #[allow(dead_code)] // A08 projection surface
     pub fn offset(&self) -> Option<u32> {
         self.offset
     }
@@ -1028,6 +1067,7 @@ impl<T> Report<T> {
         &self.value
     }
 
+    #[allow(dead_code)] // A08 payload projection
     pub fn into_value(self) -> T {
         self.value
     }
@@ -1036,6 +1076,7 @@ impl<T> Report<T> {
         &self.diagnostics
     }
 
+    #[allow(dead_code)] // A08 debug surface (never in payload)
     pub fn stats(&self) -> OperationStats {
         self.stats
     }
@@ -1047,6 +1088,9 @@ impl<T> Report<T> {
 
 /// A DEX encoded value, bit-exact: floats and doubles keep their raw bits so
 /// no textual rounding can change a constant.
+/// A08/A12 projection surface: the typed values populate
+/// `SourceMetadata`/annotation records as the backend exposes raw forms.
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EncodedValue {
     Null,
@@ -1080,6 +1124,11 @@ pub struct AnnotationRecord {
     pub(crate) visibility: AnnotationVisibility,
     pub(crate) type_descriptor: DexText,
     pub(crate) items: Vec<(DexText, EncodedValue)>,
+    /// The backend's lossless rendering of the whole annotation element
+    /// list. Typed reconstruction into `items` lands when the decompiler
+    /// exposes raw encoded values across the checked API; until then this
+    /// field is the lossless record (design §4: 元素渲染无损).
+    pub(crate) rendered: String,
 }
 
 impl AnnotationRecord {
@@ -1087,20 +1136,30 @@ impl AnnotationRecord {
         visibility: AnnotationVisibility,
         type_descriptor: DexText,
         items: Vec<(DexText, EncodedValue)>,
+        rendered: String,
     ) -> Self {
-        Self { visibility, type_descriptor, items }
+        Self { visibility, type_descriptor, items, rendered }
     }
 
+    #[allow(dead_code)] // A08 projection surface
     pub fn visibility(&self) -> AnnotationVisibility {
         self.visibility
     }
 
+    #[allow(dead_code)] // A08 projection surface
     pub fn type_descriptor(&self) -> &DexText {
         &self.type_descriptor
     }
 
+    #[allow(dead_code)] // A08 projection surface
     pub fn items(&self) -> &[(DexText, EncodedValue)] {
         &self.items
+    }
+
+    /// Lossless backend rendering of the element list (see `items`).
+    #[allow(dead_code)] // A08 projection surface
+    pub fn rendered(&self) -> &str {
+        &self.rendered
     }
 }
 
@@ -1215,6 +1274,7 @@ impl Source {
         Self { class, text, metadata }
     }
 
+    #[allow(dead_code)] // A08 projection surface
     pub fn class(&self) -> &Class {
         &self.class
     }
@@ -1224,6 +1284,7 @@ impl Source {
         &self.text
     }
 
+    #[allow(dead_code)] // A08 projection surface
     pub fn metadata(&self) -> &SourceMetadata {
         &self.metadata
     }
@@ -1238,6 +1299,7 @@ impl Source {
 // golden files in schemas/goldens/ stay authoritative. The library itself has
 // no serde dependency; `stats` is never serialized.
 
+#[allow(dead_code)] // consumed by A08's renderer
 pub(crate) mod dto {
     use super::*;
 

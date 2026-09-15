@@ -7,6 +7,9 @@
 //! tests/fixtures/contracts/expected/. The domain sources are compiled in
 //! via `#[path]` includes, the same approach the other contract tests use.
 
+// Compiled via #[path] includes: each target uses a subset of the modules.
+#![allow(dead_code)]
+
 mod support;
 
 #[path = "../src/error.rs"]
