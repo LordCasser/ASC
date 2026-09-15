@@ -395,6 +395,13 @@ fn failed_file_write_sends_no_stdout_payload() {
 fn atomic_replacement_leaves_no_temporary_files_behind() {
     let apk = fixture(G01);
     let out = temp_apk("replace-me.txt", b"old");
+    // Pre-clean leftovers from previously killed runs: this test only
+    // certifies the files created by the run below.
+    for entry in fs::read_dir(std::env::temp_dir()).unwrap().filter_map(Result::ok) {
+        if entry.file_name().to_string_lossy().contains(".rasc-") {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
     let output = run(&["classes", apk.to_str().unwrap(), "-o", out.to_str().unwrap()]);
     assert_eq!(status(&output), 0);
     // Only the final file exists: the hidden temp file was renamed over it.

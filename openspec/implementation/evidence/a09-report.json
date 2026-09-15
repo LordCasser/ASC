@@ -1,0 +1,210 @@
+{
+  "generated_at": "2026-09-15",
+  "base": "f6b7768",
+  "toolchain": {
+    "rustc": "1.93.1",
+    "python_ref": "3.13.15 + androguard 4.1.3 (venv313)",
+    "reference_commit": "ccc6bae7704f5c5ef1a7271e27314837079621fb"
+  },
+  "test_totals": {
+    "cargo_test_locked": 243,
+    "clippy_all_targets_warnings": 0,
+    "python_baseline": "24/24 OK"
+  },
+  "matrix": {
+    "CLI-01": {
+      "status": "passed",
+      "evidence": [
+        "tests/contract_cli.rs 26 tests",
+        "corpus --threads 1/2/8 byte-identical",
+        "exit codes: help 0 / noargs 2 / threads0 2 / unknown-limit 2 / NotFound 1 / success 0"
+      ]
+    },
+    "CLI-02": {
+      "status": "passed",
+      "evidence": [
+        "dual-format byte assertions",
+        "empty-set text 0 bytes / json data:[]",
+        "--debug byte-neutral",
+        "corpus json envelope structure validated"
+      ]
+    },
+    "CLI-03": {
+      "status": "passed",
+      "evidence": [
+        "atomic replacement + refusal matrix in contract_cli",
+        "temp-leak test hardened against stale killed-run debris"
+      ]
+    },
+    "REF-01": {
+      "status": "passed",
+      "evidence": [
+        "contract_query 22 + contract_references 62",
+        "corpus: string markor 4=4, string Android 16=16, string keepass 130=130, string antennapod 84=84, string youtube 61=61"
+      ]
+    },
+    "REF-02": {
+      "status": "passed",
+      "evidence": [
+        "contract_references REF-02 tests (MUTF-8/surrogate/NUL pools)"
+      ]
+    },
+    "REF-03": {
+      "status": "passed",
+      "evidence": [
+        "contract_references REF-03 (opcode families, payload, unknown/truncated, map fallback, prefilter equivalence)"
+      ]
+    },
+    "REF-04": {
+      "status": "passed",
+      "evidence": [
+        "contract_references REF-04 (shared code, overloads, ordering, round-trip)"
+      ]
+    },
+    "IN-01": {
+      "status": "passed",
+      "evidence": [
+        "contract_input in01 + apk.rs named-over-fallback/junk integration tests"
+      ]
+    },
+    "IN-02": {
+      "status": "passed",
+      "evidence": [
+        "contract_input in02 matrix (CRC/zip64/encrypted/descriptor/trailing)"
+      ]
+    },
+    "IN-03": {
+      "status": "passed",
+      "evidence": [
+        "contract_input in03 version matrix + 041; vendor in03 backend-side tests"
+      ]
+    },
+    "IN-04": {
+      "status": "passed",
+      "evidence": [
+        "apk.rs zero-checksum integration test: warning + success + original bytes untouched"
+      ]
+    },
+    "IN-05": {
+      "status": "passed",
+      "evidence": [
+        "--threads 1/2/8 byte-identical (findrefs + classes)",
+        "type-only descriptor getclass -> NotFound exit 1"
+      ]
+    },
+    "DECL-01": {
+      "status": "passed",
+      "evidence": [
+        "vendor dxp04_* 5 tests + root g02 integration (FIRST = 11 / SECOND = 22)"
+      ]
+    },
+    "DECL-02": {
+      "status": "partial",
+      "evidence": [
+        "vendor dxp05a_* 4 tests",
+        "SourceMetadata carries class-level typed facts + lossless annotation rendered text"
+      ],
+      "gaps": [
+        "throws/parameter signatures/debug/typed annotation items are None in SourceMetadata until the backend exposes raw encoded values (A05/A12 follow-up)"
+      ]
+    },
+    "DECL-03": {
+      "status": "partial",
+      "evidence": [
+        "vendor decl03_control_flow_constructors_and_payloads (this() delegation, branch polarity, switch payloads, wide literals, try/catch, native/abstract, long method)",
+        "corpus getclass spot facts: NewPipe App onCreate=3 TAG=3 match"
+      ],
+      "gaps": [
+        "upstream loop-recovery regression (for-shape falls back, undeclared v0) and fill-array-data sugar rendering - documented in PATCHES.md, need a dedicated plan"
+      ]
+    },
+    "DECL-04": {
+      "status": "passed",
+      "evidence": [
+        "vendor asc_contracts DeclarationOnly/Failed outcomes + IncompleteDecompilation mapping in apk.rs"
+      ]
+    },
+    "MAN-01": {
+      "status": "passed",
+      "evidence": [
+        "contract_manifest 16 tests",
+        "4 corpus manifest trees IDENTICAL (text/tail normalized, hex numerically compared)"
+      ]
+    },
+    "MAN-02": {
+      "status": "passed",
+      "evidence": [
+        "contract_manifest typed value matrix"
+      ]
+    },
+    "MAN-03": {
+      "status": "passed",
+      "evidence": [
+        "contract_manifest CDATA/PI/order tests"
+      ]
+    },
+    "MAN-04": {
+      "status": "passed",
+      "evidence": [
+        "contract_manifest limits/DTD/second-root/mutation smoke (release profile)"
+      ]
+    },
+    "QUAL-01": {
+      "status": "passed",
+      "evidence": [
+        "bench/corpus_parity.py --self-test 17/17",
+        "contract_harness negative comparator tests"
+      ]
+    },
+    "QUAL-02": {
+      "status": "passed",
+      "evidence": [
+        "61-case registry, hashes re-verified (5 corpus samples + 32 generated inputs)",
+        "4-APK arbitration: string/type/method/field record-level (subset relation with reference; all deltas are reference bucket-misattribution rows, androguard spot-check confirmed)"
+      ]
+    }
+  },
+  "differences_arbitrated": [
+    {
+      "case": "newpipe method onCreate",
+      "ref": 164,
+      "ours": 132,
+      "verdict": "reference-only rows = dense-bucket misattribution (A00-b); androguard spot-check: StandardMenuPopup->onKey has 0 onCreate invokes"
+    },
+    {
+      "case": "keepass field INSTANCE",
+      "ref": 3386,
+      "ours": 3295,
+      "verdict": "same pattern: our_only=0, all deltas reference-only"
+    },
+    {
+      "case": "antennapod method onCreate",
+      "ref": 352,
+      "ours": 350,
+      "verdict": "same pattern"
+    },
+    {
+      "case": "markor field INSTANCE",
+      "ref": 1085,
+      "ours": 1084,
+      "verdict": "same pattern"
+    },
+    {
+      "case": "newpipe field INSTANCE",
+      "ref": 2281,
+      "ours": 2279,
+      "verdict": "same pattern"
+    },
+    {
+      "case": "getclass line counts (NewPipe 1021 vs 510, Markor 933 vs 620)",
+      "verdict": "rendering richness (imports, annotation lines, R8 origin comment); structural member facts (onCreate=3, TAG=3) hold"
+    }
+  ],
+  "known_defects_blocking": [],
+  "known_defects_deferred": [
+    "upstream for-loop structure recovery + fill-array sugar (vendor PATCHES.md A05 status section)",
+    "SourceMetadata typed annotation items / throws / debug need backend raw-value exposure (A05/A12)",
+    "7 --limit keys accepted-not-enforced until A11/A06 setters (engine-bytes/entries/dexes/depth/xml-nodes/xml-attributes/code-units)",
+    "deadline->130 timing test #[ignore]; Windows behaviors -> DIST-03"
+  ]
+}
