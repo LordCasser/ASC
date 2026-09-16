@@ -74,4 +74,4 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_B
 
 四 feature 与仓外 path consumer 全通过；all-features 224 项，含 method golden 5、selected batch 6、threads=1/2 各 4 调用线程 × 20 轮取消恢复。vendor lib 943 passed / 1 ignored，memory_admission 5、asc_semantics 14 / 1 ignored、asc_contracts 8 通过。上游部分测试在缺少外部 fixture 时会提前返回，不能把测试框架计数当成外部 corpus 全量执行证据。
 
-可复现入口：`scripts/check-core-features.sh`，以及 `cargo test -p asc-droidsaw-dex --lib --test asc_contracts --test asc_semantics --test memory_admission --locked`。真实 APK 性能和分页由消费者记录，IDA/native 与目标平台仍需对应环境。
+可复现入口：`scripts/check-core-features.sh`，以及 `cargo test -p asc-droidsaw-dex --lib --test asc_contracts --test asc_semantics --test memory_admission --locked`。真实 APK 性能与分页已由消费者完成，结果见 add-dex-method-navigation/design.md 的 E17.3；CLI 另有 34 passed / 1 个时序依赖用例 ignored。IDA/native 与目标平台仍需对应环境。

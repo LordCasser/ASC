@@ -22,3 +22,16 @@ vendor method renderer 可能依赖 class context，应保留窄上下文而非�
 
 ## Open Questions
 核心方法入口、class context 和 metadata 映射已落地；后续仍需用独立 golden fixture 补齐 annotations/debug/参数名及 native/abstract/构造器矩阵，并在目标平台完成 IDA/性能验收。这些扩展不改变已交付的 MethodId、scope 或 typed instruction API。
+
+## E17.3 消费者本地验收
+
+2026-09-16，macOS arm64，Rust 1.93.1，非优化 debug=0，代码 `72541c6`。reverse-engine 的 `scripts/apk_method_perf.sh` 对 Telegram 12.10.1 的 SRPHelper 同一组 6 个方法测量，每组独立进程；方法发现不计入操作耗时，进程 RSS 包含发现阶段。
+
+| threads | 路径 | 操作耗时 | 峰值 RSS |
+|---|---|---|---|
+| 1 | selected | 12.341 s | 608.19 MiB |
+| 1 | selected-batch | 5.477 s | 591.22 MiB |
+| 2 | selected | 12.117 s | 579.28 MiB |
+| 2 | selected-batch | 5.465 s | 589.53 MiB |
+
+四组源码聚合 SHA-256 为 `efe105cdbf3c3b19de738453b89e08f4ef831e22d8d60ae7f25be0f1dc353adf`。本样本批处理约快 2.2 倍，RSS 无一致下降，不做普遍性或硬限制承诺。消费者真实 MCP 测试遍历 PhoneView 全部 104 成员/30 引用调用者，并按 MethodRef 得到 7,479 bytes 的 lambda 方法响应；三项真实 APK 回归 3/3 通过。

@@ -11,4 +11,4 @@
 - [x] E17.1：独立 method-navigation golden 5 项覆盖 native/abstract、构造器、重载、无引用声明、annotations/debug/参数名；修复 core debug 与 method/parameter annotation 投影。selected batch 6 项验证准确选择、稳定顺序、重复/外部/范围外拒绝、空集合与逐方法源码一致。
 - [x] E17.2-local：四 feature matrix、仓外 path consumer、threads=1/2 各 4 调用线程 × 20 轮取消/恢复/源码一致性通过；visitor 使用 Engine private pool。
 - [ ] E17.2-environment：真实 IDA native bridge 及目标部署平台验收，由匹配环境执行，不记作本机通过。
-- [ ] E17.3：基于真实 APK 对同一方法集合比较 selected 与 selected batch 的时间、进程峰值 RSS，并复核分页；本地 runner 已提供，结果待消费者同步后记录。
+- [x] E17.3：真实 Telegram SRPHelper 同一组 6 个方法，在 threads=1/2 各独立进程比较 selected 与 selected batch；源码指纹一致。selected 为 12.341/12.117 s，batch 为 5.477/5.465 s；峰值 RSS 见 design。PhoneView 完整 104 成员/30 引用游标及单方法读取通过，消费者 runner 与实施记录已保存。

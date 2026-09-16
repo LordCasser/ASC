@@ -9,5 +9,5 @@
 ## 3. 补充实施与验收（2026-09-16）
 - [x] E18.1：跨 logical DEX inventory 保留 scan permit；backend normalization 在复制前按实际长度预留；vendor parser/CFG/SSA 通过注入 ledger 做结构计数和分配前阶段准入。Source metadata/text 与 partial error 生命周期计量、溢出/拒绝/取消/复用回归通过。覆盖边界见 design 和 vendor DX-P08，不承诺 emitter/allocator/RSS 全覆盖。
 - [ ] E18.2：目标部署完整活跃内存/RSS 峰值验收；不把本机 RSS 采样当作进程内存硬限制证明。
-- [x] E18.3-local：独立四 feature、仓外 consumer、并发重复/取消复用及 vendor ledger 测试通过；本机吞吐/RSS 实测跟随 E17.3 记录。
+- [x] E18.3-local：独立四 feature、仓外 consumer、并发重复/取消复用及 vendor ledger 测试通过；本机吞吐/RSS 实测已在 E17.3 完成；这不是目标部署 RSS 上限证明。
 - [ ] E18.3-environment：目标部署平台与 IDA 组合矩阵，交由对应环境执行。
