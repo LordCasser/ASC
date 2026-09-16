@@ -1,5 +1,5 @@
 ## Context
-见 audits/embedding/report.md 的 MEM-01/MEM-02。Result items/bytes/locations 是操作结果限制；当前 bounded ledger 另外覆盖 input/catalog、decoded entry、scan scratch 和 Report 的生命周期，但 method-inventory 中间 vectors 与 vendor parse/CFG/SSA 仍不能代替完整工作集账户。
+见 audits/embedding/report.md 的 MEM-01/MEM-02。Result items/bytes/locations 是操作结果限制；当前 bounded ledger 另外覆盖 input/catalog、decoded entry、scan scratch 和 Report 的生命周期，并通过下述补充实现覆盖 method-inventory、vendor parser 与 CFG/SSA 的逻辑结构准入；它们仍不是完整进程工作集账户。
 
 ## Goals / Non-Goals
 使内存合同可验证。不会仅把估计值重新命名为 RSS，也不会以大范围格式/lint 或 JNI 功能混入修复。
@@ -31,9 +31,19 @@ vendor 内部分配能精确覆盖到何层仍需单独测量；在有证据前�
 | decoded entry | `fold_roots`/`fold_scope`/manifest scope 的 decode permit，覆盖一次选中 entry 解码 | **实测/精确上界**：中央目录 declared uncompressed bytes，另有 shared decoded-byte quota 检查实际流 | `read_entry_reserves_the_budget_and_rolls_back_on_failure`、cross-entry decoded budget regressions；raw DEX 复用 input snapshot |
 | scan scratch | fold 的每逻辑 DEX `estimated_scan_work` permit，至 rows 转移且 report permit 成功后释放 | **估算/保守**：DEX bytes、table counts、code-sized allowance；不等同 vendor RSS | `scanner_working_set_is_reserved_before_rows_and_releases_on_failure`；`ac1010c` 关闭 fold 批内 rows 先于 scratch permit 释放的窗口 |
 | report payload/diagnostics | `Report` 的 permit，至 Report 及其最后一个 clone drop | **估算**：结构化 result bytes 与 diagnostic bytes；不声称逐 allocator 精确 | `report_permit_follows_report_lifetime_and_releases_for_reuse`；`4e3d710` 使 clone 共享真实 payload allocation，`into_value` 移除 |
-| method inventory vectors | `method_inventory` 的 fields/methods vectors，至 report 构造 | **估算/有限窗口**：逐行 `method_declaration_size`/`field_declaration_size`，最终 report 取得额度；各 DEX scan permit 不跨 logical DEX 保留 | inventory identity/basic tests 已通过；该中间累积窗口仍是扩展验收，不宣称完整活跃覆盖 |
+| method inventory vectors | `method_inventory` 的 fields/methods vectors，至 report 构造 | **估算/有限窗口**：逐行 `method_declaration_size`/`field_declaration_size`，最终 report 取得额度；各 DEX scan permit 跨 logical DEX 保留至 report 准入 | 跨 DEX 累积超限、失败回收与后续复用测试通过 |
 | typed facts and scoped rows | `fold_scope` 返回 rows，至最终 report reservation | **估算**：按 fact/reference/string/class 结构计算结果大小，scan permit 同时保留 | scoped visitor/string/instruction tests；vendor 内部对象不在该表的精确覆盖内 |
-| vendor parse/CFG/SSA and backend scratch | droidsaw parser/decompiler 的内部对象，在一次解析/渲染期间 | **未覆盖**：仅受 backend input/control/budget 与阶段性 scan estimate 间接约束 | 不把 `guard.backend_budget` 或一次 RSS 采样称为 engine ledger；由 E18.1 扩展 |
+| backend scratch | normalization copy 与其私有 permit 同时存活 | **精确长度**：复制前预留 validated view 的完整字节长度 | 一字节不足即在复制前拒绝；原 Artifact 不变 |
+| vendor parser | `ParsedDex` 的 lease，解析前 census 至 ParsedDex drop | **逻辑结构上界**：actual referenced pools/class_data/code/debug/annotations 与容器容量；共享磁盘 offset 允许保守重复计数 | parser_memory 与 memory_admission 回归；nesting >128 显式 ResourceLimit；无全局 allocator hook |
+| vendor CFG/SSA | checked report 持有最大方法工作集与 census lease | **逻辑结构上界**：blocks/edges/registers、range uses、phi/current-def/读路径、DEX census | pipeline 超限在渲染前失败，report/parse 独立释放；类方法按顺序执行 |
+| Source/partial source | `Report` 或共享 Error source/permit | **容量计量**：源码、class、annotations、fields/methods/debug metadata | clone 共用真实 source；metadata 不能只按 text.len 计量；转换临时对象仍依赖阶段 allowance |
+| vendor optimizer/structurer/emitter、allocator bookkeeping | 内部临时对象或 OS allocator | **边界外**：没有逐容器 allocator hook；表达式扩展、BTree padding 与 allocator headers 不在精确计量承诺内 | worker 的 OS 内存上限属于部署策略，不能以 ledger/RSS 一次成功代替 |
 | consumer serialization/output copies | core 返回后由 reverse-engine/host 生成的 JSON/source/file buffers | **未覆盖（边界外）**：属于消费者 own allocation | `Report::value()` 明确借用；core 不提供脱离 permit 的 owned extraction |
 
 本轮基本验收覆盖表中 input、decoded、scan scratch、report 的可验证边界和失败回收；未覆盖行仍保留为独立扩展任务，不阻塞已交付公开 API。
+
+## E18.1 补充决策
+
+parser census 按实际引用的结构遍历，避免用整个 DEX 长度乘最长字符串误拒绝普通 APK。损坏子节沿 vendor tolerant 路径计入已发生的容量申请；整数溢出和过深 annotation 返回 typed resource error。CFG/SSA 使用图、寄存器和实际指令维度，invoke/range 使用其完整参数数，不能固定为五个寄存器。扫描额度与 vendor 额度共用 Runtime 账户。
+
+这些结构准入不是完整 allocator 证明。未覆盖的 optimizer/structurer/emitter 临时容器仍明确保留在边界表；本 change 不引入进程全局分配器，也不把进程 RSS 冒充精确计量。

@@ -48,6 +48,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::error::DexError;
+pub use crate::memory::{MemoryLease, MemoryLedger};
 use crate::parser::DexFile;
 
 // ─────────────────────────────────────────────────────────────────────
@@ -161,7 +162,7 @@ pub struct EmitOptions {
 /// Minimal frozen budget shape (A11 wires the full resource account).
 /// Both fields are advisory caps checked at the documented checkpoints;
 /// they never change results, only abort them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct Budget {
     /// Wall-clock deadline. Checked at parse entry/exit, before the R8
     /// trampoline census, between method-pipeline stages and per method.
@@ -171,6 +172,10 @@ pub struct Budget {
     /// parse entry. `None` means unbounded (upstream parse-side
     /// `bound_count` caps still apply).
     pub max_input_bytes: Option<u64>,
+    /// Optional host-owned logical memory ledger. Checked parser and
+    /// CFG/SSA phases reserve structural bounds through this ledger; the
+    /// lease is held by the parsed value/report until it is dropped.
+    pub memory: Option<Arc<dyn MemoryLedger>>,
 }
 
 /// Cooperative cancellation token. Clone shares the same flag; set it
@@ -234,6 +239,20 @@ pub enum BackendError {
         /// Configured cap.
         cap: u64,
     },
+    /// A checked logical bound overflowed before admission. This is distinct
+    /// from a ledger rejection so callers can report malformed dimensions or
+    /// an unrepresentable structural workload separately.
+    MemoryBoundOverflow {
+        /// The structural term whose checked arithmetic overflowed.
+        label: &'static str,
+    },
+    /// The host ledger rejected a logical reservation.
+    MemoryBudget {
+        /// Requested logical bytes.
+        bytes: u64,
+        /// Admission phase.
+        label: &'static str,
+    },
     /// `selected_class_def_idx` is out of range for this `ParsedDex`.
     InvalidClassDefIndex {
         /// The index that was passed.
@@ -258,6 +277,12 @@ impl fmt::Display for BackendError {
             BackendError::DeadlineExceeded => write!(f, "analysis deadline exceeded"),
             BackendError::InputBudget { bytes, cap } => {
                 write!(f, "input of {bytes} bytes exceeds budget cap {cap}")
+            }
+            BackendError::MemoryBoundOverflow { label } => {
+                write!(f, "logical memory bound overflowed at {label}")
+            }
+            BackendError::MemoryBudget { bytes, label } => {
+                write!(f, "logical memory budget rejected {bytes} bytes at {label}")
             }
             BackendError::InvalidClassDefIndex { index, class_defs } => write!(
                 f,
@@ -781,7 +806,7 @@ pub struct MethodMetaReport {
 }
 
 /// The result of [`decompile_checked`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct BackendReport {
     /// Java-style source text. On `Completeness::Incomplete` this is
     /// still the best-effort emit (same text the legacy path produced).
@@ -795,11 +820,26 @@ pub struct BackendReport {
     pub method_outcomes: Vec<MethodOutcome>,
     /// Class-level metadata.
     pub metadata: BackendMetadata,
+    /// Parser/pipeline/report logical reservations. The lease is deliberately
+    /// excluded from equality and is never deep-cloned.
+    pub(crate) _memory_leases: Vec<Arc<dyn MemoryLease>>,
 }
+
+impl PartialEq for BackendReport {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
+            && self.completeness == other.completeness
+            && self.diagnostics == other.diagnostics
+            && self.method_outcomes == other.method_outcomes
+            && self.metadata == other.metadata
+    }
+}
+
+impl Eq for BackendReport {}
 
 /// The checked result for one selected method. The source contains only the
 /// method body/signature; class relations and annotations remain in metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct MethodBackendReport {
     /// Java-like source for the selected declaration.
     pub source: String,
@@ -811,7 +851,22 @@ pub struct MethodBackendReport {
     pub method_outcome: MethodOutcome,
     /// Metadata for the declaring class and its members.
     pub metadata: BackendMetadata,
+    /// Parser/pipeline/report logical reservations. The lease is deliberately
+    /// excluded from equality and is never deep-cloned.
+    pub(crate) _memory_leases: Vec<Arc<dyn MemoryLease>>,
 }
+
+impl PartialEq for MethodBackendReport {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
+            && self.completeness == other.completeness
+            && self.diagnostics == other.diagnostics
+            && self.method_outcome == other.method_outcome
+            && self.metadata == other.metadata
+    }
+}
+
+impl Eq for MethodBackendReport {}
 
 // ─────────────────────────────────────────────────────────────────────
 // Internal collectors (filled by the classes.rs instrumentation)
@@ -852,6 +907,7 @@ pub struct ParsedDex<'a> {
     pub(crate) data: &'a [u8],
     pub(crate) scope: ParseScope,
     pub(crate) fell_back_to_full: bool,
+    _memory: Option<Arc<dyn MemoryLease>>,
 }
 
 impl<'a> ParsedDex<'a> {
@@ -900,13 +956,10 @@ impl fmt::Debug for ParsedDex<'_> {
 /// Parse a validated DEX view for analysis under explicit options,
 /// budget and control.
 ///
-/// Both scope shapes use the "decompile" parse (`parse_inner(data,
-/// false, …)`): all requested class bodies, annotations, debug info;
-/// emit-only tables (whole-input SHA-1 canonicality, map-driven method
-/// handles / call-site ids / section-walk error channel) are skipped in
-/// both because their only consumer is DEX re-emission — recorded as
-/// DX-P01 note 2, identical for full and scoped so it cannot break
-/// equivalence.
+/// Both scopes use `parse_view(view, true, scope)`, including annotations,
+/// debug data, checksum verification and map-driven call-site tables. When a
+/// ledger is supplied, a structural census admits parser storage before any
+/// parser allocation. The resulting lease follows `ParsedDex` ownership.
 ///
 /// While this function runs the crate is in controlled mode (no env
 /// reads, no stdio).
@@ -927,6 +980,10 @@ pub fn parse_for_analysis<'a>(
         }
     }
     abort_check(control, budget)?;
+    let memory = if budget.memory.is_some() {
+        crate::memory::reserve(budget.memory.as_ref(), crate::memory::parser_bound(view)?, "vendor parser")?
+    } else { None };
+    abort_check(control, budget)?;
     let (dex, fell_back) = match &options.scope {
         ParseScope::Full => (DexFile::parse_view(view, true, None)?, false),
         ParseScope::ScopedToDescriptor { descriptor } => {
@@ -941,6 +998,7 @@ pub fn parse_for_analysis<'a>(
             if matched {
                 (scoped, false)
             } else {
+                drop(scoped);
                 abort_check(control, budget)?;
                 (DexFile::parse_view(view, true, None)?, true)
             }
@@ -952,6 +1010,7 @@ pub fn parse_for_analysis<'a>(
         data: view,
         scope: options.scope.clone(),
         fell_back_to_full: fell_back,
+        _memory: memory,
     })
 }
 
@@ -989,6 +1048,9 @@ pub fn decompile_checked(
             class_defs: parsed.dex.class_defs.len(),
         })?;
 
+    let memory = crate::memory::reserve_class_pipeline(
+        budget.memory.as_ref(), &parsed.dex, selected_class_def_idx, None,
+    )?;
     let ctx = crate::classes::RunCtx::checked(emit, budget, control);
     let mut outcome = ClassOutcome::default();
     let source = crate::classes::decompile_class_impl(
@@ -1060,6 +1122,7 @@ pub fn decompile_checked(
         diagnostics,
         method_outcomes,
         metadata,
+        _memory_leases: memory.into_iter().collect(),
     })
 }
 
@@ -1085,6 +1148,9 @@ pub fn decompile_method_checked(
             index: selected_class_def_idx,
             class_defs: parsed.dex.class_defs.len(),
         })?;
+    let memory = crate::memory::reserve_class_pipeline(
+        budget.memory.as_ref(), &parsed.dex, selected_class_def_idx, Some(selected_method_idx),
+    )?;
     let class_data = if class_def.class_data_off == 0 {
         return Err(BackendError::InvalidMethodIndex {
             index: selected_method_idx,
@@ -1219,6 +1285,7 @@ pub fn decompile_method_checked(
         diagnostics,
         method_outcome,
         metadata,
+        _memory_leases: memory.into_iter().collect(),
     })
 }
 

@@ -12,4 +12,5 @@ pub mod apk;
 pub mod compare;
 pub mod dex;
 pub mod json;
+pub mod method_navigation;
 pub mod sha;

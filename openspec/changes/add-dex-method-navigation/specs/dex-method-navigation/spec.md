@@ -24,3 +24,14 @@ Engine SHALL 根据验证后的 MethodId 提供 Java-like 方法源码、必要�
 #### Scenario: 重载与无代码方法
 - **WHEN** 两个同名重载中一个有实现而另一个 native
 - **THEN** 各自 ID 返回各自原型；native 返回声明与无代码状态，实现按目标方法渲染，不能串接其他重载的代码
+
+### Requirement: 选中方法批量渲染
+Engine SHALL 接受明确的 MethodTarget 集合并在每个选定 logical DEX 内复用解析，仅渲染集合内的方法。返回源码 SHALL 与逐方法入口一致；取消、范围和内存预算仍属于同一操作。
+
+#### Scenario: 大 DEX 中选择一个类的方法
+- **WHEN** 消费者提供该类的多个 MethodTarget
+- **THEN** 批量 visitor 返回这些方法的稳定身份和源码，不反编译同一 DEX 中的其他方法
+
+#### Scenario: 非法或空选择
+- **WHEN** 请求包含跨 artifact、范围外、不存在或重复的目标
+- **THEN** Engine 返回 InvalidQuery，不把非法目标跳过并报告完成；空选择成功返回且没有源码回调

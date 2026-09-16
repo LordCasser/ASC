@@ -167,3 +167,24 @@ ID 对象保留完整 artifact_id、entry_ordinal、logical_ordinal 以及对应
 同一次序列化产物用于 -o/stdout。先算完并校验，再写同目录临时文件、flush/sync、原子替换已有普通文件，然后 stdout；跨介质不能事务提交。输出路径是目录/symlink/当前输入的同一文件（含可识别的 hardlink）时拒绝，避免覆盖输入；普通既存输出默认替换。Unix/Windows 使用经验证的原子替换路径，失败时原文件保留、清理临时文件。取消发生在文件替换前则不提交；替换是输出提交点，之后完成 stdout 或报告写出错误，不以晚到取消假装文件未写。
 
 exit 0 完整成功（含空集）；2 参数/InvalidQuery；1 输入/分析/文件/不完整；130 用户取消或 deadline（stderr 区分原因）。Unix BrokenPipe 可由 SIGPIPE 终止；Windows BrokenPipe 安静返回 0，其他写错 1。无参帮助到 stderr/2，--help/--version 到 stdout/0。不会因 stderr/debug 改变成功 payload，也不让 core 安装信号或退出进程。
+
+## 2026-09-16 method and memory completion
+
+`Engine::visit_selected_method_sources(artifact, scope, methods, control, visitor)`
+accepts an explicit `MethodTarget` slice. Duplicate/foreign/out-of-scope targets
+are invalid; an empty selection is a successful no-op. Each selected DEX
+validates its declarations before invoking callbacks. The callback is `Send`,
+runs in the Engine private pool, and borrows one accounted source/error at a
+time. Results from earlier DEXes may have been visited if a later DEX fails.
+
+Method/class Source metadata now projects available DEX parameter names, local
+ranges, line mappings, and method/parameter annotations. Debug ranges remain
+DEX code-unit ranges; they do not assert a generated-Java-to-DEX line mapping.
+
+The shared memory ledger also admits backend normalization copies, parser
+logical structures and CFG/SSA dimensions. Inventory scratch remains charged
+across DEX accumulation. Source reports account owned metadata capacity as well
+as text; incomplete-source errors share their source and lease across clones.
+The allocation table in `changes/bound-engine-owned-memory/design.md` defines
+what is counted. Neither this ledger nor a successful RSS sample is a process
+memory hard limit.

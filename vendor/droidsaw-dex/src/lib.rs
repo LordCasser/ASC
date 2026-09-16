@@ -139,6 +139,7 @@ pub mod error;
 pub mod header;
 pub mod ids;
 pub mod mutf8;
+pub mod memory;
 pub mod obfuscation_features;
 pub mod opcodes;
 pub mod optimize;
@@ -170,7 +171,7 @@ pub use analysis::{
     BackendError, BackendMetadata, BackendReport, Budget, Completeness, Control, DeclarationKind,
     DiagnosticCode, EmitOptions, IncompleteReason, InitializerDropReason, MethodBackendReport,
     MethodOutcome, MethodStatus, ParseOptions, ParseScope, ParsedDex, StaticFieldReport,
-    SuppressionReason,
+    SuppressionReason, MemoryLease, MemoryLedger,
 };
 
 // Kani proofs for MUTF-8 decode identity are not yet added: the String-returning
@@ -263,3 +264,5 @@ mod proof_endian_tag_gauge;
 #[cfg(kani)]
 #[path = "../proofs/sign_extend_4bit.rs"]
 mod proof_sign_extend_4bit;
+
+pub(crate) mod parser_memory;

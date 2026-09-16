@@ -521,6 +521,7 @@ fn cancel_and_deadline() -> TestResult {
     let past = droidsaw_dex::analysis::Budget {
         deadline: Some(std::time::Instant::now() - std::time::Duration::from_secs(1)),
         max_input_bytes: None,
+        ..Default::default()
     };
     match parse_for_analysis(G02, &options, &past, &control) {
         Err(BackendError::DeadlineExceeded) => {}
@@ -557,6 +558,7 @@ fn input_budget_cap() -> TestResult {
     let budget = droidsaw_dex::analysis::Budget {
         deadline: None,
         max_input_bytes: Some(100),
+        ..Default::default()
     };
     match parse_for_analysis(G02, &ParseOptions::default(), &budget, &Control::new()) {
         Err(BackendError::InputBudget { bytes, cap }) => {

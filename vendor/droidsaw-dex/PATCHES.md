@@ -284,3 +284,30 @@ switch/fill payload 32 位偏移的第二个占位字、若干 clippy 项。
 - **上游状态**: 不适用（构建/测试基建，非语义）。
 - **移除条件**: 上游 fixture 以可再分发许可入库后可回退为
   `include_bytes!`；在此之前保留。
+
+## DX-P08 — checked parser and CFG/SSA memory admission (2026-09-16)
+
+- `Budget.memory` accepts the host's `MemoryLedger`; opaque RAII leases retain
+  reservations in `ParsedDex` and checked reports. No allocator hook, global
+  account, subprocess or environment dependency is added. Reports no longer
+  deep-clone while sharing one reservation; equality ignores the lease.
+- `parser_memory.rs` walks referenced DEX structures without building parser
+  IR. It counts string aliases, class data, instructions/payloads/catches,
+  annotation values and debug references, including map-driven retained data.
+  Unknown/truncated subsections retain the parser's tolerant outcome; checked
+  arithmetic and annotation nesting beyond 128 return a resource error.
+- `memory.rs` admits CFG/SSA from instruction/block/edge/register dimensions,
+  including range invokes, exception edges, phi operands and the trampoline
+  census. Class methods execute sequentially, so the largest method workspace
+  is retained, together with the census, through the checked report handoff.
+- Scoped parse fallback drops the unsuccessful scoped IR before full parsing.
+  Parse documentation now reflects `parse_view(..., true, ...)` and its
+  checksum/call-site/section-table work.
+- This is logical payload admission, not an allocator or RSS limit. BTree node
+  padding, allocator metadata, structurer/optimizer temporaries and emitter
+  expression expansion are not claimed as exact tracked allocations. The ASC
+  wrapper separately accounts normalization buffers and retained Source data;
+  a process-level memory limit still belongs to the host deployment.
+- Tests: `parser_memory` unit cases (overflow, excessive depth, small fixture,
+  unrelated long string), `tests/memory_admission.rs` (rejection, ownership,
+  cancellation/reuse and report lifetime), plus existing ASC contracts.

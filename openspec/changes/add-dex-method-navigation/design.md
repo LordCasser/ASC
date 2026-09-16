@@ -12,6 +12,7 @@
 5. 方法反编译只按 MethodId。优先复用 vendor 已解析 class 的目标方法 renderer；如果无法在 core 外保留 annotations/debug/参数名/静态值和错误原因，就给 vendor 增加通用受控入口及最小补丁。不得反编译整类后用字符串切割作为方法结果。
 6. native/abstract 方法返回声明和无代码原因；存在实现但 decompiler 不完整必须返回 IncompleteDecompilation，partial source 不冒充完整成功。预算/取消/私有 pool 与现有 Engine 一致。
 7. 同一 scope 操作共享 decode/scan/result 预算；不会因每个方法重新 parse 和释放后重新获得额度。缓存是否必要由测量决定，不先增加全局项目数据库。
+8. `visit_selected_method_sources` 接受已有 `MethodTarget` 集合，在同一 DEX parse 内只渲染选中方法。原 visitor 的 consumer 回调发生在渲染之后，在回调中过滤不能减少反编译工作；消费者也无法持有 core 私有的 parsed context。因此该入口放在 core，不扩展 `MethodScope` 的 DEX 范围含义，不增加全局缓存。目标归属、存在性、重复和范围先验证，源码仍借用当前报告。
 
 ## Risks / Trade-offs
 vendor method renderer 可能依赖 class context，应保留窄上下文而非复制 SSA/CFG。精确导航先保证语义一致，旧 prefix/scoped 优化需完成 metadata 与完整解析对照才能启用。

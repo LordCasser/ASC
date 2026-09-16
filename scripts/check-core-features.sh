@@ -91,6 +91,20 @@ fn main() {
             source.value().text().contains("SECOND = 22"),
             "G02 static initializer value is missing"
         );
+        let scope = asc_core::MethodScope::Root;
+        let inventory = engine.method_inventory(&artifact, &scope, &control).expect("method inventory");
+        let targets = inventory.value().methods().iter().map(|method| method.target()).collect::<Vec<_>>();
+        let mut batch = Vec::new();
+        engine.visit_selected_method_sources(&artifact, &scope, &targets, &control, |declaration, result| {
+            batch.push((declaration.target(), result.expect("batch source").text().to_owned()));
+            Ok(())
+        }).expect("selected batch visitor");
+        assert_eq!(batch.len(), targets.len());
+        for (target, text) in batch {
+            let single = engine.decompile_method(&artifact, &target, &control).expect("selected method");
+            assert_eq!(text, single.value().text());
+        }
+
     }
 }
 EOF

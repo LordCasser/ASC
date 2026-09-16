@@ -7,7 +7,8 @@
 //! CLI concern (`InvalidQuery` -> 2, `Cancelled` -> 130, the rest -> 1); the
 //! library itself never decides process behaviour.
 
-use crate::model::{Diagnostic, Source};
+use crate::model::{Diagnostic, MemoryPermit, Source};
+use std::sync::Arc;
 use std::fmt;
 
 /// Why an operation failed. The stable `code()` strings are part of the
@@ -74,7 +75,9 @@ pub struct Error {
     kind: ErrorKind,
     context: Vec<String>,
     diagnostics: Vec<Diagnostic>,
-    partial_source: Option<Box<Source>>,
+    partial_source: Option<Arc<Source>>,
+    // The shared partial source must retain its charge across cloned errors.
+    memory: Option<MemoryPermit>,
 }
 
 impl Error {
@@ -84,6 +87,7 @@ impl Error {
             context: Vec::new(),
             diagnostics: Vec::new(),
             partial_source: None,
+            memory: None,
         }
     }
 
@@ -100,7 +104,12 @@ impl Error {
     /// Attaches the partial source; only meaningful for
     /// [`ErrorKind::IncompleteDecompilation`].
     pub(crate) fn with_partial_source(mut self, source: Source) -> Self {
-        self.partial_source = Some(Box::new(source));
+        self.partial_source = Some(Arc::new(source));
+        self
+    }
+
+    pub(crate) fn with_memory(mut self, memory: MemoryPermit) -> Self {
+        self.memory = Some(memory);
         self
     }
 

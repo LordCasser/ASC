@@ -7,9 +7,8 @@
 ## 3. 交接
 - [x] 3.1 [A17] 前置 2.2；完成 ASC 四 feature 与仓外 C/D consumer 回归，固定 provider commits 与公开 API 供消费者使用，并通过 OpenSpec strict 校验；归档属于后续 review 管理动作。1.1 可与 A16 archive provider 并行。
 
-> 状态（2026-09-16）：上述核心接口、scope/identity validation、checked method renderer、typed instruction facts、批量 visitor 和 C/D consumer handoff 已完成；ASC all-feature 本轮证据为 209 tests 全通过，feature matrix 与仓外 consumer 日志仍以 `openspec/audits/embedding/report.md` 所列路径为准。完整 native/abstract/构造器/metadata fixture 矩阵、IDA 运行和性能基线不属于本次基本验收，拆到下列扩展项。
-
-## 4. 扩展/环境验收（不阻塞本次 provider 交付）
-- [ ] E17.1：补齐 native/abstract/构造器/重载/无引用声明及 annotations/debug/参数名的独立 golden fixture 矩阵；当前实现已按真实 DEX 表和 flags 提供数据，本轮未声称矩阵全部运行。
-- [ ] E17.2：在目标平台完成完整 feature/consumer/IDA native bridge 运行；本仓只记录公开 core 与 C/D API 交接，不把 IDA 环境结果倒灌为 ASC 证据。
-- [ ] E17.3：基于真实 APK 测量批量 visitor 与 selected-method 的性能、峰值内存和分页策略；不改变当前确定性 API 合同。
+## 4. 补充实施与验收（2026-09-16）
+- [x] E17.1：独立 method-navigation golden 5 项覆盖 native/abstract、构造器、重载、无引用声明、annotations/debug/参数名；修复 core debug 与 method/parameter annotation 投影。selected batch 6 项验证准确选择、稳定顺序、重复/外部/范围外拒绝、空集合与逐方法源码一致。
+- [x] E17.2-local：四 feature matrix、仓外 path consumer、threads=1/2 各 4 调用线程 × 20 轮取消/恢复/源码一致性通过；visitor 使用 Engine private pool。
+- [ ] E17.2-environment：真实 IDA native bridge 及目标部署平台验收，由匹配环境执行，不记作本机通过。
+- [ ] E17.3：基于真实 APK 对同一方法集合比较 selected 与 selected batch 的时间、进程峰值 RSS，并复核分页；本地 runner 已提供，结果待消费者同步后记录。

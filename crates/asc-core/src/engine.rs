@@ -60,8 +60,9 @@ use std::time::Duration;
 pub struct Limits {
     /// `input-bytes`: the owned snapshot may not exceed this.
     pub max_input_bytes: u64,
-    /// `engine-bytes`: the engine-owned active bytes (inputs of artifacts
-    /// opened through this engine, dropped with them).
+    /// Shared ledger limit for live input, decoded buffers, scan/parser/pipeline
+    /// working estimates and retained reports. This is not a process RSS cap;
+    /// allocator bookkeeping and caller-owned copies are outside the ledger.
     pub max_engine_owned_bytes: u64,
     /// `entry-bytes`: one entry's actual decoded bytes.
     pub max_entry_bytes: u64,
@@ -153,10 +154,11 @@ impl ControlGuard {
     /// The backend budget derived from the host control: the same deadline,
     /// plus an input-length cap for the bytes being parsed.
     #[cfg(feature = "decompile")]
-    fn backend_budget(&self, input_len: u64) -> droidsaw_dex::analysis::Budget {
+    fn backend_budget(&self, input_len: u64, artifact: &Artifact) -> droidsaw_dex::analysis::Budget {
         droidsaw_dex::analysis::Budget {
             deadline: self.deadline,
             max_input_bytes: Some(input_len),
+            memory: Some(artifact.runtime.memory.clone()),
         }
     }
 }
@@ -466,8 +468,9 @@ impl Artifact {
                                         dex::DexView::new(views.dex_entry(logical), view.bytes());
                                     dex::estimated_scan_work(&dex_view, &self.limits.scan)
                                 })
-                                .try_fold(0u64, |maximum, estimate| {
-                                    estimate.map(|estimate| maximum.max(estimate))
+                                .try_fold(0u64, |total, estimate| {
+                                    total.checked_add(estimate?).ok_or_else(||
+                                        Error::resource_limit("logical DEX working-set sum overflow"))
                                 })?;
                             let scan_memory = self.runtime.memory.reserve_with_limit(
                                 work_bytes,
@@ -539,6 +542,12 @@ fn reserve_report_memory(
     diagnostics: &[Diagnostic],
     label: &str,
 ) -> Result<MemoryPermit, Error> {
+    if result_bytes > artifact.limits.scan.max_result_bytes {
+        return Err(Error::resource_limit(format!(
+            "{label} payload uses {result_bytes} bytes, above the {} result limit",
+            artifact.limits.scan.max_result_bytes
+        )));
+    }
     let result_bytes = u64::try_from(result_bytes).unwrap_or(u64::MAX);
     let diagnostic_bytes = diagnostics.iter().fold(0u64, |total, diagnostic| {
         total
@@ -1305,22 +1314,24 @@ fn fold_scope<T: Send>(
 fn method_declaration_size(row: &MethodDeclaration) -> (usize, usize, u64) {
     let identity = row.identity();
     let text = |value: &DexText| value.unit_len().saturating_mul(2);
-    let prototype = identity
-        .prototype()
-        .parameters()
-        .iter()
-        .fold(text(identity.prototype().return_type()), |size, parameter| {
-            size.saturating_add(text(parameter))
-        });
-    (
-        1,
-        384usize
-            .saturating_add(text(identity.owner()))
-            .saturating_add(text(identity.name()))
-            .saturating_add(prototype)
-            .saturating_add(row.class().descriptor().as_str().len()),
-        0,
-    )
+    let prototype = identity.prototype().parameters().iter().fold(
+        text(identity.prototype().return_type()),
+        |size, parameter| size.saturating_add(std::mem::size_of::<DexText>()).saturating_add(text(parameter)),
+    );
+    let class = row.class();
+    let bytes = std::mem::size_of::<MethodDeclaration>()
+        .saturating_add(text(identity.owner()))
+        .saturating_add(text(identity.name()))
+        .saturating_add(prototype)
+        .saturating_add(identity.dex().raw_entry_name().len())
+        .saturating_add(class.dex().raw_entry_name().len())
+        .saturating_add(class.descriptor().as_str().len())
+        .saturating_add(text(class.java_name()))
+        .saturating_add(text(class.package()))
+        .saturating_add(text(class.simple_name()));
+    // Vectors may double capacity on growth. Reserve that storage in the
+    // result projection, including empty-slot MethodDeclaration headers.
+    (1, bytes.saturating_mul(2), 0)
 }
 
 #[cfg(feature = "decompile")]
@@ -1608,7 +1619,8 @@ fn render_method_from_parsed(
     target: &MethodTarget,
     backend_bytes: &[u8],
     guard: &ControlGuard,
-) -> Result<Source, Error> {
+    artifact: &Artifact,
+) -> Result<Report<Source>, Error> {
     if target.class().dex() != view.id() || target.method().dex() != view.id() {
         return Err(Error::invalid_query("method target is outside the selected DEX view"));
     }
@@ -1625,7 +1637,7 @@ fn render_method_from_parsed(
         .get_type_descriptor(class_def.class_idx)
         .map_err(|error| Error::malformed_input(format!("selected class descriptor: {error}")))?;
     let class = build_class(entry, view, target.class().class_def_idx(), descriptor);
-    let budget = guard.backend_budget(backend_bytes.len() as u64);
+    let budget = guard.backend_budget(backend_bytes.len() as u64, artifact);
     let report = droidsaw_dex::analysis::decompile_method_checked(
         parsed,
         class_def_idx,
@@ -1640,14 +1652,16 @@ fn render_method_from_parsed(
     let source = Source::new(
         class,
         normalize_source_text(&report.source),
-        map_metadata(&report.metadata),
+        map_metadata(&report.metadata, &parsed, backend_bytes),
     );
+    let memory = reserve_report_memory(artifact, source.owned_bytes(), &[], "batch source report")?;
     match report.completeness {
-        droidsaw_dex::analysis::Completeness::Complete => Ok(source),
+        droidsaw_dex::analysis::Completeness::Complete => Ok(Report::new(source, Vec::new(), OperationStats::default()).with_memory(memory)),
         droidsaw_dex::analysis::Completeness::Incomplete { reasons } => {
             Err(Error::new(ErrorKind::IncompleteDecompilation)
                 .with_context(format!("incomplete selected-method decompilation: {reasons:?}"))
-                .with_partial_source(source))
+                .with_partial_source(source)
+                .with_memory(memory))
         }
     }
 }
@@ -1657,12 +1671,77 @@ fn visit_method_sources<F>(
     artifact: &Artifact,
     scope: &MethodScope,
     control: &OperationControl,
+    selected_methods: Option<&[MethodTarget]>,
     mut visitor: F,
 ) -> Result<(), Error>
 where
     F: FnMut(&MethodDeclaration, Result<&Source, &Error>) -> Result<(), Error>,
 {
+    let _selection_memory = selected_methods.map(|methods| {
+        if methods.len() > artifact.limits.scan.max_result_items {
+            return Err(Error::resource_limit("selected method count exceeds result-item limit"));
+        }
+        let per_target = std::mem::size_of::<MethodTarget>() * 4
+            + std::mem::size_of::<(crate::model::DexId, Vec<MethodTarget>)>();
+        let bytes = (methods.len() as u64).checked_mul(per_target as u64)
+            .ok_or_else(|| Error::resource_limit("selected method index size overflow"))?;
+        artifact.runtime.memory.reserve_with_limit(bytes, artifact.limits.max_engine_owned_bytes,
+            "selected method target index")
+    }).transpose()?;
+    let selected_targets = selected_methods.map(|methods| {
+        let mut targets = methods.to_vec();
+        targets.sort_unstable();
+        targets
+    });
+    if let Some(targets) = selected_targets.as_ref() {
+        for target in targets {
+            if target.class().dex().artifact() != artifact.id
+                || target.method().dex().artifact() != artifact.id
+            {
+                return Err(Error::invalid_query(
+                    "selected method target belongs to a different artifact",
+                ));
+            }
+            if target.class().dex() != target.method().dex() {
+                return Err(Error::invalid_query(
+                    "selected method target class and method belong to different DEXes",
+                ));
+            }
+        }
+        if targets.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(Error::invalid_query(
+                "selected method targets contain a duplicate",
+            ));
+        }
+        if targets.is_empty() {
+            return Ok(());
+        }
+    }
+    let selected_by_dex = selected_targets.as_ref().map(|targets| {
+        let mut by_dex = std::collections::BTreeMap::new();
+        for target in targets {
+            by_dex
+                .entry(target.method().dex())
+                .or_insert_with(Vec::new)
+                .push(*target);
+        }
+        by_dex
+    });
+    let mut selected_seen = std::collections::BTreeSet::new();
     let inputs = resolve_method_scope(artifact, scope)?;
+    if let Some(targets) = &selected_targets {
+        for target in targets {
+            let dex = target.method().dex();
+            if !inputs.iter().any(|input| match input {
+                MethodScopeInput::Raw => dex.entry_ordinal() == 0,
+                MethodScopeInput::Archive { entry, logical } =>
+                    entry.ordinal == dex.entry_ordinal()
+                    && logical.is_none_or(|ordinal| ordinal == dex.logical_ordinal()),
+            }) {
+                return Err(Error::invalid_query("selected method target is outside the selected scope"));
+            }
+        }
+    }
     let guard = ControlGuard::new(control);
     let probe = guard.probe();
     let input_limits = artifact.limits.input();
@@ -1728,12 +1807,16 @@ where
                 artifact.limits.max_engine_owned_bytes,
                 "batch method DEX working set",
             )?;
+            let _scratch_memory = artifact.runtime.memory.reserve_with_limit(
+                container::backend_scratch_bytes(view, &view_integrity) as u64,
+                artifact.limits.max_engine_owned_bytes, "backend normalization scratch",
+            )?;
             let scratch = container::backend_scratch(view, &view_integrity);
             let backend_bytes = scratch
                 .as_ref()
                 .map(|scratch| scratch.bytes.as_slice())
                 .unwrap_or_else(|| view.bytes());
-            let budget = guard.backend_budget(backend_bytes.len() as u64);
+            let budget = guard.backend_budget(backend_bytes.len() as u64, artifact);
             let parsed = droidsaw_dex::analysis::parse_for_analysis(
                 backend_bytes,
                 &droidsaw_dex::analysis::ParseOptions::default(),
@@ -1751,19 +1834,59 @@ where
                 backend_bytes,
                 &probe,
             )?;
-            for declaration in declarations {
-                probe.check()?;
-                let result = render_method_from_parsed(
-                    &parsed,
-                    &entry,
-                    view,
-                    &declaration.target(),
-                    backend_bytes,
-                    &guard,
-                );
-                visitor(&declaration, result.as_ref())?;
+            if let Some(wanted) = selected_by_dex
+                .as_ref()
+                .and_then(|by_dex| by_dex.get(&view.id()))
+            {
+                for wanted_target in wanted {
+                    if !declarations.iter().any(|row| row.target() == *wanted_target) {
+                        return Err(Error::invalid_query("selected method target is not declared in its selected DEX"));
+                    }
+                }
+                for declaration in declarations {
+                    let target = declaration.target();
+                    if wanted.binary_search(&target).is_err() {
+                        continue;
+                    }
+                    probe.check()?;
+                    let result = render_method_from_parsed(
+                        &parsed,
+                        &entry,
+                        view,
+                        &target,
+                        backend_bytes,
+                        &guard,
+                        artifact,
+                    );
+                    selected_seen.insert(target);
+                    visitor(&declaration, result.as_ref().map(Report::value))?;
+                }
+            } else if selected_by_dex.is_none() {
+                for declaration in declarations {
+                    probe.check()?;
+                    let result = render_method_from_parsed(
+                        &parsed,
+                        &entry,
+                        view,
+                        &declaration.target(),
+                        backend_bytes,
+                        &guard,
+                        artifact,
+                    );
+                    visitor(&declaration, result.as_ref().map(Report::value))?;
+                }
             }
         }
+    }
+    if let Some(targets) = selected_targets {
+        for target in &targets {
+            if !selected_seen.contains(target) {
+                return Err(Error::invalid_query(
+                    "selected method target is not declared in the selected scope",
+                ));
+            }
+        }
+
     }
     Ok(())
 }
@@ -1844,12 +1967,17 @@ where
                 artifact.limits.max_engine_owned_bytes,
                 "method declaration DEX working set",
             )?;
+            let _scratch_memory = artifact.runtime.memory.reserve_with_limit(
+                container::backend_scratch_bytes(view, &view_integrity) as u64,
+                artifact.limits.max_engine_owned_bytes,
+                "backend normalization scratch",
+            )?;
             let scratch = container::backend_scratch(view, &view_integrity);
             let backend_bytes = scratch
                 .as_ref()
                 .map(|scratch| scratch.bytes.as_slice())
                 .unwrap_or_else(|| view.bytes());
-            let budget = guard.backend_budget(backend_bytes.len() as u64);
+            let budget = guard.backend_budget(backend_bytes.len() as u64, artifact);
             let parsed = droidsaw_dex::analysis::parse_for_analysis(
                 backend_bytes,
                 &droidsaw_dex::analysis::ParseOptions::default(),
@@ -1895,6 +2023,9 @@ fn method_inventory(
         )));
     }
     let decoded = AtomicU64::new(0);
+    // Returned declarations survive each logical DEX parse. Keep its scratch
+    // reservation until the final report has acquired ownership of the rows.
+    let mut work_memory = Vec::new();
     let mut methods = Vec::new();
     let mut fields = Vec::new();
     let mut resolved_dexes = Vec::new();
@@ -1954,17 +2085,23 @@ fn method_inventory(
             let work_entry = views.dex_entry(logical);
             let work_view = dex::DexView::new(work_entry, view.bytes());
             let work_bytes = dex::estimated_scan_work(&work_view, &scan_limits)?;
-            let _scan_memory = artifact.runtime.memory.reserve_with_limit(
+            let scan_memory = artifact.runtime.memory.reserve_with_limit(
                 work_bytes,
                 artifact.limits.max_engine_owned_bytes,
                 "method inventory DEX working set",
+            )?;
+            work_memory.push(scan_memory);
+            let _scratch_memory = artifact.runtime.memory.reserve_with_limit(
+                container::backend_scratch_bytes(view, &view_integrity) as u64,
+                artifact.limits.max_engine_owned_bytes,
+                "backend normalization scratch",
             )?;
             let scratch = container::backend_scratch(view, &view_integrity);
             let backend_bytes = scratch
                 .as_ref()
                 .map(|scratch| scratch.bytes.as_slice())
                 .unwrap_or_else(|| view.bytes());
-            let budget = guard.backend_budget(backend_bytes.len() as u64);
+            let budget = guard.backend_budget(backend_bytes.len() as u64, artifact);
             let parsed = droidsaw_dex::analysis::parse_for_analysis(
                 backend_bytes,
                 &droidsaw_dex::analysis::ParseOptions::default(),
@@ -2091,6 +2228,7 @@ fn method_inventory(
         ..Default::default()
     };
     let memory = reserve_report_memory(artifact, used.1, &diagnostics, "method inventory report")?;
+    drop(work_memory);
     Ok(Report::new(
         MethodInventory::new(scope.clone(), resolved_dexes, dex_entries, fields, methods),
         diagnostics,
@@ -2187,6 +2325,11 @@ fn decompile_with_scope(
         let mut chose_entry = false;
         for (logical, view) in views.views.iter().enumerate() {
             let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
+            let _resolution_memory = artifact.runtime.memory.reserve_with_limit(
+                dex::estimated_scan_work(&dex_view, &artifact.limits.scan)?,
+                artifact.limits.max_engine_owned_bytes,
+                "class resolution working set",
+            )?;
             let hits = match selector {
                 ClassSelector::Descriptor(descriptor, pinned) => {
                     if pinned.is_some_and(|id| id != view.id()) {
@@ -2264,7 +2407,12 @@ fn decompile_with_scope(
         artifact.limits.max_engine_owned_bytes,
         "decompile DEX working set",
     )?;
-    let scratch = container::backend_scratch(view, &view_integrity);
+    let _scratch_memory = artifact.runtime.memory.reserve_with_limit(
+                container::backend_scratch_bytes(view, &view_integrity) as u64,
+                artifact.limits.max_engine_owned_bytes,
+                "backend normalization scratch",
+            )?;
+            let scratch = container::backend_scratch(view, &view_integrity);
     let backend_bytes: &[u8] = match &scratch {
         Some(scratch_view) => &scratch_view.bytes,
         None => view.bytes(),
@@ -2272,7 +2420,7 @@ fn decompile_with_scope(
     // The host's cancel flag and deadline are mirrored into the backend
     // token/budget so the backend's own checkpoints honor them, and the
     // budget caps the parse at exactly this view's length.
-    let budget = guard.backend_budget(u64::try_from(backend_bytes.len()).unwrap_or(u64::MAX));
+    let budget = guard.backend_budget(u64::try_from(backend_bytes.len()).unwrap_or(u64::MAX), artifact);
     let parsed = droidsaw_dex::analysis::parse_for_analysis(
         backend_bytes,
         &droidsaw_dex::analysis::ParseOptions::default(),
@@ -2305,7 +2453,7 @@ fn decompile_with_scope(
         .to_owned();
     let entry_row = views.dex_entry(resolved.logical);
     let class = build_class(&entry_row, view, resolved.class_def_idx, &descriptor_text);
-    let metadata = map_metadata(&report.metadata);
+    let metadata = map_metadata(&report.metadata, &parsed, backend_bytes);
     let text = normalize_source_text(&report.source);
     let source = Source::new(class, text, metadata);
     for backend_diag in &report.diagnostics {
@@ -2327,17 +2475,21 @@ fn decompile_with_scope(
             };
             let memory = reserve_report_memory(
                 artifact,
-                source.text().len().saturating_add(1024),
+                source.owned_bytes(),
                 &diagnostics,
                 "decompile report",
             )?;
             Ok(Report::new(source, diagnostics, stats).with_memory(memory))
         }
         droidsaw_dex::analysis::Completeness::Incomplete { reasons } => {
+            let memory = reserve_report_memory(
+                artifact, source.owned_bytes(), &diagnostics, "partial source report",
+            )?;
             Err(Error::new(ErrorKind::IncompleteDecompilation)
                 .with_context(format!("incomplete decompilation: {reasons:?}"))
                 .with_diagnostics(diagnostics)
-                .with_partial_source(source))
+                .with_partial_source(source)
+                .with_memory(memory))
         }
     }
 }
@@ -2438,12 +2590,17 @@ fn decompile_selected_method(
         artifact.limits.max_engine_owned_bytes,
         "selected-method DEX working set",
     )?;
-    let scratch = container::backend_scratch(view, &view_integrity);
+    let _scratch_memory = artifact.runtime.memory.reserve_with_limit(
+                container::backend_scratch_bytes(view, &view_integrity) as u64,
+                artifact.limits.max_engine_owned_bytes,
+                "backend normalization scratch",
+            )?;
+            let scratch = container::backend_scratch(view, &view_integrity);
     let backend_bytes = scratch
         .as_ref()
         .map(|scratch| scratch.bytes.as_slice())
         .unwrap_or_else(|| view.bytes());
-    let budget = guard.backend_budget(backend_bytes.len() as u64);
+    let budget = guard.backend_budget(backend_bytes.len() as u64, artifact);
     let parsed = droidsaw_dex::analysis::parse_for_analysis(
         backend_bytes,
         &droidsaw_dex::analysis::ParseOptions::default(),
@@ -2496,7 +2653,7 @@ fn decompile_selected_method(
     let source = Source::new(
         class,
         normalize_source_text(&report.source),
-        map_metadata(&report.metadata),
+        map_metadata(&report.metadata, &parsed, backend_bytes),
     );
     let mut diagnostics: Vec<Diagnostic> = artifact
         .open_diagnostics
@@ -2519,7 +2676,7 @@ fn decompile_selected_method(
         droidsaw_dex::analysis::Completeness::Complete => {
             let memory = reserve_report_memory(
                 artifact,
-                source.text().len().saturating_add(1024),
+                source.owned_bytes(),
                 &diagnostics,
                 "selected-method report",
             )?;
@@ -2535,10 +2692,14 @@ fn decompile_selected_method(
             .with_memory(memory))
         }
         droidsaw_dex::analysis::Completeness::Incomplete { reasons } => {
+            let memory = reserve_report_memory(
+                artifact, source.owned_bytes(), &diagnostics, "partial source report",
+            )?;
             Err(Error::new(ErrorKind::IncompleteDecompilation)
                 .with_context(format!("incomplete selected-method decompilation: {reasons:?}"))
                 .with_diagnostics(diagnostics)
-                .with_partial_source(source))
+                .with_partial_source(source)
+                .with_memory(memory))
         }
     }
 }
@@ -2611,7 +2772,8 @@ fn map_backend_error(error: droidsaw_dex::analysis::BackendError) -> Error {
         Backend::DeadlineExceeded => ErrorKind::Cancelled {
             cause: CancelCause::Deadline,
         },
-        Backend::InputBudget { .. } => ErrorKind::ResourceLimit,
+        Backend::InputBudget { .. } | Backend::MemoryBudget { .. }
+        | Backend::MemoryBoundOverflow { .. } => ErrorKind::ResourceLimit,
         Backend::InvalidClassDefIndex { .. } | Backend::InvalidMethodIndex { .. } => {
             ErrorKind::InvalidQuery
         }
@@ -2645,7 +2807,11 @@ fn build_class(
 }
 
 #[cfg(feature = "decompile")]
-fn map_metadata(metadata: &droidsaw_dex::analysis::BackendMetadata) -> SourceMetadata {
+fn map_metadata(
+    metadata: &droidsaw_dex::analysis::BackendMetadata,
+    parsed: &droidsaw_dex::analysis::ParsedDex<'_>,
+    bytes: &[u8],
+) -> SourceMetadata {
     let class = ClassMetadata {
         access_flags: metadata.access_flags,
         super_class: metadata
@@ -2693,7 +2859,7 @@ fn map_metadata(metadata: &droidsaw_dex::analysis::BackendMetadata) -> SourceMet
             })
             .unwrap_or_default(),
     };
-    let annotations = metadata
+    let annotations: Vec<AnnotationEntry> = metadata
         .annotations
         .iter()
         .map(|report| AnnotationEntry {
@@ -2735,20 +2901,44 @@ fn map_metadata(metadata: &droidsaw_dex::analysis::BackendMetadata) -> SourceMet
                 }),
         )
         .collect();
-    let methods = metadata
-        .method_reports
-        .iter()
-        .map(|report| MethodMetadata {
+    let class_data = parsed.dex().class_defs.get(metadata.class_def_idx)
+        .and_then(|class| parsed.dex().class_datas.get(&class.class_data_off));
+    let methods = metadata.method_reports.iter().map(|report| {
+        let debug = class_data.and_then(|data| data.direct_methods.iter().chain(&data.virtual_methods)
+            .find(|method| method.method_idx.0 == report.method_idx))
+            .and_then(|method| parsed.dex().code_items.get(&method.code_off).map(|code| (method, code)))
+            .and_then(|(method, code)| parsed.dex().debug_infos.get(&code.debug_info_off).map(|debug| {
+                let end = crate::bytes::read_u32(bytes, method.code_off as usize + 12).unwrap_or(0);
+                crate::model::DebugInfo {
+                    parameter_names: debug.parameter_names.iter()
+                        .map(|name| name.as_deref().map(DexText::from_str_lossless)).collect(),
+                    locals: debug.locals.iter().map(|local| crate::model::LocalVariable {
+                        name: DexText::from_str_lossless(local.name.as_deref().unwrap_or("")),
+                        start_code_unit: local.start_addr,
+                        end_code_unit: local.end_addr.unwrap_or(end),
+                        slot: local.register,
+                    }).collect(),
+                    lines: debug.line_table.iter().map(|&(pc, line)| crate::model::LineNumberEntry {
+                        code_unit: pc, line,
+                    }).collect(),
+                }
+            }));
+        let method_annotations = annotations.iter().filter(|annotation| match annotation.target {
+            AnnotationTarget::Method { index } => index == report.method_idx as usize,
+            AnnotationTarget::Parameter { method_index, .. } => method_index == report.method_idx as usize,
+            _ => false,
+        }).cloned().collect();
+        MethodMetadata {
             name: DexText::from_str_lossless(&report.name),
             prototype: prototype_from_descriptor(&report.prototype),
             access_flags: report.access_flags,
             generic_signature: None,
             throws: Vec::new(),
-            annotations: Vec::new(),
+            annotations: method_annotations,
             parameter_signatures: Vec::new(),
-            debug: None,
-        })
-        .collect();
+            debug,
+        }
+    }).collect();
     SourceMetadata {
         class,
         annotations,
@@ -3676,6 +3866,87 @@ mod tests {
 
     #[cfg(feature = "decompile")]
     #[test]
+    fn backend_normalization_copy_is_admitted_before_allocation() {
+        let mut dex = g02_dex();
+        dex[8..12].fill(0);
+        let probe_engine = Engine::new(EngineOptions::default()).unwrap();
+        let artifact = probe_engine.open_bytes(Arc::from(dex.clone()), InputKind::Dex, &no_control()).unwrap();
+        let (views, integrity) = container::validate_dex_entry(artifact.id(), 0, b"<memory.dex>", &dex, &ControlGuard::new(&no_control()).probe()).unwrap();
+        let view = &views.views[0];
+        assert_eq!(container::backend_scratch_bytes(view, &integrity), dex.len());
+        let work = dex::estimated_scan_work(&dex::DexView::new(views.dex_entry(0), view.bytes()), &artifact.limits.scan).unwrap();
+        let max = probe_engine.runtime.active_bytes.load(Ordering::Relaxed) + work + dex.len() as u64 - 1;
+        let engine = Engine::new(EngineOptions {
+            limits: Limits { max_engine_owned_bytes: max, ..Limits::default() },
+            ..EngineOptions::default()
+        }).unwrap();
+        let artifact = engine.open_bytes(Arc::from(dex), InputKind::Dex, &no_control()).unwrap();
+        let baseline = engine.runtime.active_bytes.load(Ordering::Relaxed);
+        let error = engine.method_inventory(&artifact, &MethodScope::Root, &no_control()).unwrap_err();
+        assert_eq!(error.kind(), &ErrorKind::ResourceLimit);
+        assert!(error.to_string().contains("backend normalization scratch"), "{error}");
+        assert_eq!(engine.runtime.active_bytes.load(Ordering::Relaxed), baseline);
+        drop(artifact);
+        assert_eq!(engine.runtime.active_bytes.load(Ordering::Relaxed), 0);
+        engine.open_bytes(Arc::from(g02_dex()), InputKind::Dex, &no_control()).unwrap();
+    }
+
+    #[cfg(feature = "decompile")]
+    #[test]
+    fn inventory_keeps_previous_dex_work_charged_and_recovers_after_failure() {
+        let dex = g02_dex();
+        let zip = build_zip(&[("classes.dex", &dex, true), ("classes2.dex", &dex, true)]);
+        let probe_engine = Engine::new(EngineOptions::default()).unwrap();
+        let artifact = probe_engine.open_bytes(Arc::from(zip.clone()), InputKind::Apk, &no_control()).unwrap();
+        let scope = MethodScope::Entries(vec![ArchiveEntryId::new(artifact.id(), 0)]);
+        let (views, _) = container::validate_dex_entry(artifact.id(), 0, b"classes.dex", &dex, &ControlGuard::new(&no_control()).probe()).unwrap();
+        let view = dex::DexView::new(views.dex_entry(0), views.views[0].bytes());
+        let work = dex::estimated_scan_work(&view, &artifact.limits.scan).unwrap();
+        drop(probe_engine.method_inventory(&artifact, &scope, &no_control()).unwrap());
+        let single_peak = probe_engine.runtime.memory.peak.load(Ordering::Relaxed);
+
+        let engine = Engine::new(EngineOptions {
+            limits: Limits { max_engine_owned_bytes: single_peak + work / 2, ..Limits::default() },
+            ..EngineOptions::default()
+        }).unwrap();
+        let artifact = engine.open_bytes(Arc::from(zip), InputKind::Apk, &no_control()).unwrap();
+        let baseline = engine.runtime.active_bytes.load(Ordering::Relaxed);
+        let scope = MethodScope::Entries(vec![ArchiveEntryId::new(artifact.id(), 0)]);
+        drop(engine.method_inventory(&artifact, &scope, &no_control()).unwrap());
+        let error = engine.method_inventory(&artifact, &MethodScope::Root, &no_control()).unwrap_err();
+        assert_eq!(error.kind(), &ErrorKind::ResourceLimit);
+        assert_eq!(engine.runtime.active_bytes.load(Ordering::Relaxed), baseline);
+        drop(engine.method_inventory(&artifact, &scope, &no_control()).unwrap());
+        assert_eq!(engine.runtime.active_bytes.load(Ordering::Relaxed), baseline);
+    }
+
+    #[cfg(feature = "decompile")]
+    #[test]
+    fn partial_source_error_clone_retains_one_payload_and_charge() {
+        let engine = Engine::new(EngineOptions::default()).unwrap();
+        let artifact = engine.open_bytes(Arc::from(g02_dex()), InputKind::Dex, &no_control()).unwrap();
+        let inventory = engine.method_inventory(&artifact, &MethodScope::Root, &no_control()).unwrap();
+        let target = inventory.value().methods().iter().find(|m| m.has_code()).unwrap().target();
+        drop(inventory);
+        let report = engine.decompile_method(&artifact, &target, &no_control()).unwrap();
+        let source = report.value().clone();
+        drop(report);
+        let baseline = engine.runtime.active_bytes.load(Ordering::Relaxed);
+        let charge = source.owned_bytes() as u64;
+        assert!(charge > source.text().len() as u64);
+        let memory = reserve_report_memory(&artifact, source.owned_bytes(), &[], "partial-source fixture").unwrap();
+        let error = Error::new(ErrorKind::IncompleteDecompilation).with_partial_source(source).with_memory(memory);
+        let cloned = error.clone();
+        assert!(std::ptr::eq(error.partial_source().unwrap(), cloned.partial_source().unwrap()));
+        assert_eq!(engine.runtime.active_bytes.load(Ordering::Relaxed), baseline + charge);
+        drop(error);
+        assert_eq!(engine.runtime.active_bytes.load(Ordering::Relaxed), baseline + charge);
+        drop(cloned);
+        assert_eq!(engine.runtime.active_bytes.load(Ordering::Relaxed), baseline);
+    }
+
+    #[cfg(feature = "decompile")]
+    #[test]
     fn method_inventory_keeps_declarations_and_exact_method_target() {
         let engine = Engine::new(EngineOptions::default()).unwrap();
         let artifact = engine
@@ -4373,11 +4644,32 @@ impl Engine {
         visitor: F,
     ) -> Result<(), Error>
     where
-        F: FnMut(&MethodDeclaration, Result<&Source, &Error>) -> Result<(), Error>,
+        F: FnMut(&MethodDeclaration, Result<&Source, &Error>) -> Result<(), Error> + Send,
     {
         let _admission = self.admit(control)?;
         self.check_ownership(artifact)?;
-        visit_method_sources(artifact, scope, control, visitor)
+        self.runtime.pool.install(|| visit_method_sources(artifact, scope, control, None, visitor))
+    }
+
+    /// Visits only the supplied declared method targets. Targets are sorted
+    /// for deterministic callbacks; ownership, duplicates and DEX scope are
+    /// checked first. Each DEX validates its declarations before callbacks.
+    /// Sources are released after each callback, including on callback failure.
+    #[cfg(feature = "decompile")]
+    pub fn visit_selected_method_sources<F>(
+        &self,
+        artifact: &Artifact,
+        scope: &MethodScope,
+        methods: &[MethodTarget],
+        control: &OperationControl,
+        visitor: F,
+    ) -> Result<(), Error>
+    where
+        F: FnMut(&MethodDeclaration, Result<&Source, &Error>) -> Result<(), Error> + Send,
+    {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        self.runtime.pool.install(|| visit_method_sources(artifact, scope, control, Some(methods), visitor))
     }
 
     #[cfg(feature = "manifest")]

@@ -14,6 +14,8 @@ use std::sync::Arc;
 pub(crate) struct MemoryAccount {
     active: Arc<AtomicU64>,
     limit: u64,
+    #[cfg(test)]
+    pub(crate) peak: AtomicU64,
 }
 
 #[cfg(test)]
@@ -45,13 +47,15 @@ impl MemoryAccount {
             Self {
                 active: Arc::clone(&active),
                 limit,
+                #[cfg(test)]
+                peak: AtomicU64::new(0),
             },
             active,
         )
     }
 
     pub(crate) fn reserve_with_limit(
-        self: &Arc<Self>,
+        &self,
         bytes: u64,
         limit: u64,
         label: &str,
@@ -77,10 +81,28 @@ impl MemoryAccount {
                 Ordering::Relaxed,
             ) {
                 Ok(_) => {
+                    #[cfg(test)]
+                    self.peak.fetch_max(next, Ordering::Relaxed);
                     return Ok(MemoryPermit::new(Arc::clone(&self.active), bytes))
                 }
                 Err(observed) => current = observed,
             }
         }
+    }
+}
+
+#[cfg(feature = "decompile")]
+impl droidsaw_dex::analysis::MemoryLease for MemoryPermit {}
+
+#[cfg(feature = "decompile")]
+impl droidsaw_dex::analysis::MemoryLedger for MemoryAccount {
+    fn reserve(
+        &self,
+        bytes: u64,
+        label: &'static str,
+    ) -> Result<Box<dyn droidsaw_dex::analysis::MemoryLease>, droidsaw_dex::analysis::BackendError> {
+        self.reserve_with_limit(bytes, self.limit, label)
+            .map(|permit| Box::new(permit) as Box<dyn droidsaw_dex::analysis::MemoryLease>)
+            .map_err(|_| droidsaw_dex::analysis::BackendError::MemoryBudget { bytes, label })
     }
 }

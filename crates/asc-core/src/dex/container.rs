@@ -578,12 +578,26 @@ const SCRATCH_REWRITES: &[&str] = &[
     "adler-32 recomputed over the normalized copy",
 ];
 
+/// Exact buffer length to admit before making a backend normalization copy.
+pub(crate) fn backend_scratch_bytes(
+    view: &ValidatedDexView<'_>,
+    integrity: &[crate::model::Diagnostic],
+) -> usize {
+    if view.version() == DexVersion::V041 || integrity.iter().any(|diagnostic| {
+        matches!(diagnostic.code, crate::model::DiagnosticCode::DexChecksumMismatch
+            | crate::model::DiagnosticCode::DexSignatureMismatch)
+    }) { view.bytes().len() } else { 0 }
+}
+
 /// Scratch for a 041 view; `None` for standard versions (backends take the
 /// original bytes, and no normalization is allowed to hide problems).
 pub(crate) fn backend_scratch(
     view: &ValidatedDexView<'_>,
     integrity: &[crate::model::Diagnostic],
 ) -> Option<BackendScratch> {
+    if backend_scratch_bytes(view, integrity) == 0 {
+        return None;
+    }
     if view.version() == DexVersion::V041 {
         return Some(BackendScratch {
             bytes: normalize_041(view.bytes(), view.header_offset()),
@@ -596,16 +610,6 @@ pub(crate) fn backend_scratch(
     // so the checked path hands it a private copy with the fields
     // recomputed. The original bytes are untouched and the copy is
     // operation-local (G03 / IN-04).
-    let flagged = integrity.iter().any(|diagnostic| {
-        matches!(
-            diagnostic.code,
-            crate::model::DiagnosticCode::DexChecksumMismatch
-                | crate::model::DiagnosticCode::DexSignatureMismatch
-        )
-    });
-    if !flagged {
-        return None;
-    }
     let mut copy = view.bytes().to_vec();
     if copy.len() >= 32 {
         // The signature rewrite must land BEFORE the checksum is computed:

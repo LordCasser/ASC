@@ -2107,6 +2107,69 @@ pub struct Source {
 }
 
 impl Source {
+    /// Owned payload capacity charged when source crosses the engine boundary.
+    /// Allocator headers are excluded; Arc text is charged once by its owner.
+    pub(crate) fn owned_bytes(&self) -> usize {
+        fn add(values: impl IntoIterator<Item = usize>) -> usize {
+            values.into_iter().fold(0, usize::saturating_add)
+        }
+        fn slots<T>(values: &Vec<T>) -> usize {
+            values.capacity().saturating_mul(std::mem::size_of::<T>())
+        }
+        fn text(value: &DexText) -> usize { value.units.capacity().saturating_mul(2) }
+        fn optional(value: &Option<DexText>) -> usize { value.as_ref().map(text).unwrap_or(0) }
+        fn texts(values: &Vec<DexText>) -> usize { slots(values).saturating_add(add(values.iter().map(text))) }
+        fn proto(value: &Prototype) -> usize { texts(&value.parameters).saturating_add(text(&value.return_type)) }
+        fn annotation(value: &AnnotationRecord) -> usize {
+            add([text(&value.type_descriptor), value.rendered.capacity(), slots(&value.items),
+                add(value.items.iter().map(|(name, item)| text(name).saturating_add(encoded(item))))])
+        }
+        fn annotations(values: &Vec<AnnotationEntry>) -> usize {
+            slots(values).saturating_add(add(values.iter().map(|v| annotation(&v.annotation))))
+        }
+        fn encoded(value: &EncodedValue) -> usize {
+            match value {
+                EncodedValue::String(v) | EncodedValue::Type(v) => text(v),
+                EncodedValue::Field { owner, name, field_type } => add([text(owner), text(name), text(field_type)]),
+                EncodedValue::Method { owner, name, prototype } => add([text(owner), text(name), proto(prototype)]),
+                EncodedValue::Enum { owner, name } => add([text(owner), text(name)]),
+                EncodedValue::Array(values) => slots(values).saturating_add(add(values.iter().map(encoded))),
+                EncodedValue::Annotation(value) => std::mem::size_of::<AnnotationRecord>().saturating_add(annotation(value)),
+                _ => 0,
+            }
+        }
+        let metadata = &self.metadata;
+        let class = &metadata.class;
+        add([
+            std::mem::size_of::<Self>(), self.text.len(),
+            self.class.descriptor().as_str().len(), self.class.dex().raw_entry_name().len(),
+            text(&self.class.java_name), text(&self.class.package), text(&self.class.simple_name),
+            text(&self.class.dex.display_name), text(&self.class.dex.logical_name),
+            optional(&class.super_class), texts(&class.interfaces), optional(&class.source_file),
+            optional(&class.generic_signature),
+            class.enclosing.as_ref().map(|value| {
+                optional(&value.outer_class).saturating_add(value.enclosing_method.as_ref()
+                    .map(|(owner, name, prototype)| add([text(owner), text(name), proto(prototype)]))
+                    .unwrap_or(0))
+            }).unwrap_or(0),
+            slots(&class.inner_classes), add(class.inner_classes.iter().map(|v|
+                add([text(&v.inner_class), optional(&v.outer_class), optional(&v.inner_name)]))),
+            annotations(&metadata.annotations), slots(&metadata.fields),
+            add(metadata.fields.iter().map(|v| add([text(&v.name), text(&v.field_type),
+                optional(&v.generic_signature), v.initial_value.as_ref().map(encoded).unwrap_or(0)]))),
+            slots(&metadata.methods), add(metadata.methods.iter().map(|v| add([
+                text(&v.name), proto(&v.prototype), optional(&v.generic_signature), texts(&v.throws),
+                annotations(&v.annotations), slots(&v.parameter_signatures),
+                add(v.parameter_signatures.iter().map(optional)),
+                v.debug.as_ref().map(|debug| add([
+                    slots(&debug.parameter_names), add(debug.parameter_names.iter().map(optional)),
+                    slots(&debug.locals), add(debug.locals.iter().map(|local| text(&local.name))),
+                    slots(&debug.lines),
+                ])).unwrap_or(0),
+            ]))),
+        ])
+    }
+
     pub(crate) fn new(class: Class, text: Arc<str>, metadata: SourceMetadata) -> Self {
         Self {
             class,

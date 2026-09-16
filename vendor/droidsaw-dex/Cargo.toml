@@ -66,6 +66,10 @@ harness = false
 name = "asc_semantics"
 path = "tests/asc_semantics.rs"
 
+[[test]]
+name = "memory_admission"
+path = "tests/memory_admission.rs"
+
 [[example]]
 name = "emit_audit"
 path = "examples/emit_audit.rs"
