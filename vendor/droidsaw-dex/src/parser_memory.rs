@@ -155,6 +155,8 @@ impl Census<'_> {
         self.slots::<FieldAnnotation>(fields)?;
         self.slots::<MethodAnnotation>(methods)?;
         self.slots::<ParameterAnnotation>(parameters)?;
+        // Direct directory references queued alongside parameter ref lists.
+        self.slots::<u32>(1 + fields + methods)?;
         let result = self.annotation_set(class, false);
         self.tolerant(result)?;
         for index in 0..fields + methods + parameters {
@@ -313,12 +315,14 @@ impl Census<'_> {
             0x0100 => {
                 let n = self.u16(base + 2)? as u64;
                 self.slots::<u32>(n)?;
+                self.slots::<CodeItemInvariantViolation>(n)?;
                 8 + n * 4
             }
             0x0200 => {
                 let n = self.u16(base + 2)? as u64;
                 self.slots::<u32>(n)?;
                 self.slots::<i32>(n)?;
+                self.slots::<CodeItemInvariantViolation>(n)?;
                 4 + n * 8
             }
             0x0300 => {
@@ -346,6 +350,8 @@ impl Census<'_> {
             return Err(WalkError::Malformed);
         }
         self.add(1, size_of::<(u32, CodeItem)>())?;
+        // Post-parse debug extraction queues (offset, registers_size).
+        self.slots::<(u32, u16)>(1)?;
         let mut p = start;
         while p < end {
             let word = self.u16(p)?;
@@ -438,6 +444,8 @@ impl Census<'_> {
         self.slots::<String>(self.header.type_ids_size as u64)?;
         self.slots::<StringIdx>(self.header.type_ids_size as u64)?;
         self.slots::<Option<usize>>(self.header.type_ids_size as u64)?;
+        self.slots::<Option<u32>>(self.header.type_ids_size as u64)?;
+        self.slots::<u32>(self.header.class_defs_size as u64)?;
         self.slots::<ProtoIdItem>(self.header.proto_ids_size as u64)?;
         self.slots::<FieldIdItem>(self.header.field_ids_size as u64)?;
         self.slots::<MethodIdItem>(self.header.method_ids_size as u64)?;
@@ -540,7 +548,14 @@ pub(crate) fn parser_bound(data: &[u8]) -> Result<u64, BackendError> {
         bytes: 0,
     };
     match census.run() {
-        Ok(()) | Err(WalkError::Malformed) => Ok(census.bytes),
+        Ok(()) => Ok(census.bytes),
+        // Local tolerant sections are handled by `tolerant`. An error that
+        // escapes the outer walk leaves later sections uncounted: never admit
+        // a partial census and then let the parser continue past that point.
+        Err(WalkError::Malformed) => Err(BackendError::MemoryBudget {
+            bytes: u64::MAX,
+            label: "parser census cannot bound malformed structure",
+        }),
         Err(WalkError::Budget(error)) => Err(error),
     }
 }
@@ -612,6 +627,21 @@ mod tests {
         assert!(matches!(
             census.add(1, 1),
             Err(WalkError::Budget(BackendError::MemoryBoundOverflow { .. }))
+        ));
+    }
+
+    #[test]
+    fn incomplete_outer_census_is_not_admitted_as_a_partial_bound() {
+        let mut bytes = DEX.to_vec();
+        let header = DexHeader::parse(DEX).unwrap();
+        bytes[header.map_off as usize..header.map_off as usize + 4]
+            .copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            parser_bound(&bytes),
+            Err(BackendError::MemoryBudget {
+                label: "parser census cannot bound malformed structure",
+                ..
+            })
         ));
     }
 }

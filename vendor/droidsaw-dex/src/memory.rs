@@ -91,11 +91,13 @@ pub(crate) fn parser_bound(data: &[u8]) -> Result<u64, BackendError> {
 /// entry + per-instruction fall-through/branch targets + switch cases +
 /// handler entries; normal edges are `2B + S`; exception edges are bounded by
 /// `B * C`, where `C` is the sum of handler clauses across try regions. SSA
-/// phi operands are `R * E`, and unresolved predecessor walks are bounded by
-/// `uses * B`. Every byte term names the represented container element.
+/// phi operands are `R * E`. A read walk's chain and visited set hold at most
+/// `B` elements each; reads run sequentially, so their live memory does not
+/// multiply by the number of uses. R includes observed registers even in
+/// tolerant malformed input. Every byte term names its container element.
 pub(crate) fn method_pipeline_bound(code: &CodeItem) -> Result<u64, BackendError> {
     let i = usize_u64(code.instructions.len(), "cfg_ssa.instructions")?;
-    let r = u64::from(code.registers_size);
+    let mut r = u64::from(code.registers_size.max(code.ins_size));
     let t = usize_u64(code.tries.len(), "cfg_ssa.tries")?;
     let mut branch_targets = 0u64;
     let mut handler_entries = 0u64;
@@ -106,22 +108,32 @@ pub(crate) fn method_pipeline_bound(code: &CodeItem) -> Result<u64, BackendError
                 .checked_add(1)
                 .ok_or_else(|| overflow("cfg_ssa.branch_targets"))?;
         }
-        // DEX RegList is format-capped at five registers. This is the
-        // classifier's maximum read vector, not a guessed multiplier.
-        let reads = if matches!(
-            crate::decode::insn_format(insn.op),
-            crate::decode::InsnFormat::F3rc | crate::decode::InsnFormat::F4rcc
-        ) {
-            u64::try_from(insn.literal).unwrap_or(u64::MAX)
-        } else {
-            5
-        };
+        // SSA classifies the decoded RegList (at most five); the full range
+        // count is retained separately by the decoder and core instruction
+        // facts. Do not multiply SSA storage by unused range slots.
+        let reads = 5;
+        for register in insn.src.as_slice() {
+            r = r.max(u64::from(*register) + 1);
+        }
+        if let Some(register) = insn.dst {
+            // Wide writes can introduce the next register too.
+            r = r.max(u64::from(register) + 2);
+        }
         uses = uses
             .checked_add(reads)
             .ok_or_else(|| overflow("cfg_ssa.reads"))?;
     }
     let mut switch_cases = 0u64;
-    for payload in code.payloads.values() {
+    for insn in &code.instructions {
+        if !matches!(
+            insn.op,
+            crate::opcodes::Opcode::PackedSwitch | crate::opcodes::Opcode::SparseSwitch
+        ) {
+            continue;
+        }
+        let Some(payload) = insn.target.and_then(|target| code.payloads.get(&target)) else {
+            continue;
+        };
         match payload {
             PayloadData::PackedSwitch { targets, .. } => {
                 switch_cases = switch_cases
@@ -178,9 +190,14 @@ pub(crate) fn method_pipeline_bound(code: &CodeItem) -> Result<u64, BackendError
         .checked_mul(b)
         .ok_or_else(|| overflow("cfg_ssa.read_walks"))?;
 
+    use crate::cfg::{BlockIdx, EdgeKind};
+    type CommonPhi = droidsaw_common::ssa::Phi<BlockIdx, u16>;
+    type CommonVar = droidsaw_common::ssa::Var<u16>;
+    type FillEntry = (BlockIdx, usize, u16, Vec<BlockIdx>);
     let mut total = 0u64;
     for (count, element, label) in [
         (b, size_of::<crate::cfg::BasicBlock>(), "cfg.blocks"),
+        (b, size_of::<u32>() * 2, "cfg.leader_set_and_vector"),
         (
             i,
             size_of::<crate::decode::Instruction>(),
@@ -192,6 +209,11 @@ pub(crate) fn method_pipeline_bound(code: &CodeItem) -> Result<u64, BackendError
             t,
             size_of::<crate::cfg::ExceptionRegion>(),
             "cfg.exception_regions",
+        ),
+        (
+            clauses,
+            size_of::<(EdgeKind, BlockIdx)>(),
+            "cfg.exception_handlers",
         ),
         (
             b,
@@ -209,10 +231,37 @@ pub(crate) fn method_pipeline_bound(code: &CodeItem) -> Result<u64, BackendError
             size_of::<(crate::cfg::BlockIdx, crate::cfg::BlockIdx)>(),
             "cfg.predecessor_worklist",
         ),
-        (b, size_of::<crate::ssa::SsaBlock>(), "ssa.blocks"),
+        (
+            b,
+            size_of::<(BlockIdx, crate::ssa::SsaBlock)>(),
+            "ssa.blocks",
+        ),
         (i, size_of::<crate::ssa::SsaInsn>(), "ssa.instructions"),
         (uses, size_of::<crate::ssa::VarId>(), "ssa.uses"),
         (phi_count, size_of::<crate::ssa::PhiNode>(), "ssa.phis"),
+        (
+            b,
+            size_of::<(BlockIdx, Vec<CommonPhi>)>(),
+            "ssa.common_phi_map",
+        ),
+        (phi_count, size_of::<CommonPhi>(), "ssa.common_phis"),
+        (
+            phi_operands,
+            size_of::<(BlockIdx, CommonVar)>(),
+            "ssa.common_phi_operands",
+        ),
+        (
+            phi_count,
+            size_of::<FillEntry>() * 2,
+            "ssa.seal_inner_and_outer_worklists",
+        ),
+        (
+            phi_operands,
+            size_of::<BlockIdx>(),
+            "ssa.seal_predecessor_copies",
+        ),
+        (edges, size_of::<BlockIdx>() * 2, "ssa.current_predecessors"),
+        (uses, size_of::<u16>(), "ssa.classified_reads"),
         (
             phi_count,
             size_of::<((crate::cfg::BlockIdx, u16), crate::ssa::VarId)>(),
@@ -229,6 +278,13 @@ pub(crate) fn method_pipeline_bound(code: &CodeItem) -> Result<u64, BackendError
             size_of::<(crate::ssa::VarId, crate::ssa::VarId)>(),
             "ssa.replacements",
         ),
+        // The replacement keys coexist with one visited chain. Each key's
+        // visited set is dropped before the next key; no quadratic live set.
+        (
+            phi_count,
+            size_of::<crate::ssa::VarId>() * 2,
+            "ssa.replacement_keys_and_walk",
+        ),
         (
             read_walks,
             size_of::<crate::cfg::BlockIdx>(),
@@ -237,7 +293,39 @@ pub(crate) fn method_pipeline_bound(code: &CodeItem) -> Result<u64, BackendError
     ] {
         add(
             &mut total,
-            mul(count, usize_u64(element, label)?, label)?,
+            // Geometric Vec capacity; doubling maps is conservative payload
+            // allowance, not a claim about BTree allocator/node overhead.
+            mul(mul(count, 2, label)?, usize_u64(element, label)?, label)?,
+            label,
+        )?;
+    }
+    // Small Vecs start at four slots. Account the per-block/per-instruction
+    // floors separately, including builder phi and seal predecessor vectors.
+    for (count, width, label) in [
+        (
+            b,
+            size_of::<crate::decode::Instruction>()
+                + size_of::<crate::cfg::Edge>() * 2
+                + size_of::<crate::ssa::SsaInsn>()
+                + size_of::<crate::ssa::PhiNode>()
+                + size_of::<CommonPhi>(),
+            "cfg_ssa.block_vec_floors",
+        ),
+        (i, size_of::<crate::ssa::VarId>(), "ssa.use_vec_floors"),
+        (
+            phi_count,
+            size_of::<(BlockIdx, CommonVar)>() + size_of::<BlockIdx>(),
+            "ssa.phi_vec_floors",
+        ),
+        (
+            t,
+            size_of::<(EdgeKind, BlockIdx)>(),
+            "cfg.handler_vec_floors",
+        ),
+    ] {
+        add(
+            &mut total,
+            mul(mul(count, 4, label)?, usize_u64(width, label)?, label)?,
             label,
         )?;
     }
@@ -327,4 +415,71 @@ pub(crate) fn reserve_class_pipeline(
         )?;
     }
     reserve(ledger, maximum, "vendor CFG/SSA")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decode::{Instruction, RegList};
+    use crate::opcodes::Opcode;
+
+    fn code() -> CodeItem {
+        CodeItem {
+            registers_size: 1,
+            ins_size: 0,
+            outs_size: 0,
+            debug_info_off: 0,
+            instructions: vec![Instruction {
+                addr: 0,
+                op: Opcode::Move,
+                size: 1,
+                dst: Some(0),
+                src: RegList::one(0),
+                literal: 0,
+                target: None,
+                pool_idx: None,
+            }],
+            tries: Vec::new(),
+            catch_handlers: Vec::new(),
+            payloads: Default::default(),
+            invariant_violations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn understated_register_header_cannot_reduce_observed_ssa_admission() {
+        let mut code = code();
+        code.instructions[0].src = RegList::one(60000);
+        let malformed = method_pipeline_bound(&code).unwrap();
+        code.registers_size = 60001;
+        assert_eq!(method_pipeline_bound(&code).unwrap(), malformed);
+    }
+
+    #[test]
+    fn shared_switch_payload_is_charged_for_each_use() {
+        let mut code = code();
+        code.instructions[0].op = Opcode::PackedSwitch;
+        code.instructions[0].target = Some(10);
+        let mut second = code.instructions[0].clone();
+        second.addr = 3;
+        second.target = Some(20);
+        code.instructions.push(second);
+        code.payloads.insert(
+            10,
+            PayloadData::PackedSwitch {
+                first_key: 0,
+                targets: (0..256).collect(),
+            },
+        );
+        code.payloads.insert(
+            20,
+            PayloadData::PackedSwitch {
+                first_key: 0,
+                targets: Vec::new(),
+            },
+        );
+        let one_use = method_pipeline_bound(&code).unwrap();
+        code.instructions[1].target = Some(10);
+        assert!(method_pipeline_bound(&code).unwrap() > one_use);
+    }
 }

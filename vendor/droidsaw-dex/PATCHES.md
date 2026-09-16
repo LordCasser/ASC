@@ -311,3 +311,5 @@ switch/fill payload 32 位偏移的第二个占位字、若干 clippy 项。
 - Tests: `parser_memory` unit cases (overflow, excessive depth, small fixture,
   unrelated long string), `tests/memory_admission.rs` (rejection, ownership,
   cancellation/reuse and report lifetime), plus existing ASC contracts.
+
+DX-P08 review follow-up: an incomplete outer census fails closed; parser class indexes, pending debug/annotation references and switch-case violations are counted. CFG/SSA additionally covers observed register domains, shared switch uses, leader/handler containers, common phi/seal state, replacement traversal and Vec capacity. Each sequential traversal contributes its live peak, not cumulative allocations across calls.

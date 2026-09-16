@@ -67,3 +67,11 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_B
 ```
 
 两条命令分别通过 209 个 asc-core 测试和 8 个 vendor contract tests。它们证明当前公开 API 与 fixture 合同，不证明完整平台矩阵、RSS 硬限制或真实 IDA 运行。
+
+## 2026-09-16 补充开发与本地验证
+
+`419e58c` 补齐 E17/E18 的本地代码：selected-method batch 按 DEX 复用 parse；方法 annotations/debug 投影；inventory 跨 DEX permit、normalization copy、Source/partial error 所有权，以及 vendor parser/CFG/SSA 结构准入。随后的 review 修复了未完成 census 的错误放行和 SSA 临时结构漏计。以上更新取代前文关于这些项目“未实现”的时点记录；allocator、optimizer/structurer/emitter 临时对象仍不属于精确结构计量合同。
+
+四 feature 与仓外 path consumer 全通过；all-features 224 项，含 method golden 5、selected batch 6、threads=1/2 各 4 调用线程 × 20 轮取消恢复。vendor lib 943 passed / 1 ignored，memory_admission 5、asc_semantics 14 / 1 ignored、asc_contracts 8 通过。上游部分测试在缺少外部 fixture 时会提前返回，不能把测试框架计数当成外部 corpus 全量执行证据。
+
+可复现入口：`scripts/check-core-features.sh`，以及 `cargo test -p asc-droidsaw-dex --lib --test asc_contracts --test asc_semantics --test memory_admission --locked`。真实 APK 性能和分页由消费者记录，IDA/native 与目标平台仍需对应环境。

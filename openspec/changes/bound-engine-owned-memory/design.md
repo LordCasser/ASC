@@ -15,7 +15,7 @@
 计量不能递归引入不可控大额元数据；避免每个对象一个 Arc/permit，按实际共享allocation聚合。测试以确定性计数器证明边界，不以一次RSS采样证明无泄漏。
 
 ## Migration Plan
-bounded allocation table、契约决策和实现已由独立 ASC commits 完成；保留 review 所需的 source/docs commits，消费者更新 gitlink。后续 vendor/RSS/压力扩展沿下列扩展任务独立推进，不回填为本次基本验收证据。
+bounded allocation table、契约决策和实现已由独立 ASC commits 完成；保留 review 所需的 source/docs commits，消费者更新 gitlink。parser/CFG/SSA 的补充准入与本地压力测试已完成；目标部署 RSS 与 IDA 组合验收仍独立保留。
 
 ## Open Questions
 vendor 内部分配能精确覆盖到何层仍需单独测量；在有证据前，API 名称只承诺表中 engine ledger 的实测或保守估算范围，不承诺完整进程内存或 RSS。
@@ -35,15 +35,17 @@ vendor 内部分配能精确覆盖到何层仍需单独测量；在有证据前�
 | typed facts and scoped rows | `fold_scope` 返回 rows，至最终 report reservation | **估算**：按 fact/reference/string/class 结构计算结果大小，scan permit 同时保留 | scoped visitor/string/instruction tests；vendor 内部对象不在该表的精确覆盖内 |
 | backend scratch | normalization copy 与其私有 permit 同时存活 | **精确长度**：复制前预留 validated view 的完整字节长度 | 一字节不足即在复制前拒绝；原 Artifact 不变 |
 | vendor parser | `ParsedDex` 的 lease，解析前 census 至 ParsedDex drop | **逻辑结构上界**：actual referenced pools/class_data/code/debug/annotations 与容器容量；共享磁盘 offset 允许保守重复计数 | parser_memory 与 memory_admission 回归；nesting >128 显式 ResourceLimit；无全局 allocator hook |
-| vendor CFG/SSA | checked report 持有最大方法工作集与 census lease | **逻辑结构上界**：blocks/edges/registers、range uses、phi/current-def/读路径、DEX census | pipeline 超限在渲染前失败，report/parse 独立释放；类方法按顺序执行 |
+| vendor CFG/SSA | checked report 持有最大方法工作集与 census lease | **逻辑结构上界**：blocks/edges/registers、decoded register uses、phi/current-def/读路径、DEX census | pipeline 超限在渲染前失败，report/parse 独立释放；类方法按顺序执行 |
 | Source/partial source | `Report` 或共享 Error source/permit | **容量计量**：源码、class、annotations、fields/methods/debug metadata | clone 共用真实 source；metadata 不能只按 text.len 计量；转换临时对象仍依赖阶段 allowance |
 | vendor optimizer/structurer/emitter、allocator bookkeeping | 内部临时对象或 OS allocator | **边界外**：没有逐容器 allocator hook；表达式扩展、BTree padding 与 allocator headers 不在精确计量承诺内 | worker 的 OS 内存上限属于部署策略，不能以 ledger/RSS 一次成功代替 |
 | consumer serialization/output copies | core 返回后由 reverse-engine/host 生成的 JSON/source/file buffers | **未覆盖（边界外）**：属于消费者 own allocation | `Report::value()` 明确借用；core 不提供脱离 permit 的 owned extraction |
 
-本轮基本验收覆盖表中 input、decoded、scan scratch、report 的可验证边界和失败回收；未覆盖行仍保留为独立扩展任务，不阻塞已交付公开 API。
+本轮代码与本地验证覆盖表中 input、decoded、scan scratch、inventory、parser、CFG/SSA 和 report 的声明边界与失败回收。边界外分配不属于该结构准入合同。
 
 ## E18.1 补充决策
 
-parser census 按实际引用的结构遍历，避免用整个 DEX 长度乘最长字符串误拒绝普通 APK。损坏子节沿 vendor tolerant 路径计入已发生的容量申请；整数溢出和过深 annotation 返回 typed resource error。CFG/SSA 使用图、寄存器和实际指令维度，invoke/range 使用其完整参数数，不能固定为五个寄存器。扫描额度与 vendor 额度共用 Runtime 账户。
+parser census 按实际引用的结构遍历，避免用整个 DEX 长度乘最长字符串误拒绝普通 APK。损坏子节沿 vendor tolerant 路径计入已发生的容量申请；若 census 顶层未完成，则明确拒绝，不能以部分数字放行后续解析；整数溢出和过深 annotation 返回 typed resource error。CFG/SSA 使用图、寄存器和实际指令维度，SSA 当前消费 decoder 的至多五项 RegList，按实际消费结构计量；完整 invoke/range 参数事实由独立指令事实接口保留。寄存器域同时检查实际 dst/src 与宽写后继，不能信任畸形 header。扫描额度与 vendor 额度共用 Runtime 账户。
 
 这些结构准入不是完整 allocator 证明。未覆盖的 optimizer/structurer/emitter 临时容器仍明确保留在边界表；本 change 不引入进程全局分配器，也不把进程 RSS 冒充精确计量。
+
+审查补充：CFG leaders、exception handler vectors、common SSA phi/seal 工作列表和 predecessor 副本均单独计量。read-variable 与替换链逐个处理，计量的是同时存活的 chain/visited，不把累计调用次数乘成活跃内存。Vec 几何容量和小 vector 初始槽位另有 allowance，shared switch payload 按每次引用产生的边计数。
