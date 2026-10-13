@@ -4,6 +4,29 @@
 
 固定证据：Python 原基线 `ccc6bae7704f5c5ef1a7271e27314837079621fb`，2026-09-15 拉取的上游 `c4e268cb78e4a2169455e8d96aa7a2db75c81f36`，Rust 实验基线 `6141965dfeac4256bd96240799d7bf308fa21e27`。审计期间本地另有提交推进到 `60c8ec2`；新增 typed instruction provider 没有改变本次比较的 `scan_code`、目标过滤器和 opcode 表。范围只有 CLI/core。
 
+## 2026-09-17 增量核对
+
+上游从 `c4e268cb78e4a2169455e8d96aa7a2db75c81f36` 更新到 `3279d9dd6ffb9c844f8599bd2bf69a13bb602480`。结论仍然是不需要同步 Rust。这里真正新增的 CLI 能力只有 `listclass`，而当前 Rust 已经有 `classes` 和 `Engine::classes`；另外一项 core 修改是 Python 3.10 的正则语法兼容。没有新的 xrefs、反编译、Deflate 或 benchmark 优化。
+
+| 提交 | 上游变化 | Rust 判断 |
+|---|---|---|
+| [484d853](https://github.com/MG1937/ASC/commit/484d853660ee1520de2b8796b89ff7676ffdd9ec) | `InsnLocator._build_insn_verify` 在 Python 3.10 不支持 atomic group 时，从 `(?>(?:...)*)` 回退到普通 `(?:...)*`；新增测试证明两种形式验证结果一致 | Python 解释器兼容修复。Rust 按 opcode 宽度表逐指令校验，不使用这段正则，没有对应修复 |
+| [752477e](https://github.com/MG1937/ASC/commit/752477e8a374860853c9fcfd6e6604c0db9dcfa7) | 新增 `listclass`，遍历 APK 的 root DEX 与 DEX 041 logical members，保留定义顺序和重复 descriptor，支持 Stored/Deflate、`--prefix`、`-o` 与多 DEX 并行 | Rust 已覆盖同类能力，并额外保留 `ClassId`、`DexId`、entry 名、Java/package/simple name 和重复定义诊断；不需要新增命令别名或第二套扫描路径 |
+| [382c4c5](https://github.com/MG1937/ASC/commit/382c4c5a1dcebaef714306718b4487721ac3e988) | Python 包版本改为 `0.1.1.post1` | 分发元数据，无 Rust 行为影响 |
+
+`listclass` 与 Rust `classes` 的界面不完全相同：Python 输出一行一个 Dalvik descriptor，`--prefix` 做大小写敏感的 descriptor 前缀过滤；Rust 输出带来源身份的结构化行，`--filter` 对 Java 名做大小写不敏感子串过滤。底层能力没有缺口，Rust 的结果还能区分不同 DEX 中的同名定义。当前项目不要求 Python CLI 的参数级兼容，所以不为这两个表面差异增加 alias 或专用 prefix API。
+
+本次对照确认 Rust 已覆盖上游新增测试关心的边界：DEX 041 logical members、稳定 entry/member/class-def 顺序、重复定义保留、Stored/Deflate 输入和错误校验。定向验证通过：
+
+```text
+cargo test -p asc-core classes_lists_all_definitions_and_flags_duplicates --locked
+cargo test -p rasc classes_text_and_json_bytes_are_frozen --locked
+cargo test -p asc-core --test contract_input in03_container_041_single_member_keeps_name_and_multi_member_shares_address_space --locked
+cargo test -p asc-core --test contract_query class_filter_is_case_insensitive_and_blank_means_no_filter --locked
+```
+
+上游 `7c31f06` 只修复 GUI subprocess module path，按本项目 CLI-only 范围忽略。其余新增 SHA 是合并提交。`code_item_scan.py`、`bytes.translate`、单类 Deflate probe、依赖列表和 benchmark 文件均未变化。因此本次只更新审计基线，不创建 OpenSpec change，也不修改 Rust 产品代码。
+
 ## 上游实际更新
 
 | 提交 | 变化 | Rust 是否需要吸收 |
