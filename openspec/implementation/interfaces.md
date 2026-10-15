@@ -188,3 +188,39 @@ as text; incomplete-source errors share their source and lease across clones.
 The allocation table in `changes/bound-engine-owned-memory/design.md` defines
 what is counted. Neither this ledger nor a successful RSS sample is a process
 memory hard limit.
+
+## 2026-10-15 direct class relationships（A20）
+
+`ClassRelationKind::{Extends, Implements}` 与 `ClassRelationQuery::new(kind, ClassDescriptor)`
+表示精确的直接声明关系查询。`query::class_relation_query(kind, input, PatternLimits)`
+可规范化 Java 点名/斜杠名/完整 descriptor，并在打开输入前拒绝空白、非法和过长输入；
+不支持关系子串或 regex，不改变四种 ReferenceQuery。
+
+`Engine::class_relations(artifact, query, control)` 使用根默认范围；
+`Engine::class_relations_in_scope(artifact, MethodScope, query, control)` 使用显式范围。
+两者返回 `Report<Vec<ClassRelation>>`，默认 feature 即可用。
+`ClassRelation` 具有 `class()`、`kind()`、`target_id()`、`target()`；目标身份为同 DEX 的
+Type TargetId，而非推测的 ClassId。目标可无本地 class_def。读取 superclass_idx 和
+interfaces type_list，不读取 code_item，不推断传递继承或继承接口。
+
+逐边结果按源 ClassId、目标 type_id 升序排序。相同源与相同目标 type_id 只返回一次；
+不同 class_def 或不同 type_id 即使 descriptor 相同也不合并。NO_INDEX superclass 和
+零 interfaces_off 没有关系。无命中仍校验选定声明的全部 super/interfaces 索引与实际
+读取列表；035–040 要求列表在 data 范围，041 允许跨 member 共享 data，但不得覆盖任一
+member 的 header、ID tables 或 map_list。错误没有部分成功报告。
+
+每条边在复制 Class/DexEntry/target 前检查共享操作预算并申请内存。计量包括四份结构槽
+（fold 的源/目标 Vec 同时可能各有近两倍容量）、保守深拷贝字节和去重树节点。
+源/目标解码 scratch 取输入长度与 max_string_units 的较小值作有限上界，metadata
+排除区间按实际 logical member 数量计量。行 permits 持有到最终 Report permit 接管，
+Report clone 共享计量；这不是进程 RSS 硬限制。
+
+raw 041 的 MethodScope::Dexes 现在保留具体 logical ordinal，与 APK 041 一致。
+多个 raw logical selectors 共享一个物理 decoded-byte 预算；class、reference、instruction、
+method inventory/visitor 与 scoped decompile 都沿用这一范围选择，不将逻辑 0 扩张为整个容器。
+
+CLI `findrefs APK extends CLASS` 与 `findrefs APK impl INTERFACE`（`implements` 别名）
+仅精确查询。JSON `operation="class_relations"`，data 为
+`[{class,kind,target_id,target}]`；kind 为 extends/implements，target 为 DexText。
+text 七列为 `dex-key | dex-name | class_def_idx | descriptor | kind | type_idx | target`，
+使用既有普通列转义；空结果、输出预算与原子文件提交合同不变。

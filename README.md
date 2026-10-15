@@ -122,10 +122,22 @@ rasc findrefs app.apk string Authorization             # references across every
 rasc findrefs app.apk string 'tok.n' --regex           # value as a regular expression
 rasc findrefs app.apk method onCreate --class com.example.Main
 rasc findrefs app.apk field INSTANCE --class example --fuzzy-class
+rasc findrefs app.apk extends java.lang.Object        # exact direct superclass
+rasc findrefs app.apk impl java.lang.Runnable         # exact directly declared interface
 rasc classes app.apk                                   # class index
 rasc manifest app.apk                                  # binary AndroidManifest.xml -> XML
 rasc getclass app.apk example.Test --dex 0:1           # pin one logical DEX
 ```
+
+`findrefs extends` and `findrefs impl` (`implements` is an alias) accept an
+exact Java dotted name or a quoted `Lpkg/Name;` descriptor. They read direct
+class declarations only, including targets without a local class definition;
+they do not infer transitive inheritance or inherited interfaces. Substring
+and regex matching are not supported for these two queries. Text columns are
+`dex-key | dex-name | class_def_idx | descriptor | kind | type_idx | target`.
+JSON uses operation `class_relations` with rows `{class, kind, target_id, target}`:
+the source keeps its full class identity and the target index is a type ID in
+the same DEX. An empty result is empty text or JSON `data: []`, with exit 0.
 
 Every command accepts `--threads/--thread N` (worker threads for the parallel
 entry fold; default: all available cores, must be positive), `--debug`

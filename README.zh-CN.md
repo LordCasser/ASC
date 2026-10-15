@@ -45,10 +45,20 @@ rasc findrefs app.apk string Authorization             # 在所有根 DEX 中查
 rasc findrefs app.apk string 'tok.n' --regex           # 值按正则表达式匹配
 rasc findrefs app.apk method onCreate --class com.example.Main
 rasc findrefs app.apk field INSTANCE --class example --fuzzy-class
+rasc findrefs app.apk extends java.lang.Object        # 精确查询直接父类
+rasc findrefs app.apk impl java.lang.Runnable         # 精确查询直接声明的接口
 rasc classes app.apk                                   # 类索引
 rasc manifest app.apk                                  # 二进制 AndroidManifest.xml → XML
 rasc getclass app.apk example.Test --dex 0:1           # 钉选某个逻辑 DEX
 ```
+
+`findrefs extends` 和 `findrefs impl`（别名 `implements`）接受完整 Java 点名，
+或加引号的 `Lpkg/Name;` 描述符，仅精确匹配 class_def 直接声明的关系；目标可以
+没有本地类定义。不会推断传递继承或继承得到的接口，也不支持子串或正则匹配。
+text 列为 `dex-key | dex-name | class_def_idx | descriptor | kind | type_idx | target`。
+JSON 的 operation 为 `class_relations`，每行为 `{class, kind, target_id, target}`，
+保留来源类的完整身份；目标索引是同一 DEX 的 type ID。空结果输出空 text 或
+JSON `data: []`，退出码为 0。
 
 所有命令共用：`--threads/--thread N`（并行 entry fold 的线程数；默认使用
 全部可用核心，必须为正）、`--debug`（stderr

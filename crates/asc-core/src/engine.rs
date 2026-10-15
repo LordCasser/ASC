@@ -35,6 +35,7 @@ use crate::model::{
 use crate::model::{
     ArchiveEntry as ArchiveEntryFact, ArchiveEntryId, ArchiveEntryQuery, MethodScope,
     DexEntry, InstructionFact, MemoryPermit, MethodId, StringDeclaration,
+    ClassRelation, ClassRelationQuery, TargetId, TargetKind,
 };
 use crate::memory::MemoryAccount;
 #[cfg(not(feature = "decompile"))]
@@ -835,6 +836,125 @@ fn classes_in_scope(
     .with_memory(memory))
 }
 
+/// Conservative owned-result bound including deep Class/DexEntry copies,
+/// vector growth and per-source de-duplication tree nodes. Temporary decoded
+/// strings are covered separately, before the scanner is entered.
+fn class_relation_bytes(
+    descriptor: &crate::model::ClassDescriptor,
+    entry: &DexEntry,
+    target: &DexText,
+) -> usize {
+    // During fold_scope source and destination vectors coexist, each with
+    // nearly 2x len capacity. Payloads move, but four struct slots stay live.
+    let slots = std::mem::size_of::<ClassRelation>()
+        .saturating_add(std::mem::size_of::<MemoryPermit>())
+        .saturating_mul(4);
+    64usize
+        .saturating_add(descriptor.as_str().len().saturating_mul(12))
+        .saturating_add(entry.raw_entry_name().len())
+        .saturating_add(entry.display_name().unit_len().saturating_mul(2))
+        .saturating_add(entry.logical_name().unit_len().saturating_mul(2))
+        .saturating_add(target.unit_len().saturating_mul(2))
+        .saturating_mul(2)
+        .saturating_add(slots)
+}
+
+fn class_relations_in_scope(
+    artifact: &Artifact,
+    scope: &MethodScope,
+    query: &ClassRelationQuery,
+    control: &OperationControl,
+) -> Result<Report<Vec<ClassRelation>>, Error> {
+    let limits = artifact.limits.scan;
+    // A callback shares this counter across every selected logical DEX. Limits
+    // are checked before allocation rather than only after a DEX has finished.
+    let mut used = (0usize, 0usize, 0u64);
+    let (accounted, diagnostics, work_memory) = fold_scope(
+        artifact,
+        scope,
+        control,
+        |(row, _): &(ClassRelation, MemoryPermit)| {
+            (
+                1,
+                class_relation_bytes(row.class().descriptor(), row.class().dex(), row.target()),
+                0,
+            )
+        },
+        |views, logical, probe| {
+            let entry = views.dex_entry(logical);
+            let view = &views.views[logical];
+            let dex_view = dex::DexView::new(entry.clone(), view.bytes());
+            // Two decoded strings plus source projections are simultaneously
+            // live. MUTF-8 uses >=1 byte per UTF-16 unit, and decoding also
+            // honors max_string_units. 16x the smaller bound safely covers
+            // Vec growth and Unicode conversion, including
+            // aliased pool strings, without allocating a pool-sized cache.
+            let _text_memory = artifact.runtime.memory.reserve_with_limit(
+                (view.bytes().len().min(limits.max_string_units) as u64)
+                    .saturating_mul(16)
+                    // Eight metadata intervals per validated member; doubled
+                    // capacity covers growth of the exclusion vector.
+                    .saturating_add((views.views.len() as u64).saturating_mul(256)),
+                artifact.limits.max_engine_owned_bytes,
+                "class relationship decode scratch",
+            )?;
+            let mut rows = Vec::new();
+            dex::scan_class_relations(
+                &dex_view,
+                query,
+                &limits,
+                Some(probe),
+                |class_index, descriptor, target_index, target| {
+                    let bytes = class_relation_bytes(descriptor, &entry, target);
+                    charge_results(&mut used, (1, bytes, 0), &limits)?;
+                    let memory = artifact.runtime.memory.reserve_with_limit(
+                        bytes as u64,
+                        artifact.limits.max_engine_owned_bytes,
+                        "class relationship row",
+                    )?;
+                    let class = Class::new(
+                        crate::model::ClassId::new(entry.id(), class_index),
+                        entry.clone(),
+                        descriptor.clone(),
+                    );
+                    rows.push((
+                        ClassRelation::new(
+                            class,
+                            query.kind(),
+                            TargetId::new(entry.id(), TargetKind::Type, target_index),
+                            target.clone(),
+                        ),
+                        memory,
+                    ));
+                    Ok(())
+                },
+            )?;
+            Ok(rows)
+        },
+    )?;
+    let memory =
+        reserve_report_memory(artifact, used.1, &diagnostics, "class relationship report")?;
+    // All row permits remain alive while the final vector allocates. Its full
+    // charge is already reserved by the report permit above.
+    let mut rows = Vec::with_capacity(accounted.len());
+    for (row, _row_memory) in accounted {
+        rows.push(row);
+    }
+    rows.sort_by_key(|row| (row.class().id(), row.target_id().table_index()));
+    drop(work_memory);
+    let result_items = rows.len() as u64;
+    Ok(Report::new(
+        rows,
+        diagnostics,
+        OperationStats {
+            result_items,
+            matched_targets: result_items,
+            ..Default::default()
+        },
+    )
+    .with_memory(memory))
+}
+
 fn references_in_scope(
     artifact: &Artifact,
     scope: &MethodScope,
@@ -1067,7 +1187,9 @@ fn dexes_in_scope(
 
 #[derive(Clone)]
 enum MethodScopeInput {
-    Raw,
+    Raw {
+        logical: Option<u32>,
+    },
     Archive {
         entry: ZipArchiveEntry,
         logical: Option<u32>,
@@ -1087,7 +1209,7 @@ fn resolve_method_scope(
             }
             for root in &artifact.roots {
                 match &root.source {
-                    RootSource::Raw => inputs.push(MethodScopeInput::Raw),
+                    RootSource::Raw => inputs.push(MethodScopeInput::Raw { logical: None }),
                     RootSource::Archive(entry) => inputs.push(MethodScopeInput::Archive {
                         entry: entry.clone(),
                         logical: None,
@@ -1097,7 +1219,7 @@ fn resolve_method_scope(
         }
         MethodScope::AllDetected => {
             match &artifact.catalog {
-                None => inputs.push(MethodScopeInput::Raw),
+                None => inputs.push(MethodScopeInput::Raw { logical: None }),
                 Some(catalog) => {
                     // Detection is based on content, not the entry name:
                     // assets/renamed.bin is still a DEX provider. A bad
@@ -1156,10 +1278,12 @@ fn resolve_method_scope(
                     ));
                 }
                 if id.entry_ordinal() == 0 && catalog.is_none() {
-                    if id.logical_ordinal() != 0 || !seen.insert((0, 0)) {
+                    if !seen.insert((0, id.logical_ordinal())) {
                         continue;
                     }
-                    inputs.push(MethodScopeInput::Raw);
+                    inputs.push(MethodScopeInput::Raw {
+                        logical: Some(id.logical_ordinal()),
+                    });
                     continue;
                 }
                 let catalog = catalog.ok_or_else(|| {
@@ -1187,7 +1311,7 @@ fn resolve_method_scope(
         }
     }
     inputs.sort_by_key(|input| match input {
-        MethodScopeInput::Raw => (0, 0, 0),
+        MethodScopeInput::Raw { logical } => (0, 0, logical.unwrap_or(u32::MAX)),
         MethodScopeInput::Archive { entry, logical } => (
             1,
             entry.ordinal,
@@ -1202,13 +1326,13 @@ fn declared_scope_bytes(artifact: &Artifact, inputs: &[MethodScopeInput]) -> u64
     let mut seen_entries = std::collections::BTreeSet::new();
     for input in inputs {
         match input {
-            MethodScopeInput::Raw => {
+            MethodScopeInput::Raw { .. } if seen_entries.insert(0) => {
                 total = total.saturating_add(artifact.bytes.len() as u64)
             }
             MethodScopeInput::Archive { entry, .. } if seen_entries.insert(entry.ordinal) => {
                 total = total.saturating_add(entry.declared_uncompressed_bytes())
             }
-            MethodScopeInput::Archive { .. } => {}
+            MethodScopeInput::Archive { .. } | MethodScopeInput::Raw { .. } => {}
         }
     }
     total
@@ -1222,7 +1346,7 @@ fn fold_scope<T: Send>(
     scope: &MethodScope,
     control: &OperationControl,
     measure: impl Fn(&T) -> (usize, usize, u64),
-    op: impl Fn(
+    mut op: impl FnMut(
         &container::DexEntryViews<'_>,
         usize,
         &ControlProbe<'_>,
@@ -1254,10 +1378,10 @@ fn fold_scope<T: Send>(
                 artifact.limits.max_engine_owned_bytes,
                 "decoded scoped DEX entry",
             )?),
-            MethodScopeInput::Raw => None,
+            MethodScopeInput::Raw { .. } => None,
         };
         let (buffer, ordinal, raw_name, wanted_logical) = match input {
-            MethodScopeInput::Raw => (None, 0, b"<memory.dex>".to_vec(), None),
+            MethodScopeInput::Raw { logical } => (None, 0, b"<memory.dex>".to_vec(), logical),
             MethodScopeInput::Archive { entry, logical } => {
                 let ordinal = entry.ordinal;
                 let raw_name = entry.raw_name.clone();
@@ -1280,6 +1404,9 @@ fn fold_scope<T: Send>(
             &probe,
         )?;
         integrity.extend(entry_integrity);
+        if wanted_logical.is_some_and(|wanted| wanted as usize >= views.views.len()) {
+            return Err(Error::invalid_query("selected logical DEX does not exist"));
+        }
         for (logical, _view) in views.views.iter().enumerate() {
             if wanted_logical.is_some_and(|wanted| wanted != logical as u32) {
                 continue;
@@ -1733,7 +1860,8 @@ where
         for target in targets {
             let dex = target.method().dex();
             if !inputs.iter().any(|input| match input {
-                MethodScopeInput::Raw => dex.entry_ordinal() == 0,
+                MethodScopeInput::Raw { logical } => dex.entry_ordinal() == 0
+                    && logical.is_none_or(|ordinal| ordinal == dex.logical_ordinal()),
                 MethodScopeInput::Archive { entry, logical } =>
                     entry.ordinal == dex.entry_ordinal()
                     && logical.is_none_or(|ordinal| ordinal == dex.logical_ordinal()),
@@ -1761,10 +1889,10 @@ where
                 artifact.limits.max_engine_owned_bytes,
                 "decoded batch method DEX entry",
             )?),
-            MethodScopeInput::Raw => None,
+            MethodScopeInput::Raw { .. } => None,
         };
         let (buffer, ordinal, raw_name, wanted_logical) = match input {
-            MethodScopeInput::Raw => (None, 0, b"<memory.dex>".to_vec(), None),
+            MethodScopeInput::Raw { logical } => (None, 0, b"<memory.dex>".to_vec(), logical),
             MethodScopeInput::Archive { entry, logical } => {
                 let ordinal = entry.ordinal;
                 let raw_name = entry.raw_name.clone();
@@ -1786,6 +1914,9 @@ where
             data,
             &probe,
         )?;
+        if wanted_logical.is_some_and(|wanted| wanted as usize >= views.views.len()) {
+            return Err(Error::invalid_query("selected logical DEX does not exist"));
+        }
         for (logical, view) in views.views.iter().enumerate() {
             let logical_u32 = u32::try_from(logical).map_err(|_| {
                 Error::malformed_input("logical DEX ordinal exceeds the public identity range")
@@ -1921,10 +2052,10 @@ where
                 artifact.limits.max_engine_owned_bytes,
                 "decoded method declaration DEX entry",
             )?),
-            MethodScopeInput::Raw => None,
+            MethodScopeInput::Raw { .. } => None,
         };
         let (buffer, ordinal, raw_name, wanted_logical) = match input {
-            MethodScopeInput::Raw => (None, 0, b"<memory.dex>".to_vec(), None),
+            MethodScopeInput::Raw { logical } => (None, 0, b"<memory.dex>".to_vec(), logical),
             MethodScopeInput::Archive { entry, logical } => {
                 let ordinal = entry.ordinal;
                 let raw_name = entry.raw_name.clone();
@@ -1946,6 +2077,9 @@ where
             data,
             &probe,
         )?;
+        if wanted_logical.is_some_and(|wanted| wanted as usize >= views.views.len()) {
+            return Err(Error::invalid_query("selected logical DEX does not exist"));
+        }
         for (logical, view) in views.views.iter().enumerate() {
             let logical_u32 = u32::try_from(logical).map_err(|_| {
                 Error::malformed_input("logical DEX ordinal exceeds the public identity range")
@@ -2043,10 +2177,10 @@ fn method_inventory(
                 artifact.limits.max_engine_owned_bytes,
                 "decoded method-inventory DEX entry",
             )?),
-            MethodScopeInput::Raw => None,
+            MethodScopeInput::Raw { .. } => None,
         };
         let (buffer, ordinal, raw_name, wanted_logical) = match input {
-            MethodScopeInput::Raw => (None, 0, b"<memory.dex>".to_vec(), None),
+            MethodScopeInput::Raw { logical } => (None, 0, b"<memory.dex>".to_vec(), logical),
             MethodScopeInput::Archive { entry, logical } => {
                 let ordinal = entry.ordinal;
                 let raw_name = entry.raw_name.clone();
@@ -2069,6 +2203,9 @@ fn method_inventory(
             &probe,
         )?;
         diagnostics.extend(integrity.clone());
+        if wanted_logical.is_some_and(|wanted| wanted as usize >= views.views.len()) {
+            return Err(Error::invalid_query("selected logical DEX does not exist"));
+        }
         for (logical, view) in views.views.iter().enumerate() {
             let logical_u32 = u32::try_from(logical).map_err(|_| {
                 Error::malformed_input("logical DEX ordinal exceeds the public identity range")
@@ -2302,7 +2439,7 @@ fn decompile_with_scope(
                 artifact.limits.max_engine_owned_bytes,
                 "decoded class-scope DEX entry",
             )?),
-            MethodScopeInput::Raw => None,
+            MethodScopeInput::Raw { .. } => None,
         };
         let (buffer, ordinal, raw_name) = match input {
             MethodScopeInput::Archive { entry, .. } => (
@@ -2316,14 +2453,25 @@ fn decompile_with_scope(
                 entry.ordinal,
                 entry.raw_name.as_slice(),
             ),
-            MethodScopeInput::Raw => (None, 0, b"<memory.dex>".as_slice()),
+            MethodScopeInput::Raw { .. } => (None, 0, b"<memory.dex>".as_slice()),
         };
         let data = buffer.as_deref().unwrap_or(&artifact.bytes);
         let (views, integrity) =
             container::validate_dex_entry(artifact.id, ordinal, raw_name, data, &probe)?;
         diagnostics.extend(integrity);
+        let wanted_logical = match input {
+            MethodScopeInput::Raw { logical } | MethodScopeInput::Archive { logical, .. } => {
+                *logical
+            }
+        };
+        if wanted_logical.is_some_and(|wanted| wanted as usize >= views.views.len()) {
+            return Err(Error::invalid_query("selected logical DEX does not exist"));
+        }
         let mut chose_entry = false;
         for (logical, view) in views.views.iter().enumerate() {
+            if wanted_logical.is_some_and(|wanted| wanted != logical as u32) {
+                continue;
+            }
             let dex_view = dex::DexView::new(views.dex_entry(logical), view.bytes());
             let _resolution_memory = artifact.runtime.memory.reserve_with_limit(
                 dex::estimated_scan_work(&dex_view, &artifact.limits.scan)?,
@@ -2380,7 +2528,7 @@ fn decompile_with_scope(
     let input = &inputs[resolved.entry_index];
     let (ordinal, raw_name) = match input {
         MethodScopeInput::Archive { entry, .. } => (entry.ordinal, entry.raw_name.as_slice()),
-        MethodScopeInput::Raw => (0, b"<memory.dex>".as_slice()),
+        MethodScopeInput::Raw { .. } => (0, b"<memory.dex>".as_slice()),
     };
     let data = selected_bytes.as_deref().unwrap_or(&artifact.bytes);
     // Keep the selected decoded buffer's permit alive through backend parse,
@@ -3098,6 +3246,83 @@ mod tests {
 
     fn no_control() -> OperationControl {
         OperationControl::new()
+    }
+
+    #[test]
+    fn class_relationship_report_clones_hold_memory_and_failures_release_it() {
+        let mut bytes = const_string_fixture(1);
+        let defs = crate::bytes::read_u32(&bytes, 0x64).unwrap() as usize;
+        bytes[defs + 8..defs + 12].copy_from_slice(&1u32.to_le_bytes());
+        let query = query::class_relation_query(
+            crate::model::ClassRelationKind::Extends,
+            "Fixture0",
+            &Default::default(),
+        )
+        .unwrap();
+        let engine = Engine::new(EngineOptions::default()).unwrap();
+        let artifact = engine
+            .open_bytes(Arc::from(bytes.clone()), InputKind::Dex, &no_control())
+            .unwrap();
+        let baseline = engine.runtime.active_bytes.load(Ordering::Relaxed);
+        let report = engine
+            .class_relations(&artifact, &query, &no_control())
+            .unwrap();
+        assert_eq!(report.value().len(), 1);
+        let retained = engine.runtime.active_bytes.load(Ordering::Relaxed);
+        assert!(retained > baseline);
+        let clone = report.clone();
+        assert_eq!(
+            engine.runtime.active_bytes.load(Ordering::Relaxed),
+            retained
+        );
+        drop(report);
+        assert_eq!(
+            engine.runtime.active_bytes.load(Ordering::Relaxed),
+            retained
+        );
+        drop(clone);
+        assert_eq!(
+            engine.runtime.active_bytes.load(Ordering::Relaxed),
+            baseline
+        );
+        let peak = engine.runtime.memory.peak.load(Ordering::Relaxed);
+        drop(artifact);
+        assert_eq!(engine.runtime.active_bytes.load(Ordering::Relaxed), 0);
+        let engine = Engine::new(EngineOptions {
+            limits: Limits {
+                max_engine_owned_bytes: peak - 1,
+                ..Limits::default()
+            },
+            ..EngineOptions::default()
+        })
+        .unwrap();
+        let artifact = engine
+            .open_bytes(Arc::from(bytes), InputKind::Dex, &no_control())
+            .unwrap();
+        let baseline = engine.runtime.active_bytes.load(Ordering::Relaxed);
+        let error = engine
+            .class_relations(&artifact, &query, &no_control())
+            .unwrap_err();
+        assert_eq!(*error.kind(), ErrorKind::ResourceLimit);
+        assert_eq!(
+            engine.runtime.active_bytes.load(Ordering::Relaxed),
+            baseline
+        );
+        let absent = query::class_relation_query(
+            crate::model::ClassRelationKind::Extends,
+            "Missing",
+            &Default::default(),
+        )
+        .unwrap();
+        drop(
+            engine
+                .class_relations(&artifact, &absent, &no_control())
+                .unwrap(),
+        );
+        assert_eq!(
+            engine.runtime.active_bytes.load(Ordering::Relaxed),
+            baseline
+        );
     }
 
     #[test]
@@ -4469,6 +4694,34 @@ impl Engine {
         self.runtime
             .pool
             .install(|| classes_in_scope(artifact, scope, filter, control))
+    }
+
+    /// Finds directly declared superclass/interface edges in root DEXes.
+    /// Targets need not be defined locally; no inheritance closure is inferred.
+    pub fn class_relations(
+        &self,
+        artifact: &Artifact,
+        query: &ClassRelationQuery,
+        control: &OperationControl,
+    ) -> Result<Report<Vec<ClassRelation>>, Error> {
+        self.class_relations_in_scope(artifact, &MethodScope::Root, query, control)
+    }
+
+    /// The explicit-scope form of [`Self::class_relations`]. A successful
+    /// report validates all selected declaration relationships, including when
+    /// nothing matches, but does not scan unrelated instructions or annotations.
+    pub fn class_relations_in_scope(
+        &self,
+        artifact: &Artifact,
+        scope: &MethodScope,
+        query: &ClassRelationQuery,
+        control: &OperationControl,
+    ) -> Result<Report<Vec<ClassRelation>>, Error> {
+        let _admission = self.admit(control)?;
+        self.check_ownership(artifact)?;
+        self.runtime
+            .pool
+            .install(|| class_relations_in_scope(artifact, scope, query, control))
     }
 
     pub fn references(

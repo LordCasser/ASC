@@ -90,3 +90,10 @@ A09 固定用户行为绿线；A14 必须复验最终架构、vendor 分发和�
 最终实施完成到 staged-verified：功能/三平台/MSRV/归档消费者/补丁测试/资源与性能证据均满足，所有 OpenSpec 要求有用例。三个 change 可在实现完成后按 vendor → 行为 → 架构顺序归档；已有 baseline requirement 的 MODIFIED delta 只能在通过后合并。实际 registry publish 是独立外部动作，未经届时授权不执行；正式 registry 未发布状态要保留在发行说明，不能声称已经 cargo add 可用。
 
 “无盲区”在这里落实为已知要求、错误边界、资源、文件并发和发布条件都有 owner 与验收；不声称静态计划能证明没有未知 decompiler 缺陷。
+
+## 2026-10-15 增量工作包
+
+[A20](implementation/work-packages/A20.md) 在 Rust d78123f 基线上吸收上游直接类继承/接口
+反查能力，规格为 add-direct-class-relations；其逐边结果独立于指令引用，沿用 core 与薄
+CLI 两层。实施、独立 review 与当前云端证据见 [A20 evidence](implementation/evidence/A20.md)。
+A16–A18 的未完成环境矩阵不在本包关闭范围内。

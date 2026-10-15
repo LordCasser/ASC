@@ -177,3 +177,27 @@ pub fn parse_dex_selector(input: &str) -> Result<(u32, u32), Error> {
     };
     Ok((parse(entry)?, parse(logical)?))
 }
+
+/// Builds an exact direct-class relationship query. Java dotted/slashed names
+/// and full descriptors use the same normalization as an exact member owner.
+/// No substring or regex interpretation is performed.
+pub fn class_relation_query(
+    kind: crate::model::ClassRelationKind,
+    input: &str,
+    limits: &PatternLimits,
+) -> Result<crate::model::ClassRelationQuery, Error> {
+    if input.is_empty() || input.chars().all(char::is_whitespace) {
+        return Err(Error::invalid_query(
+            "class relation target cannot be blank",
+        ));
+    }
+    if input.len() > limits.max_pattern_bytes {
+        return Err(Error::resource_limit(
+            "class relation target exceeds pattern-bytes",
+        ));
+    }
+    Ok(crate::model::ClassRelationQuery::new(
+        kind,
+        exact_descriptor(input)?,
+    ))
+}

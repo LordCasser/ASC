@@ -12,7 +12,7 @@
 use asc_core::bytes::OperationControl;
 use asc_core::engine::{Engine, EngineOptions, InputKind, Limits};
 use asc_core::error::{Error as CoreError, ErrorKind};
-use asc_core::model::{ClassFilter, ClassSelector};
+use asc_core::model::{ClassFilter, ClassRelationKind, ClassSelector};
 use asc_core::{dex, query};
 use clap::Parser;
 mod cli;
@@ -253,6 +253,12 @@ fn run_findrefs(args: &cli::FindRefsArgs) -> Result<(), Outcome> {
             let spec = member_spec(q.name.as_deref(), q, mode)?;
             query::member_query(true, spec, &pattern_limits)
         }
+        cli::FindKind::Extends(q) => {
+            return run_class_relations(args, &common, ClassRelationKind::Extends, &q.target);
+        }
+        cli::FindKind::Impl(q) => {
+            return run_class_relations(args, &common, ClassRelationKind::Implements, &q.target);
+        }
     }
     .map_err(core_outcome)?;
     let (engine, control, _limits) = open_engine_and_control(&common)?;
@@ -272,6 +278,39 @@ fn run_findrefs(args: &cli::FindRefsArgs) -> Result<(), Outcome> {
         &artifact.id(),
         report.diagnostics(),
         &CommandData::Findrefs(report.value()),
+        common.output.as_deref(),
+        &args.apk_path,
+        &control,
+    )
+}
+
+fn run_class_relations(
+    args: &cli::FindRefsArgs,
+    common: &cli::CommonArgs,
+    kind: ClassRelationKind,
+    target: &str,
+) -> Result<(), Outcome> {
+    let limits = effective_limits(common)?;
+    // Normalize and validate the exact target before opening the input.
+    let relation_query =
+        query::class_relation_query(kind, target, &limits.pattern).map_err(core_outcome)?;
+    let (engine, control) = make_context(common, &limits)?;
+    let artifact = engine
+        .open_path(&args.apk_path, InputKind::Apk, &control)
+        .map_err(core_outcome)?;
+    let report = engine
+        .class_relations(&artifact, &relation_query, &control)
+        .map_err(core_outcome)?;
+    note_diagnostics(report.diagnostics());
+    if common.debug {
+        eprintln!("[DEBUG] result_items={}", report.stats().result_items);
+    }
+    render_and_commit(
+        common,
+        "class_relations",
+        &artifact.id(),
+        report.diagnostics(),
+        &CommandData::ClassRelations(report.value()),
         common.output.as_deref(),
         &args.apk_path,
         &control,

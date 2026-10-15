@@ -8,27 +8,48 @@
   "properties": {
     "schema_version": { "const": 1 },
     "operation": {
-      "enum": ["findrefs", "classes", "getclass", "manifest", "dexes"]
+      "enum": ["findrefs", "class_relations", "classes", "getclass", "manifest", "dexes"]
     },
     "artifact_id": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
       "description": "SHA-256 of the whole input bytes, lowercase hex."
     },
-    "data": { "$ref": "#/$defs/data" },
+    "data": { "description": "The payload shape is selected by operation below; empty array results are successful." },
     "diagnostics": {
       "type": "array",
       "items": { "$ref": "#/$defs/diagnostic" }
     }
   },
-  "$defs": {
-    "data": {
-      "description": "findrefs: array of Reference; classes: array of Class; getclass: {class,source,metadata}; manifest: {xml,document}; dexes: array of DexEntry. An empty result is data:[] with exit 0, never empty bytes.",
-      "oneOf": [
-        { "type": "array", "items": { "$ref": "#/$defs/reference" } },
-        { "type": "array", "items": { "$ref": "#/$defs/class" } },
-        { "type": "array", "items": { "$ref": "#/$defs/dex_entry" } },
-        {
+  "oneOf": [
+    {
+      "properties": {
+        "operation": { "const": "findrefs" },
+        "data": { "type": "array", "items": { "$ref": "#/$defs/reference" } }
+      }
+    },
+    {
+      "properties": {
+        "operation": { "const": "class_relations" },
+        "data": { "type": "array", "items": { "$ref": "#/$defs/class_relation" } }
+      }
+    },
+    {
+      "properties": {
+        "operation": { "const": "classes" },
+        "data": { "type": "array", "items": { "$ref": "#/$defs/class" } }
+      }
+    },
+    {
+      "properties": {
+        "operation": { "const": "dexes" },
+        "data": { "type": "array", "items": { "$ref": "#/$defs/dex_entry" } }
+      }
+    },
+    {
+      "properties": {
+        "operation": { "const": "getclass" },
+        "data": {
           "type": "object",
           "required": ["class", "source", "metadata"],
           "properties": {
@@ -36,8 +57,13 @@
             "source": { "type": "string", "description": "UTF-8, LF endings, exactly one trailing LF." },
             "metadata": { "$ref": "#/$defs/source_metadata" }
           }
-        },
-        {
+        }
+      }
+    },
+    {
+      "properties": {
+        "operation": { "const": "manifest" },
+        "data": {
           "type": "object",
           "required": ["xml", "document"],
           "properties": {
@@ -45,7 +71,21 @@
             "document": { "$ref": "#/$defs/document" }
           }
         }
-      ]
+      }
+    }
+  ],
+  "$defs": {
+    "class_relation": {
+      "type": "object",
+      "required": ["class", "kind", "target_id", "target"],
+      "additionalProperties": false,
+      "description": "One directly declared superclass or interface edge. The target_id always identifies a type in the source class's DEX; no transitive or inherited edges are inferred.",
+      "properties": {
+        "class": { "$ref": "#/$defs/class" },
+        "kind": { "enum": ["extends", "implements"] },
+        "target_id": { "$ref": "#/$defs/target_id" },
+        "target": { "$ref": "#/$defs/dex_text" }
+      }
     },
     "source_metadata": {
       "type": "object",
@@ -94,7 +134,7 @@
               "type": "array",
               "minItems": 3,
               "maxItems": 3,
-              "items": [
+              "prefixItems": [
                 { "$ref": "#/$defs/dex_text" },
                 { "$ref": "#/$defs/dex_text" },
                 { "$ref": "#/$defs/prototype" }

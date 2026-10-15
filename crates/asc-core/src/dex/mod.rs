@@ -175,6 +175,208 @@ pub(crate) fn list_classes(
     Ok(out)
 }
 
+/// Visits direct declaration edges without retaining an unaccounted result
+/// vector. The visitor reserves owned storage before copying the borrowed
+/// descriptor/target. At most one source and target are decoded at a time.
+pub(crate) fn scan_class_relations(
+    view: &DexView<'_>,
+    query: &crate::model::ClassRelationQuery,
+    limits: &ScanLimits,
+    control: Option<&ControlProbe<'_>>,
+    mut visit: impl FnMut(u32, &ClassDescriptor, u32, &DexText) -> Result<(), Error>,
+) -> Result<(), Error> {
+    use crate::model::ClassRelationKind;
+    let dex = ScanDex::parse(view, limits)?;
+    check_control(control)?;
+    let data_region = RelationDataRegion::new(view, control)?;
+    for index in 0..dex.header.classes_size {
+        check_control(control)?;
+        let class_def = dex.header.classes_off + index * 32;
+        let descriptor = {
+            let text = dex.type_text(dex.u32(class_def)?, limits)?;
+            let text = text.as_str().ok_or_else(|| {
+                Error::malformed_input("class relation source descriptor is not Unicode")
+            })?;
+            ClassDescriptor::from_normalized(text).map_err(|_| {
+                Error::malformed_input("class relation source is not a class descriptor")
+            })?
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        let mut edge = |kind, target_idx| -> Result<(), Error> {
+            // Validate every declared index/string, even for the other kind or
+            // an absent query target. Successful empty results remain checked.
+            let target = dex.type_text(target_idx, limits)?;
+            if kind == query.kind()
+                && target
+                    .utf16_units()
+                    .iter()
+                    .copied()
+                    .eq(query.target().as_str().encode_utf16())
+                && !seen.contains(&target_idx)
+            {
+                // Account the result and this small de-duplication node before
+                // either allocation grows. Different type_ids stay distinct.
+                visit(index as u32, &descriptor, target_idx, &target)?;
+                seen.insert(target_idx);
+            }
+            Ok(())
+        };
+        let superclass = dex.u32(class_def + 8)?;
+        if superclass != u32::MAX {
+            edge(ClassRelationKind::Extends, superclass)?;
+        }
+        let interfaces = dex.u32(class_def + 12)? as usize;
+        if interfaces != 0 {
+            if !interfaces.is_multiple_of(4) {
+                return Err(Error::malformed_input(
+                    "interfaces type_list is not 4-byte aligned",
+                ));
+            }
+            data_region.check(interfaces, 4)?;
+            let count = dex.u32(interfaces)? as usize;
+            let start = interfaces
+                .checked_add(4)
+                .ok_or_else(|| Error::malformed_input("interfaces type_list offset overflow"))?;
+            check_limited_table(
+                dex.data,
+                start,
+                count,
+                2,
+                "interfaces type_list",
+                limits.max_table_items,
+            )?;
+            let bytes = count
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(4))
+                .ok_or_else(|| Error::malformed_input("interfaces type_list size overflow"))?;
+            data_region.check(interfaces, bytes)?;
+            for item in 0..count {
+                check_control(control)?;
+                edge(
+                    ClassRelationKind::Implements,
+                    u32::from(dex.u16(start + item * 2)?),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The data address space excludes all headers, ID tables and map lists.
+/// Standard DEX additionally declares one data range. 041 removes that range:
+/// data may live in any member, so exclusions are collected for the complete
+/// container rather than restricting pointers to the current member span.
+struct RelationDataRegion {
+    start: usize,
+    end: usize,
+    excluded: Vec<(usize, usize)>,
+}
+
+impl RelationDataRegion {
+    fn new(view: &DexView<'_>, control: Option<&ControlProbe<'_>>) -> Result<Self, Error> {
+        let data = view.bytes;
+        let container = view.entry().version() == crate::model::DexVersion::V041;
+        let read = |at| {
+            read_u32(data, at)
+                .map(|n| n as usize)
+                .map_err(|_| Error::malformed_input("truncated relationship data metadata"))
+        };
+        let start = if container { 0 } else { read(0x6c)? };
+        let end = if container {
+            data.len()
+        } else {
+            start
+                .checked_add(read(0x68)?)
+                .filter(|end| *end <= data.len())
+                .ok_or_else(|| Error::malformed_input("invalid relationship data range"))?
+        };
+        let mut excluded = Vec::new();
+        let mut base = 0usize;
+        loop {
+            check_control(control)?;
+            let header_size = if container { 0x78 } else { 0x70 };
+            excluded.push((base, base + header_size));
+            for (count_at, width) in [
+                (0x38, 4),
+                (0x40, 4),
+                (0x48, 12),
+                (0x50, 8),
+                (0x58, 8),
+                (0x60, 32),
+            ] {
+                let count = read(base + count_at)?;
+                if count == 0 {
+                    continue;
+                }
+                let offset = read(base + count_at + 4)?;
+                let end = count
+                    .checked_mul(width)
+                    .and_then(|size| offset.checked_add(size))
+                    .filter(|end| *end <= data.len())
+                    .ok_or_else(|| Error::malformed_input("invalid relationship ID-table range"))?;
+                excluded.push((offset, end));
+            }
+            let map = read(base + 0x34)?;
+            let map_end = read(map)?
+                .checked_mul(12)
+                .and_then(|n| n.checked_add(4))
+                .and_then(|n| map.checked_add(n))
+                .filter(|end| *end <= data.len())
+                .ok_or_else(|| Error::malformed_input("invalid relationship map range"))?;
+            excluded.push((map, map_end));
+            if !container {
+                break;
+            }
+            let size = read(base + 0x20)?;
+            if size < header_size {
+                return Err(Error::malformed_input("invalid relationship member size"));
+            }
+            base = base
+                .checked_add(size)
+                .filter(|end| *end <= data.len())
+                .ok_or_else(|| Error::malformed_input("invalid relationship member range"))?;
+            if base == data.len() {
+                break;
+            }
+        }
+        excluded.sort_unstable();
+        // Merge overlaps so a binary search by end is valid even when members
+        // share ID tables. The vector is already accounted as scanner scratch.
+        let mut write = 0;
+        for read in 0..excluded.len() {
+            let range = excluded[read];
+            if write > 0 && range.0 <= excluded[write - 1].1 {
+                excluded[write - 1].1 = excluded[write - 1].1.max(range.1);
+            } else {
+                excluded[write] = range;
+                write += 1;
+            }
+        }
+        excluded.truncate(write);
+        Ok(Self {
+            start,
+            end,
+            excluded,
+        })
+    }
+
+    fn check(&self, start: usize, size: usize) -> Result<(), Error> {
+        let end = start
+            .checked_add(size)
+            .filter(|end| start >= self.start && *end <= self.end)
+            .ok_or_else(|| {
+                Error::malformed_input("interfaces type_list is outside the DEX data range")
+            })?;
+        let next = self.excluded.partition_point(|range| range.1 <= start);
+        if self.excluded.get(next).is_some_and(|range| range.0 < end) {
+            return Err(Error::malformed_input(
+                "interfaces type_list overlaps DEX metadata",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Every string-pool row in one logical DEX, including strings that no code
 /// item references. The pool index is part of the returned identity.
 pub(crate) fn list_strings(
@@ -1745,6 +1947,41 @@ pub(crate) mod tests {
         let checksum = adler32(&out[12..]);
         write_u32(&mut out, 0x08, checksum);
         out
+    }
+
+    #[test]
+    fn class_relationship_scan_checks_cancellation_after_a_match() {
+        let mut bytes = const_string_fixture(2);
+        let defs = read_u32(&bytes, 0x64).unwrap() as usize;
+        write_u32(&mut bytes, defs + 8, 1);
+        write_u32(&mut bytes, defs + 32 + 8, 1);
+        let view = structured_view(&bytes);
+        let cancelled = AtomicBool::new(false);
+        let probe = ControlProbe {
+            cancelled: &cancelled,
+            deadline: None,
+        };
+        let query = crate::query::class_relation_query(
+            crate::model::ClassRelationKind::Extends,
+            "Fixture0",
+            &PatternLimits::default(),
+        )
+        .unwrap();
+        let mut visited = 0;
+        let error = scan_class_relations(
+            &view,
+            &query,
+            &ScanLimits::DEFAULT,
+            Some(&probe),
+            |_, _, _, _| {
+                visited += 1;
+                cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(visited, 1);
+        assert!(matches!(error.kind(), ErrorKind::Cancelled { .. }));
     }
 
     #[test]

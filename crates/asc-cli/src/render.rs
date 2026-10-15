@@ -13,7 +13,7 @@ use asc_core::error::Error;
 use asc_core::manifest::{Manifest, XmlRenderOptions};
 use asc_core::bytes::OperationControl;
 use asc_core::model::dto::{self, Writer};
-use asc_core::model::{Class, Diagnostic, Reference, TargetMatch};
+use asc_core::model::{Class, ClassRelation, Diagnostic, Reference, TargetMatch};
 
 /// The text-mode column separator; column content escapes every literal `|`.
 const SEP: &str = " | ";
@@ -23,6 +23,7 @@ const CHECK_INTERVAL: usize = 64 * 1024;
 /// The per-command payload behind text/json rendering.
 pub(crate) enum CommandData<'a> {
     Findrefs(&'a [Reference]),
+    ClassRelations(&'a [ClassRelation]),
     Classes(&'a [Class]),
     Getclass(&'a asc_core::model::Source),
     Manifest(&'a Manifest),
@@ -36,6 +37,7 @@ pub(crate) fn text(
 ) -> Result<String, Error> {
     match data {
         CommandData::Findrefs(rows) => findrefs_text(rows, budget, control),
+        CommandData::ClassRelations(rows) => class_relations_text(rows, budget, control),
         CommandData::Classes(rows) => classes_text(rows, budget, control),
         CommandData::Getclass(source) => copy_bounded(source.text(), budget, control),
         CommandData::Manifest(manifest) => manifest
@@ -63,6 +65,15 @@ pub(crate) fn json(
                 w.begin_array();
                 for row in *rows {
                     dto::write_reference(w, row);
+                    checkpoints.check(w)?;
+                }
+                w.end_array();
+            }
+            CommandData::ClassRelations(rows) => {
+                w.begin_array();
+                for row in *rows {
+                    control.check()?;
+                    dto::write_class_relation(w, row);
                     checkpoints.check(w)?;
                 }
                 w.end_array();
@@ -217,6 +228,41 @@ fn findrefs_text(
         push_prototype_text(&mut line, caller.prototype());
         line.push_str(SEP);
         push_targets_json(&mut line, reference.targets());
+        line.push('\n');
+        out.push(&line)?;
+    }
+    Ok(out.out)
+}
+
+fn class_relations_text(
+    rows: &[ClassRelation],
+    budget: usize,
+    control: &OperationControl,
+) -> Result<String, Error> {
+    let mut out = TextOut::new(budget, control);
+    control.check()?;
+    for relation in rows {
+        control.check()?;
+        let class = relation.class();
+        let id = class.id();
+        let dex = id.dex();
+        let mut line = String::new();
+        push_escaped_str(
+            &mut line,
+            &format!("{}:{}", dex.entry_ordinal(), dex.logical_ordinal()),
+        );
+        line.push_str(SEP);
+        push_escaped_units(&mut line, class.dex().display_name().utf16_units());
+        line.push_str(SEP);
+        push_escaped_str(&mut line, &id.class_def_idx().to_string());
+        line.push_str(SEP);
+        push_escaped_str(&mut line, class.descriptor().as_str());
+        line.push_str(SEP);
+        line.push_str(relation.kind().as_str());
+        line.push_str(SEP);
+        line.push_str(&relation.target_id().table_index().to_string());
+        line.push_str(SEP);
+        push_escaped_units(&mut line, relation.target().utf16_units());
         line.push('\n');
         out.push(&line)?;
     }

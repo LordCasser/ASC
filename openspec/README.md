@@ -4,6 +4,8 @@
 
 ## 当前工作
 
+- 2026-10-15：[上游增量审计](audits/upstream-2026-10-15/report.md) 已核对至 `b93cbd0798131312b6dc083198e6decbca28a12e`；[直接类关系合同](specs/class-relations/spec.md) 与 [A20 验收证据](implementation/evidence/A20.md) 已落地，其他上游能力按审计分类保留，不能把评审边界当作全部功能移植边界。
+
 - [嵌入审计](audits/embedding/report.md)：固定 c42e7e6，记录复现、修复和独立债务。
 - 2026-09-16 provider/navigation checkpoint：A16 2.1 与消费者 B staged-output 交接已通过；A17 核心声明/DEX/instruction/navigation API 已由 C/D consumer 通过；A18 bounded Report/scan permit 所有权与 ledger 基本验收已完成，完整 vendor/环境内存扩展仍单列。
 - [嵌入合同修复](changes/archive/2026-09-15-harden-embedded-core-contracts/proposal.md)：独立 feature、输入控制、全 DEX 校验、私有 pool 和跨 DEX 结果预算。

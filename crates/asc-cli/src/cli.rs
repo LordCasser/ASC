@@ -76,7 +76,7 @@ impl CommonArgs {
 pub enum Command {
     /// Locate a class in an APK and decompile it.
     Getclass(GetClassArgs),
-    /// Find code references across every DEX in an APK.
+    /// Find code references or direct class relations across every DEX in an APK.
     Findrefs(FindRefsArgs),
     /// Decode and print AndroidManifest.xml from an APK.
     Manifest(ManifestArgs),
@@ -128,6 +128,7 @@ impl FindKind {
         match self {
             FindKind::String(q) | FindKind::Type(q) => q.regex,
             FindKind::Method(q) | FindKind::Field(q) => q.regex,
+            FindKind::Extends(_) | FindKind::Impl(_) => false,
         }
     }
 
@@ -139,6 +140,7 @@ impl FindRefsArgs {
         match &self.kind {
             FindKind::String(query) | FindKind::Type(query) => &query.common,
             FindKind::Method(query) | FindKind::Field(query) => &query.common,
+            FindKind::Extends(query) | FindKind::Impl(query) => &query.common,
         }
     }
 }
@@ -153,6 +155,20 @@ pub enum FindKind {
     Method(MemberArgs),
     /// Field references.
     Field(MemberArgs),
+    /// Classes declaring this exact direct superclass (Java name or descriptor).
+    Extends(ClassRelationArgs),
+    /// Classes directly declaring this exact interface (Java name or descriptor).
+    #[command(visible_alias = "implements")]
+    Impl(ClassRelationArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ClassRelationArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+    /// Exact Java dotted class name or Lpkg/Name; descriptor. Direct relations
+    /// only; inherited and transitive relations are not inferred.
+    pub target: String,
 }
 
 #[derive(Debug, Args)]

@@ -992,6 +992,86 @@ impl Class {
     }
 }
 
+/// A direct class-definition relationship, never a transitive inference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClassRelationKind {
+    Extends,
+    Implements,
+}
+
+impl ClassRelationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Extends => "extends",
+            Self::Implements => "implements",
+        }
+    }
+}
+
+/// An exact target descriptor and the declaration table to search.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassRelationQuery {
+    kind: ClassRelationKind,
+    target: ClassDescriptor,
+}
+
+impl ClassRelationQuery {
+    pub fn new(kind: ClassRelationKind, target: ClassDescriptor) -> Self {
+        Self { kind, target }
+    }
+
+    pub fn kind(&self) -> ClassRelationKind {
+        self.kind
+    }
+
+    pub fn target(&self) -> &ClassDescriptor {
+        &self.target
+    }
+}
+
+/// One directly declared edge. The target is a type-table row, not necessarily
+/// a class defined in this artifact. Duplicate source definitions retain their
+/// distinct ClassIds; instruction callers and locations do not apply here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassRelation {
+    class: Class,
+    kind: ClassRelationKind,
+    target_id: TargetId,
+    target: DexText,
+}
+
+impl ClassRelation {
+    pub(crate) fn new(
+        class: Class,
+        kind: ClassRelationKind,
+        target_id: TargetId,
+        target: DexText,
+    ) -> Self {
+        Self {
+            class,
+            kind,
+            target_id,
+            target,
+        }
+    }
+
+    pub fn class(&self) -> &Class {
+        &self.class
+    }
+
+    pub fn kind(&self) -> ClassRelationKind {
+        self.kind
+    }
+
+    pub fn target_id(&self) -> TargetId {
+        self.target_id
+    }
+
+    pub fn target(&self) -> &DexText {
+        &self.target
+    }
+}
+
 // ---------------------------------------------------------------------------
 // References
 // ---------------------------------------------------------------------------
@@ -2502,6 +2582,19 @@ pub mod dto {
         w.string(entry.version().as_str());
         w.key("header_offset");
         w.number(entry.header_offset());
+        w.end_object();
+    }
+
+    pub fn write_class_relation(w: &mut Writer, relation: &ClassRelation) {
+        w.begin_object();
+        w.key("class");
+        write_class(w, relation.class());
+        w.key("kind");
+        w.string(relation.kind().as_str());
+        w.key("target_id");
+        write_target_id(w, &relation.target_id());
+        w.key("target");
+        write_dex_text(w, relation.target());
         w.end_object();
     }
 
