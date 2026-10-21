@@ -4,6 +4,8 @@
 
 ## 当前工作
 
+- 2026-10-21：[旧分支收敛审计](audits/legacy-branches-2026-10-21/report.md)：恢复根许可证，保留 Python 基线与早期 Rust 原型历史，清理旧分支；CI 重建单列为后续债务。
+
 - 2026-10-15：[上游增量审计](audits/upstream-2026-10-15/report.md) 已核对至 `b93cbd0798131312b6dc083198e6decbca28a12e`；[直接类关系合同](specs/class-relations/spec.md) 与 [A20 验收证据](implementation/evidence/A20.md) 已落地，其他上游能力按审计分类保留，不能把评审边界当作全部功能移植边界。
 
 - [嵌入审计](audits/embedding/report.md)：固定 c42e7e6，记录复现、修复和独立债务。
