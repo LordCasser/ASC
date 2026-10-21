@@ -4261,6 +4261,44 @@ mod tests {
         assert!(sources > 0);
     }
 
+    #[test]
+    fn all_detected_finds_stored_and_deflated_dexes_by_content() {
+        let first = const_string_fixture(1);
+        let second = const_string_fixture(2);
+        let engine = Engine::new(EngineOptions::default()).unwrap();
+        let query = query::string_query("Authorization", MatchMode::Literal, &Default::default())
+            .unwrap();
+        for (root_deflated, nested_deflated) in
+            [(false, false), (true, true), (false, true), (true, false)]
+        {
+            let zip = build_zip(&[
+                ("classes.dex", &first, root_deflated),
+                ("assets/extra.bin", &second, nested_deflated),
+                ("assets/not-dex.dex", b"not a DEX", nested_deflated),
+            ]);
+            let artifact = engine
+                .open_bytes(Arc::from(zip.into_boxed_slice()), InputKind::Apk, &no_control())
+                .unwrap();
+            let dexes = engine
+                .dexes_in_scope(&artifact, &MethodScope::AllDetected, &no_control())
+                .unwrap();
+            assert_eq!(
+                dexes.value().iter().map(|dex| dex.id().entry_ordinal()).collect::<Vec<_>>(),
+                [0, 1],
+                "root deflated={root_deflated}, nested deflated={nested_deflated}"
+            );
+            let references = engine
+                .references_in_scope(&artifact, &MethodScope::AllDetected, &query, &no_control())
+                .unwrap();
+            assert_eq!(
+                references.value().iter().map(|row| row.caller().id().dex().entry_ordinal())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                [0, 1].into_iter().collect(),
+                "both root and renamed nested DEX must be scanned"
+            );
+        }
+    }
+
     #[cfg(feature = "decompile")]
     #[test]
     fn method_inventory_accepts_nested_dex_scope_and_all_detected() {

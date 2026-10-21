@@ -420,7 +420,11 @@ pub(crate) fn entry_starts_with_dex_magic(data: &[u8], entry: &ArchiveEntry) -> 
     };
     let mut prefix = [0u8; 8];
     let count = match entry.method {
-        STORED => compressed.len().min(prefix.len()),
+        STORED => {
+            let count = compressed.len().min(prefix.len());
+            prefix[..count].copy_from_slice(&compressed[..count]);
+            count
+        }
         DEFLATE => {
             let mut decoder = flate2::read::DeflateDecoder::new(compressed);
             match std::io::Read::read(&mut decoder, &mut prefix) {
@@ -1052,6 +1056,28 @@ pub(crate) mod tests {
             !shown.contains('\u{1b}'),
             "raw control byte leaked: {shown:?}"
         );
+    }
+
+    #[test]
+    fn dex_magic_probe_matches_stored_and_deflated_entries() {
+        for (payload, expected) in [
+            (&b""[..], false),
+            (&b"dex\n"[..], true),
+            (&b"dex\n035\0payload"[..], true),
+            (&b"cdex001\0payload"[..], true),
+            (&b"not dex"[..], false),
+            (&b"dex"[..], false),
+        ] {
+            for deflated in [false, true] {
+                let zip = build_zip(&[("classes.dex", payload, deflated)]);
+                let catalog = parse_catalog(&zip, &InputLimits::DEFAULT).unwrap();
+                assert_eq!(
+                    entry_starts_with_dex_magic(&zip, &catalog.entries[0]),
+                    expected,
+                    "payload {payload:?}, deflated={deflated}"
+                );
+            }
+        }
     }
 
     #[test]
